@@ -1,0 +1,39 @@
+{
+  "name": "primitiv",
+  "version": "0.1.0",
+  "description": "The reconciliation layer for agentic design systems. Sits above Figma, your codebase, and Storybook — resolves conflicts, exposes a single source of truth via MCP.",
+  "main": "dist/index.js",
+  "bin": {
+    "primitiv": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "ts-node src/index.ts",
+    "start": "node dist/index.js",
+    "lint": "eslint src/**/*.ts"
+  },
+  "keywords": [
+    "design-system",
+    "mcp",
+    "agentic",
+    "primitives",
+    "tokens",
+    "figma",
+    "storybook",
+    "cursor",
+    "claude-code"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.22.0",
+    "glob": "^10.0.0",
+    "chalk": "^5.0.0",
+    "ora": "^7.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/node": "^20.0.0",
+    "ts-node": "^10.0.0"
+  }
+}

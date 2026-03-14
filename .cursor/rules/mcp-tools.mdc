@@ -1,0 +1,51 @@
+---
+description: Rules for adding or modifying MCP tools in src/mcp/server.ts
+globs: src/mcp/**
+---
+
+# MCP tools
+
+All tools are registered in `src/mcp/server.ts` via `this.server.registerTool()`.
+
+## Tool conventions
+
+- All tools are **read-only** — set `readOnlyHint: true` in annotations
+- All tools return both `content` (text) and `structuredContent` (parsed object)
+- Error responses set `isError: true` and tell the agent what to do next
+- Input schemas use Zod — define inline, keep simple
+
+## Standard error pattern
+
+```ts
+if (!this.contract) {
+  return {
+    content: [{ type: "text", text: "No contract found. Run `primitiv build` first." }],
+    isError: true
+  }
+}
+```
+
+## Standard success pattern
+
+```ts
+return {
+  content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+  structuredContent: result
+}
+```
+
+## Current tools
+
+| Tool | Input | Returns |
+|------|-------|---------|
+| `get_design_context` | category, tokenCategory | tokens, components, conflicts |
+| `get_token` | name, category | single token |
+| `get_component` | name | single component with props |
+| `get_conflicts` | type, status | filtered conflict list |
+
+## Adding a new tool
+
+1. Call `this.server.registerTool()` in the `registerTools()` method
+2. Define input schema with Zod
+3. Handle missing contract case first
+4. Return both text content and structuredContent

@@ -1,0 +1,46 @@
+---
+description: How to add a new source adapter to Primitiv
+globs: src/sources/**
+---
+
+# Adding a new source adapter
+
+Every source adapter follows the same interface. When adding a new source:
+
+## 1. Create the folder
+
+```
+src/sources/<source-name>/
+  <source-name>.ts   — adapter logic
+  index.ts           — barrel export
+```
+
+## 2. Implement the interface
+
+The adapter must implement this shape (not yet a formal interface — add it to types.ts when the second adapter lands):
+
+```ts
+class <Name>Scanner {
+  constructor(private config: <Name>Source) {}
+
+  async scan(): Promise<{ tokens: TokenMap; components: ComponentMap }>
+}
+```
+
+## 3. Add config type to types.ts
+
+Add a `<Name>Source` interface to `src/types.ts` and add it to `PrimitivConfig.sources`.
+
+## 4. Wire it into src/index.ts
+
+In the `build()` function, check for the new source in config and call its scanner.
+
+## 5. Update primitiv.config.js example
+
+Add the new source as a commented-out example in `primitiv.config.js`.
+
+## Current adapters
+
+- `codebase` — implemented. Scans CSS variables, TypeScript token objects, React components.
+- `figma` — not yet implemented. Will use the Figma REST API.
+- `storybook` — not yet implemented. Will use the Storybook Component Manifest.

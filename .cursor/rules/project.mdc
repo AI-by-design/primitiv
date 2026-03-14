@@ -1,0 +1,58 @@
+---
+description: Primitiv project rules — apply to all files
+alwaysApply: true
+---
+
+# Primitiv
+
+Primitiv is a TypeScript MCP server that acts as a reconciliation layer for design systems. It sits above any number of design sources (Figma, codebase, Storybook, token files), resolves conflicts between them, and exposes a single canonical contract via MCP.
+
+## Architecture
+
+```
+src/
+  types.ts          — all shared types and interfaces
+  index.ts          — build() and serve() entry points
+  cli.ts            — CLI wrapper
+  scanner/
+    scanner.ts      — reads codebase, extracts tokens and components
+    index.ts        — barrel export
+  contract/
+    contract.ts     — merges sources, surfaces conflicts, writes contract JSON
+    index.ts        — barrel export
+  mcp/
+    server.ts       — MCP server with get_design_context, get_token, get_component, get_conflicts tools
+    index.ts        — barrel export
+  sources/
+    codebase/       — codebase adapter (CSS variables, TS tokens, React components)
+    figma/          — Figma API adapter (not yet implemented)
+    storybook/      — Storybook adapter (not yet implemented)
+  reconciler/       — conflict resolution logic (not yet implemented)
+```
+
+## Key concepts
+
+- **Contract** — `primitiv.contract.json`, the resolved single source of truth written after a build
+- **Source** — any adapter that provides tokens or components (codebase, Figma, Storybook, etc.)
+- **Conflict** — a token or component that exists in multiple sources with different values
+- **Governance** — configurable rules that determine which source wins when a conflict occurs
+
+## Conventions
+
+- All types defined in `src/types.ts`, never inline
+- Sources are adapters — each implements `scan(): Promise<{ tokens: TokenMap, components: ComponentMap }>`
+- New sources go in `src/sources/<name>/` with the same interface
+- MCP tools are read-only (readOnlyHint: true) and return both text content and structuredContent
+- Error messages tell the agent what to do next, not just what went wrong
+
+## Stack
+
+- TypeScript, strict mode
+- `@modelcontextprotocol/sdk` for MCP server
+- `zod` for input schema validation
+- `glob` for file scanning
+- No framework — plain Node.js
+
+## Config
+
+Users configure Primitiv via `primitiv.config.js` in their project root. The config shape is `PrimitivConfig` from `src/types.ts`.
