@@ -19,7 +19,7 @@ export class CodebaseScanner {
       const matches = await glob(pattern, {
         cwd: this.config.root,
         ignore: this.config.ignore,
-        absolute: true
+        absolute: false
       })
       files.push(...matches)
     }
@@ -36,7 +36,7 @@ export class CodebaseScanner {
     }
 
     for (const file of files) {
-      const content = fs.readFileSync(file, "utf-8")
+      const content = fs.readFileSync(path.resolve(this.config.root, file), "utf-8")
       const ext = path.extname(file)
 
       if (ext === ".css") {
@@ -126,7 +126,7 @@ export class CodebaseScanner {
     const componentFiles = files.filter(f => f.endsWith(".tsx") || f.endsWith(".jsx"))
 
     for (const file of componentFiles) {
-      const content = fs.readFileSync(file, "utf-8")
+      const content = fs.readFileSync(path.resolve(this.config.root, file), "utf-8")
       const name = this.extractComponentName(content, file)
 
       if (name) {
