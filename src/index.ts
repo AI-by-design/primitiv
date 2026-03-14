@@ -17,6 +17,9 @@ function loadConfig(configPath?: string): PrimitivConfig {
   const config: PrimitivConfig = require(resolved)
   const configDir = path.dirname(resolved)
   config.output.path = path.resolve(configDir, config.output.path)
+  if (config.sources.codebase) {
+    config.sources.codebase.root = path.resolve(configDir, config.sources.codebase.root)
+  }
   return config
 }
 
