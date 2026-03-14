@@ -37,7 +37,7 @@ Any adapter     ──┘
 ## Install
 
 ```bash
-npm install primitiv
+bun add primitiv
 ```
 
 ## Quick start
@@ -45,7 +45,7 @@ npm install primitiv
 **1. Run init in your project root:**
 
 ```bash
-npx primitiv init
+bunx primitiv init
 ```
 
 Primitiv detects your framework, TypeScript, Tailwind, Figma token files, and Storybook automatically and generates a tailored `primitiv.config.js`.
@@ -53,7 +53,7 @@ Primitiv detects your framework, TypeScript, Tailwind, Figma token files, and St
 **2. Build your contract:**
 
 ```bash
-npx primitiv build
+bunx primitiv build
 ```
 
 **3. Add to your MCP config (Cursor / Claude Code):**
@@ -62,7 +62,7 @@ npx primitiv build
 {
   "mcpServers": {
     "primitiv": {
-      "command": "node",
+      "command": "bun",
       "args": ["/path/to/primitiv/dist/cli.js", "serve", "/path/to/your/project/primitiv.config.js"]
     }
   }
@@ -144,7 +144,7 @@ module.exports = {
 - [ ] `primitiv diff` — show what changed since last build
 - [ ] Watch mode — rebuild contract automatically on file changes
 - [ ] Conflict auto-resolution
-- [ ] npm publish
+- [ ] publish to npm/JSR
 
 ## License
 
