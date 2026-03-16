@@ -1,20 +1,16 @@
 # Primitiv
 
-The reconciliation layer for agentic design systems.
+The design contract layer for your agents.
 
-Primitiv sits above your design sources — Figma, codebase, Storybook, token files, or any adapter you configure — scans them, resolves conflicts between them, and surfaces the design rules your codebase is already following. The result is a single machine-readable contract exposed via MCP. Any agentic tool that connects to Primitiv gets one consistent answer before it builds anything.
+Primitiv is the design contract layer for agent-first codebases. It sits above your design sources — Figma, codebase, Storybook, token files — scans them, actively reconciles conflicts between them, and infers the design rules your codebase is already following. The result is a single machine-readable contract exposed via MCP. Unlike read-only retrieval tools, Primitiv doesn't just surface what exists — it resolves what's true. Any agentic tool that connects gets one authoritative answer before it builds anything. Your code never leaves your machine.
 
 ## The problem
 
-Most product codebases have design-relevant information distributed across multiple sources: design tools (Figma, Sketch), component documentation (Storybook, Zeroheight), token files (Style Dictionary, CSS variables, Tailwind config), and the codebase itself. These sources are maintained independently and frequently drift out of sync.
+Design-relevant information in most codebases is spread across sources that were never meant to stay in sync — Figma files, token definitions, Storybook docs, and the codebase itself. They drift. Humans can reconcile the gaps by inference and judgment. Agents cannot.
 
-This has historically been manageable because human developers can infer intent, ask questions, and reconcile inconsistencies themselves. Agentic coding tools cannot. They consume context and execute against what they are given. When the context is inconsistent or incomplete, agents default to generalised patterns from their training data rather than the specific conventions of the product they are working on.
+When an agent encounters inconsistent or missing design context, it falls back on generalised patterns from its training data. The result is UI that works but doesn't fit — components recreated instead of reused, tokens hardcoded, naming conventions ignored.
 
-The result is UI that is technically functional but inconsistent with the existing product — components recreated instead of reused, tokens ignored or hardcoded, naming conventions not followed.
-
-For teams with large or long-lived codebases, the problem runs deeper. There is no blank page to start from. Years of organic decisions are embedded in the code — patterns that were never written down, conventions that exist only because everyone followed the person before them. When you need to define the rules your system actually follows, you have no starting point. Primitiv addresses this too. It scans what exists and surfaces the design rules your codebase is already following, whether they were ever intentional or not — giving you a foundation to build from, not a blank page.
-
-Primitiv addresses this by sitting above all existing sources, resolving conflicts between them according to configurable governance rules, surfacing inferred rules from actual codebase patterns, and exposing a single machine-readable contract via MCP. Any agentic tool that connects to Primitiv gets one consistent answer before it builds anything.
+For teams with large or long-lived codebases, the problem runs deeper still. Years of design decisions exist only in the code — patterns that were never written down, conventions that spread by imitation. Primitiv addresses both: it sits above all your sources, resolves conflicts between them, surfaces the rules your codebase is already following, and exposes a single machine-readable contract via MCP. Any agent that connects gets one consistent answer before it builds anything.
 
 ## How it works
 
@@ -22,7 +18,7 @@ Primitiv addresses this by sitting above all existing sources, resolving conflic
 Any source                      Primitiv                    Your agent
                                                            
 Figma           ──┐                                       
-Codebase        ──┤──► scan ──► reconcile ──► contract ──► MCP ──► Cursor / Claude Code
+Codebase        ──┤──► scan ──► reconcile ──► contract ──► MCP ──► Cursor / Claude Code / Codex / Windsurf / any MCP-compatible tool
 Storybook       ──┤                                       
 Tokens file     ──┤                                       
 Any adapter     ──┘                                       
@@ -89,6 +85,8 @@ From this point, every agent that builds UI in your codebase calls `get_design_c
 | `get_conflicts` | Get unresolved conflicts between sources |
 | `get_inferred_rules` | Get the design rules Primitiv has extracted from your codebase patterns |
 
+Primitiv works with any tool that speaks MCP — it is not tied to a specific editor or agent ecosystem.
+
 ## Configuration
 
 ```js
@@ -120,13 +118,17 @@ module.exports = {
 
 ## Design principles
 
-**Source-agnostic** — Primitiv does not assume any particular toolchain. Sources are configured via adapters, and new adapters can be added for any system that holds design-relevant information.
+**Source-agnostic** — Primitiv does not assume any particular toolchain. Sources are configured via adapters, and new adapters can be added for any system that holds design-relevant information. Works with Figma, Storybook, token files, raw codebase — or any combination.
 
 **Contract over documentation** — The output is a machine-readable contract, not human-readable documentation. It is designed to be consumed by agents, not read by people.
+
+**Active reconciliation, not retrieval** — Primitiv does not answer questions about what exists in your codebase. It resolves conflicts between sources and produces something authoritative. The distinction matters: retrieval gives you data, reconciliation gives you truth.
 
 **Inferred before prescribed** — Primitiv surfaces the rules your codebase is already following before asking you to write any. The inferred rules are a starting point, not a final answer.
 
 **Governance is explicit** — When sources conflict, the resolution is not silent. Conflicts are surfaced, logged, and resolved according to rules you define. Nothing is resolved by guessing.
+
+**Local-first and private** — Primitiv runs entirely on your machine. Your codebase is never sent to an external service. The contract is a local file; the MCP server is a local process.
 
 **Incrementally adoptable** — Start with a single source. Add more as needed. The contract remains valid at any level of completeness.
 
