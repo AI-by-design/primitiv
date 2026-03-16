@@ -7,8 +7,7 @@ import * as fs from "fs"
 
 // Load config — returns config with output.path resolved to an absolute path
 function loadConfig(configPath?: string): PrimitivConfig {
-  const defaultPath = path.join(process.cwd(), "primitiv.config.js")
-  const resolved = configPath || defaultPath
+  const resolved = path.resolve(process.cwd(), configPath || "primitiv.config.js")
 
   if (!fs.existsSync(resolved)) {
     throw new Error(`Config not found at ${resolved}. Run \`primitiv init\` to create one.`)
