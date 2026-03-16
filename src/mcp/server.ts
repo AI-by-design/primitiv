@@ -2,11 +2,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod"
 import * as fs from "fs"
+import * as path from "path"
 import { PrimitivContract } from "../types"
 
 export class PrimitivMCPServer {
   private server: McpServer
   private contract: PrimitivContract | null = null
+  private watcher: fs.FSWatcher | null = null
 
   constructor(private contractPath: string) {
     this.server = new McpServer({
@@ -15,18 +17,42 @@ export class PrimitivMCPServer {
     })
     this.loadContract()
     this.registerTools()
+    this.watchContract()
   }
 
   private loadContract(): void {
     if (fs.existsSync(this.contractPath)) {
-      const raw = fs.readFileSync(this.contractPath, "utf-8")
-      this.contract = JSON.parse(raw)
+      try {
+        const raw = fs.readFileSync(this.contractPath, "utf-8")
+        this.contract = JSON.parse(raw)
+      } catch {
+        process.stderr.write(`primitiv: failed to parse contract at ${this.contractPath}\n`)
+      }
     }
+  }
+
+  private watchContract(): void {
+    const contractDir = path.dirname(this.contractPath)
+    const contractFile = path.basename(this.contractPath)
+    let debounce: ReturnType<typeof setTimeout> | null = null
+
+    try {
+      this.watcher = fs.watch(contractDir, { persistent: false }, (_, filename) => {
+        if (filename !== contractFile) return
+        if (debounce) clearTimeout(debounce)
+        debounce = setTimeout(() => this.loadContract(), 50)
+      })
+    } catch {
+      process.stderr.write(`primitiv: could not watch ${contractDir} for contract changes\n`)
+    }
+
+    process.on("exit", () => this.watcher?.close())
+    process.on("SIGINT", () => { this.watcher?.close(); process.exit() })
   }
 
   private noContract() {
     return {
-      content: [{ type: "text" as const, text: "No contract found. Run `primitiv build` first." }],
+      content: [{ type: "text" as const, text: `No contract found at ${this.contractPath}. Run \`primitiv build\` first.` }],
       isError: true as const
     }
   }
@@ -37,7 +63,7 @@ export class PrimitivMCPServer {
     s.registerTool(
       "get_design_context",
       {
-        description: "Get the resolved design system context before building UI. Pass category: 'all' | 'tokens' | 'components' | 'conflicts'. Pass tokenCategory to filter tokens: colors, spacing, typography, borderRadius, shadows. Pass empty string to skip.",
+        description: "Get the resolved design system context before building UI. Default (no category) returns a summary of counts and names. Pass category: 'all' | 'tokens' | 'components' | 'conflicts' to get full detail. Pass tokenCategory to filter tokens: colors, spacing, typography, borderRadius, shadows.",
         inputSchema: {
           category: z.string(),
           tokenCategory: z.string()
@@ -45,15 +71,48 @@ export class PrimitivMCPServer {
       },
       async (args: { category: string; tokenCategory: string }) => {
         if (!this.contract) return this.noContract()
-        const category = args.category || "all"
+        const category = args.category || "summary"
+
+        if (category === "summary") {
+          const tokenCounts: Record<string, number> = {}
+          for (const [cat, tokens] of Object.entries(this.contract.tokens)) {
+            tokenCounts[cat] = Object.keys(tokens).length
+          }
+          return {
+            content: [{
+              type: "text" as const,
+              text: JSON.stringify({
+                tokenCounts,
+                componentNames: Object.keys(this.contract.components),
+                componentCount: Object.keys(this.contract.components).length,
+                conflictCount: this.contract.conflicts.length,
+                pendingConflicts: this.contract.conflicts.filter(c => c.resolution === "pending").length,
+                generatedAt: this.contract.generatedAt,
+                sources: this.contract.sources
+              })
+            }]
+          }
+        }
+
+        const stripSource = (tokens: Record<string, { name: string; value: string; references?: string[] }>) =>
+          Object.fromEntries(Object.entries(tokens).map(([k, t]) => [
+            k,
+            { name: t.name, value: t.value, ...(t.references ? { references: t.references } : {}) }
+          ]))
+
         const result: Record<string, unknown> = {}
         if (category === "all" || category === "tokens") {
           result.tokens = args.tokenCategory
-            ? { [args.tokenCategory]: this.contract.tokens[args.tokenCategory] || {} }
-            : this.contract.tokens
+            ? { [args.tokenCategory]: stripSource(this.contract.tokens[args.tokenCategory] || {}) }
+            : Object.fromEntries(Object.entries(this.contract.tokens).map(([cat, tokens]) => [cat, stripSource(tokens)]))
         }
         if (category === "all" || category === "components") {
-          result.components = this.contract.components
+          result.components = Object.fromEntries(
+            Object.entries(this.contract.components).map(([k, c]) => [
+              k,
+              { name: c.name, path: c.path, propCount: Object.keys(c.props ?? {}).length }
+            ])
+          )
         }
         if (category === "all" || category === "conflicts") {
           result.conflicts = this.contract.conflicts
@@ -62,7 +121,7 @@ export class PrimitivMCPServer {
         }
         result.generatedAt = this.contract.generatedAt
         result.sources = this.contract.sources
-        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+        return { content: [{ type: "text" as const, text: JSON.stringify(result) }] }
       }
     )
 
@@ -81,7 +140,7 @@ export class PrimitivMCPServer {
         for (const cat of categories) {
           const tokens = this.contract.tokens[cat]
           if (tokens && tokens[args.name]) {
-            return { content: [{ type: "text" as const, text: JSON.stringify({ ...tokens[args.name], category: cat }, null, 2) }] }
+            return { content: [{ type: "text" as const, text: JSON.stringify({ ...tokens[args.name], category: cat }) }] }
           }
         }
         return {
@@ -109,7 +168,7 @@ export class PrimitivMCPServer {
             isError: true as const
           }
         }
-        return { content: [{ type: "text" as const, text: JSON.stringify(component, null, 2) }] }
+        return { content: [{ type: "text" as const, text: JSON.stringify(component) }] }
       }
     )
 
@@ -131,7 +190,7 @@ export class PrimitivMCPServer {
         if (status !== "all") conflicts = conflicts.filter(c =>
           status === "pending" ? c.resolution === "pending" : c.resolution !== "pending"
         )
-        return { content: [{ type: "text" as const, text: JSON.stringify({ count: conflicts.length, conflicts }, null, 2) }] }
+        return { content: [{ type: "text" as const, text: JSON.stringify({ count: conflicts.length, conflicts }) }] }
       }
     )
 
@@ -156,7 +215,7 @@ export class PrimitivMCPServer {
           ? inferredRules.rules.filter(r => r.category === args.category)
           : inferredRules.rules
         return {
-          content: [{ type: "text" as const, text: JSON.stringify({ count: rules.length, generatedAt: inferredRules.generatedAt, rules }, null, 2) }]
+          content: [{ type: "text" as const, text: JSON.stringify({ count: rules.length, generatedAt: inferredRules.generatedAt, rules }) }]
         }
       }
     )
