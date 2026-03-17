@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/AI-by-design/primitiv/compare/v1.0.1...v1.0.2) (2026-03-17)
+
+
+### Bug Fixes
+
+* update command argument for Primitiv server configuration ([37c70a1](https://github.com/AI-by-design/primitiv/commit/37c70a145b142fa2776b564d723a8b4692b95477))
+
 ## [1.0.1](https://github.com/AI-by-design/primitiv/compare/v1.0.0...v1.0.1) (2026-03-17)
 
 
