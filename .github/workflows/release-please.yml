@@ -6,6 +6,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  packages: write
 
 name: release-please
 
@@ -26,7 +27,7 @@ jobs:
         if: ${{ steps.release.outputs.release_created }}
         with:
           node-version: '20'
-          registry-url: 'https://registry.npmjs.org'
+          registry-url: 'https://npm.pkg.github.com'
 
       - run: npm ci
         if: ${{ steps.release.outputs.release_created }}
@@ -34,4 +35,4 @@ jobs:
       - run: npm publish
         if: ${{ steps.release.outputs.release_created }}
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

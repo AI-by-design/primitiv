@@ -33,9 +33,9 @@ Any adapter     ──┘
 ## Install
 
 ```bash
-npm install primitiv
+npm install @ai-by-design/primitiv
 # or
-bun add primitiv
+bun add @ai-by-design/primitiv
 ```
 
 ## Quick start
