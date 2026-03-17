@@ -6,8 +6,14 @@
   "bin": {
     "primitiv": "dist/cli.js"
   },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
+    "prepare": "tsc",
     "dev": "ts-node src/index.ts",
     "start": "node dist/index.js",
     "lint": "eslint src/**/*.ts"

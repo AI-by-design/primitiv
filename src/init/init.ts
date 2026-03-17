@@ -36,16 +36,11 @@ export async function init(targetDir?: string): Promise<void> {
 
     console.log("\n✅ Created primitiv.config.js")
     writeAgentInstructions(root)
+    writeMcpConfig(root)
     console.log("\nNext steps:")
     console.log("  1. Review and adjust primitiv.config.js if needed")
     console.log("  2. Run `primitiv build` to generate your contract")
-    console.log("  3. Add Primitiv to your MCP config:\n")
-    console.log(`     {
-       "primitiv": {
-         "command": "node",
-         "args": ["${path.resolve(__dirname, "../../cli.js")}", "serve", "${configPath}"]
-       }
-     }`)
+    console.log("  3. Start the MCP server: `primitiv serve`")
 }
 
 function detectProject(root: string): DetectedProject {
@@ -140,6 +135,39 @@ module.exports = {
   }
 }
 `
+}
+
+function writeMcpConfig(root: string): void {
+    const candidates = [".mcp.json", ".cursor/mcp.json"]
+    let targetFile: string | null = null
+
+    for (const candidate of candidates) {
+        const p = path.join(root, candidate)
+        if (fs.existsSync(p)) {
+            targetFile = p
+            break
+        }
+    }
+
+    if (!targetFile) {
+        targetFile = path.join(root, ".mcp.json")
+    }
+
+    const existing = fs.existsSync(targetFile)
+        ? JSON.parse(fs.readFileSync(targetFile, "utf-8"))
+        : {}
+
+    const servers = existing.mcpServers || {}
+    if (servers.primitiv) return
+
+    servers.primitiv = {
+        command: "bunx",
+        args: ["primitiv", "serve", "./primitiv.config.js"]
+    }
+
+    fs.mkdirSync(path.dirname(targetFile), { recursive: true })
+    fs.writeFileSync(targetFile, JSON.stringify({ ...existing, mcpServers: servers }, null, 2) + "\n", "utf-8")
+    console.log(`✅ Updated ${path.relative(root, targetFile)} with Primitiv MCP server`)
 }
 
 const AGENT_BLOCK_MARKER = "<!-- primitiv -->"

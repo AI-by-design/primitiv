@@ -52,18 +52,13 @@ Primitiv detects your framework, TypeScript, Tailwind, Figma token files, and St
 bunx primitiv build
 ```
 
-**3. Add to your MCP config (Cursor / Claude Code):**
+**3. Start the MCP server:**
 
-```json
-{
-  "mcpServers": {
-    "primitiv": {
-      "command": "bun",
-      "args": ["/path/to/primitiv/dist/cli.js", "serve", "/path/to/your/project/primitiv.config.js"]
-    }
-  }
-}
+```bash
+bunx primitiv serve
 ```
+
+`primitiv init` writes a `.mcp.json` to your project root automatically, so Cursor, Claude Code, and any other MCP-compatible tool will pick up the server without manual config.
 
 From this point, every agent that builds UI in your codebase calls `get_design_context` first and gets your resolved design contract back.
 
@@ -145,9 +140,9 @@ module.exports = {
 - [ ] Figma source adapter (via Figma API)
 - [ ] Storybook source adapter (via Component Manifest)
 - [ ] `primitiv diff` — show what changed since last build
-- [ ] Watch mode — rebuild contract automatically on file changes
+- [ ] Watch mode — watch source files and rebuild the contract automatically when they change (the MCP server already hot-reloads the contract on disk changes; this is the missing build trigger)
 - [ ] Conflict auto-resolution
-- [ ] Project-scoped MCP config — `primitiv init` writes a project-level MCP config so the server is scoped to the current project, not a global user-level server
+- [x] Project-scoped MCP config — `primitiv init` writes a project-level MCP config so the server is scoped to the current project, not a global user-level server
 - [ ] publish to npm/JSR
 
 ## License
