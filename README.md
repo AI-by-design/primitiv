@@ -16,12 +16,12 @@ For teams with large or long-lived codebases, the problem runs deeper still. Yea
 
 ```
 Any source                      Primitiv                    Your agent
-                                                           
-Figma           ──┐                                       
+
+Figma           ──┐
 Codebase        ──┤──► scan ──► reconcile ──► contract ──► MCP ──► Cursor / Claude Code / Codex / Windsurf / any MCP-compatible tool
-Storybook       ──┤                                       
-Tokens file     ──┤                                       
-Any adapter     ──┘                                       
+Storybook       ──┤
+Tokens file     ──┤
+Any adapter     ──┘
 ```
 
 1. **Scan** — Primitiv ingests from any configured source via adapters
@@ -30,7 +30,11 @@ Any adapter     ──┘
 4. **Contract** — A single `primitiv.contract.json` is written as the canonical reference
 5. **MCP** — Agents call `get_design_context` before building and receive the resolved contract
 
-## Install
+---
+
+## Getting started
+
+### Install
 
 ```bash
 npm install @ai-by-design/primitiv
@@ -38,12 +42,12 @@ npm install @ai-by-design/primitiv
 bun add @ai-by-design/primitiv
 ```
 
-## Quick start
+### Quick start
 
 **1. Run init in your project root:**
 
 ```bash
-bunx primitiv init
+bunx @ai-by-design/primitiv init
 ```
 
 Primitiv detects your framework, TypeScript, Tailwind, Figma token files, and Storybook automatically and generates a tailored `primitiv.config.js`.
@@ -51,20 +55,20 @@ Primitiv detects your framework, TypeScript, Tailwind, Figma token files, and St
 **2. Build your contract:**
 
 ```bash
-bunx primitiv build
+bunx @ai-by-design/primitiv build
 ```
 
 **3. Start the MCP server:**
 
 ```bash
-bunx primitiv serve
+bunx @ai-by-design/primitiv serve
 ```
 
 `primitiv init` writes a `.mcp.json` to your project root automatically, so Cursor, Claude Code, and any other MCP-compatible tool will pick up the server without manual config.
 
 From this point, every agent that builds UI in your codebase calls `get_design_context` first and gets your resolved design contract back.
 
-## CLI
+### CLI
 
 | Command | Description |
 |---------|-------------|
@@ -72,7 +76,7 @@ From this point, every agent that builds UI in your codebase calls `get_design_c
 | `primitiv build [config]` | Scan sources, resolve conflicts, write the contract |
 | `primitiv serve [config]` | Start the MCP server |
 
-## MCP tools
+### MCP tools
 
 | Tool | Description |
 |------|-------------|
@@ -84,7 +88,7 @@ From this point, every agent that builds UI in your codebase calls `get_design_c
 
 Primitiv works with any tool that speaks MCP — it is not tied to a specific editor or agent ecosystem.
 
-## Configuration
+### Configuration
 
 ```js
 // primitiv.config.js
@@ -113,6 +117,75 @@ module.exports = {
 }
 ```
 
+---
+
+## Contributing
+
+### Local setup
+
+```bash
+git clone https://github.com/AI-by-design/primitiv.git
+cd primitiv
+bun install
+bun run build
+```
+
+### Running in development
+
+To run the MCP server against local source without a build step, point your MCP config directly at the source file. Bun runs TypeScript directly so changes are picked up on the next server restart:
+
+```json
+{
+  "mcpServers": {
+    "primitiv": {
+      "command": "bun",
+      "args": ["/path/to/primitiv/src/cli.ts", "serve", "./primitiv.config.js"]
+    }
+  }
+}
+```
+
+The MCP server also hot-reloads `primitiv.contract.json` automatically whenever `primitiv build` runs.
+
+### Build commands
+
+```bash
+bun run build   # Compile TypeScript → dist/
+bun run dev     # Run src/index.ts directly via ts-node
+bun run lint    # ESLint on src/**/*.ts
+```
+
+### Architecture
+
+```
+src/
+├── cli.ts          Entry point — routes init / build / serve
+├── index.ts        Exports build() and serve()
+├── types.ts        All shared interfaces — define types here, not inline
+├── scanner/        CodebaseScanner — extracts tokens and components from the filesystem
+├── contract/       ContractBuilder — merges sources, detects conflicts, applies governance
+├── inferrer/       inferRules() — derives design rules from token and component patterns
+├── mcp/            PrimitivMCPServer — loads the contract and registers MCP tools
+└── init/           init() — detects framework and writes primitiv.config.js
+```
+
+See `CLAUDE.md` for conventions on adding new sources, MCP tools, and types.
+
+### Releases
+
+Releases are managed by [Release Please](https://github.com/googleapis/release-please). Commit messages must follow the [Conventional Commits](https://www.conventionalcommits.org/) format:
+
+| Prefix | Effect |
+|--------|--------|
+| `fix: ...` | Patch release (0.1.0 → 0.1.1) |
+| `feat: ...` | Minor release (0.1.0 → 0.2.0) |
+| `feat!: ...` or `BREAKING CHANGE:` | Major release |
+| `chore:`, `docs:`, `refactor:` | No release |
+
+On merge to `main`, Release Please opens a release PR. Merging that PR tags the release and publishes to the package registry automatically.
+
+---
+
 ## Design principles
 
 **Source-agnostic** — Primitiv does not assume any particular toolchain. Sources are configured via adapters, and new adapters can be added for any system that holds design-relevant information. Works with Figma, Storybook, token files, raw codebase — or any combination.
@@ -137,6 +210,7 @@ module.exports = {
 - [x] `primitiv init` — project detection and config generation
 - [x] Inferred rules — extract design rules from actual codebase patterns
 - [x] AGENTS.md / CLAUDE.md integration — `primitiv init` writes agent instructions to the project's agent config file, ensuring `get_design_context` is called before any UI build without manual prompting
+- [x] Project-scoped MCP config — `primitiv init` writes a project-level MCP config so the server is scoped to the current project, not a global user-level server
 - [ ] Token relationships — document how tokens relate and what constraints exist between them
 - [ ] Remediation steps on conflicts — tell agents what to do, not just what's wrong
 - [ ] Figma source adapter (via Figma API)
@@ -144,7 +218,6 @@ module.exports = {
 - [ ] `primitiv diff` — show what changed since last build
 - [ ] Watch mode — watch source files and rebuild the contract automatically when they change (the MCP server already hot-reloads the contract on disk changes; this is the missing build trigger)
 - [ ] Conflict auto-resolution
-- [x] Project-scoped MCP config — `primitiv init` writes a project-level MCP config so the server is scoped to the current project, not a global user-level server
 - [ ] publish to npm/JSR
 
 ## License
