@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/AI-by-design/primitiv/compare/v1.0.0...v1.0.1) (2026-03-17)
+
+
+### Bug Fixes
+
+* publish to GitHub Packages registry ([1275743](https://github.com/AI-by-design/primitiv/commit/127574329b5ad5f933615cee150ade63a05fc93f))
+
 ## 1.0.0 (2026-03-17)
 
 
