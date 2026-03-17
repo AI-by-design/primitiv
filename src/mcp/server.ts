@@ -46,21 +46,32 @@ export class PrimitivMCPServer {
       process.stderr.write(`primitiv: could not watch ${contractDir} for contract changes\n`)
     }
 
-    process.on("exit", () => this.watcher?.close())
-    process.on("SIGINT", () => { this.watcher?.close(); process.exit() })
+    const cleanup = () => this.watcher?.close()
+    process.on("exit", cleanup)
+    process.on("SIGINT", () => { cleanup(); process.exit() })
+    process.on("SIGTERM", () => { cleanup(); process.exit() })
+  }
+
+  private text(t: string) {
+    return { content: [{ type: "text" as const, text: t }] }
+  }
+
+  private json(v: unknown) {
+    return this.text(JSON.stringify(v, null, 2))
+  }
+
+  private err(msg: string) {
+    return { content: [{ type: "text" as const, text: msg }], isError: true as const }
   }
 
   private noContract() {
-    return {
-      content: [{ type: "text" as const, text: `No contract found at ${this.contractPath}. Run \`primitiv build\` first.` }],
-      isError: true as const
-    }
+    return this.err(`No contract found at ${this.contractPath}. Run \`primitiv build\` first.`)
   }
 
   private registerTools(): void {
-    const s = this.server as any
-
-    s.registerTool(
+    // @ts-ignore TS2589: SDK's dual Zod v3/v4 AnySchema union hits TypeScript's instantiation depth limit.
+    // Runtime is correct — this is a known tsc limitation with this SDK version.
+    this.server.registerTool(
       "get_design_context",
       {
         description: "Get the resolved design system context before building UI. Default (no category) returns a summary of counts and names. Pass category: 'all' | 'tokens' | 'components' | 'conflicts' to get full detail. Pass tokenCategory to filter tokens: colors, spacing, typography, borderRadius, shadows.",
@@ -69,7 +80,7 @@ export class PrimitivMCPServer {
           tokenCategory: z.string()
         }
       },
-      async (args: { category: string; tokenCategory: string }) => {
+      async (args) => {
         if (!this.contract) return this.noContract()
         const category = args.category || "summary"
 
@@ -78,20 +89,15 @@ export class PrimitivMCPServer {
           for (const [cat, tokens] of Object.entries(this.contract.tokens)) {
             tokenCounts[cat] = Object.keys(tokens).length
           }
-          return {
-            content: [{
-              type: "text" as const,
-              text: JSON.stringify({
-                tokenCounts,
-                componentNames: Object.keys(this.contract.components),
-                componentCount: Object.keys(this.contract.components).length,
-                conflictCount: this.contract.conflicts.length,
-                pendingConflicts: this.contract.conflicts.filter(c => c.resolution === "pending").length,
-                generatedAt: this.contract.generatedAt,
-                sources: this.contract.sources
-              })
-            }]
-          }
+          return this.json({
+            tokenCounts,
+            componentNames: Object.keys(this.contract.components),
+            componentCount: Object.keys(this.contract.components).length,
+            conflictCount: this.contract.conflicts.length,
+            pendingConflicts: this.contract.conflicts.filter(c => c.resolution === "pending").length,
+            generatedAt: this.contract.generatedAt,
+            sources: this.contract.sources
+          })
         }
 
         const stripSource = (tokens: Record<string, { name: string; value: string; references?: string[] }>) =>
@@ -121,11 +127,11 @@ export class PrimitivMCPServer {
         }
         result.generatedAt = this.contract.generatedAt
         result.sources = this.contract.sources
-        return { content: [{ type: "text" as const, text: JSON.stringify(result) }] }
+        return this.json(result)
       }
     )
 
-    s.registerTool(
+    this.server.registerTool(
       "get_token",
       {
         description: "Look up a specific design token by name. Pass category to narrow search: colors, spacing, typography, borderRadius, shadows. Pass empty string to search all.",
@@ -134,23 +140,20 @@ export class PrimitivMCPServer {
           category: z.string()
         }
       },
-      async (args: { name: string; category: string }) => {
+      async (args) => {
         if (!this.contract) return this.noContract()
         const categories = args.category ? [args.category] : Object.keys(this.contract.tokens)
         for (const cat of categories) {
           const tokens = this.contract.tokens[cat]
           if (tokens && tokens[args.name]) {
-            return { content: [{ type: "text" as const, text: JSON.stringify({ ...tokens[args.name], category: cat }) }] }
+            return this.json({ ...tokens[args.name], category: cat })
           }
         }
-        return {
-          content: [{ type: "text" as const, text: `Token '${args.name}' not found. Use get_design_context with category 'tokens' to see all available tokens.` }],
-          isError: true as const
-        }
+        return this.err(`Token '${args.name}' not found. Use get_design_context with category 'tokens' to see all available tokens.`)
       }
     )
 
-    s.registerTool(
+    this.server.registerTool(
       "get_component",
       {
         description: "Look up a specific component by name. Returns path, props, and source so you can reuse it rather than recreate it.",
@@ -158,21 +161,18 @@ export class PrimitivMCPServer {
           name: z.string()
         }
       },
-      async (args: { name: string }) => {
+      async (args) => {
         if (!this.contract) return this.noContract()
         const component = this.contract.components[args.name]
         if (!component) {
           const available = Object.keys(this.contract.components).join(", ")
-          return {
-            content: [{ type: "text" as const, text: `Component '${args.name}' not found. Available: ${available}` }],
-            isError: true as const
-          }
+          return this.err(`Component '${args.name}' not found. Available: ${available}`)
         }
-        return { content: [{ type: "text" as const, text: JSON.stringify(component) }] }
+        return this.json(component)
       }
     )
 
-    s.registerTool(
+    this.server.registerTool(
       "get_conflicts",
       {
         description: "Get conflicts between design sources. Pass type: 'all' | 'token' | 'component'. Pass status: 'all' | 'pending' | 'resolved'.",
@@ -181,7 +181,7 @@ export class PrimitivMCPServer {
           status: z.string()
         }
       },
-      async (args: { type: string; status: string }) => {
+      async (args) => {
         if (!this.contract) return this.noContract()
         const type = args.type || "all"
         const status = args.status || "pending"
@@ -190,11 +190,11 @@ export class PrimitivMCPServer {
         if (status !== "all") conflicts = conflicts.filter(c =>
           status === "pending" ? c.resolution === "pending" : c.resolution !== "pending"
         )
-        return { content: [{ type: "text" as const, text: JSON.stringify({ count: conflicts.length, conflicts }) }] }
+        return this.json({ count: conflicts.length, conflicts })
       }
     )
 
-    s.registerTool(
+    this.server.registerTool(
       "get_inferred_rules",
       {
         description: "Get the design rules inferred from your codebase patterns. Pass category to filter: spacing, color, typography, border-radius, naming, components. Pass empty string to get all.",
@@ -202,21 +202,16 @@ export class PrimitivMCPServer {
           category: z.string()
         }
       },
-      async (args: { category: string }) => {
+      async (args) => {
         if (!this.contract) return this.noContract()
         const inferredRules = this.contract.inferredRules
         if (!inferredRules || inferredRules.rules.length === 0) {
-          return {
-            content: [{ type: "text" as const, text: "No inferred rules found. Run `primitiv build` to generate them." }],
-            isError: true as const
-          }
+          return this.err("No inferred rules found. Run `primitiv build` to generate them.")
         }
         const rules = args.category
           ? inferredRules.rules.filter(r => r.category === args.category)
           : inferredRules.rules
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify({ count: rules.length, generatedAt: inferredRules.generatedAt, rules }) }]
-        }
+        return this.json({ count: rules.length, generatedAt: inferredRules.generatedAt, rules })
       }
     )
   }

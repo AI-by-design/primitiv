@@ -35,6 +35,7 @@ export async function init(targetDir?: string): Promise<void> {
     fs.writeFileSync(configPath, config, "utf-8")
 
     console.log("\n✅ Created primitiv.config.js")
+    writeAgentInstructions(root)
     console.log("\nNext steps:")
     console.log("  1. Review and adjust primitiv.config.js if needed")
     console.log("  2. Run `primitiv build` to generate your contract")
@@ -139,6 +140,48 @@ module.exports = {
   }
 }
 `
+}
+
+const AGENT_BLOCK_MARKER = "<!-- primitiv -->"
+
+const AGENT_BLOCK = `
+${AGENT_BLOCK_MARKER}
+## Primitiv — Design System
+
+Before building or modifying any UI, call \`get_design_context\` to load the resolved design contract. This gives you the correct tokens, components, and naming conventions for this codebase.
+
+- \`get_design_context\` — summary of available tokens and components
+- \`get_design_context { category: "tokens" }\` — full token list
+- \`get_design_context { category: "components" }\` — full component list
+- \`get_token { name: "...", category: "..." }\` — look up a specific token
+- \`get_component { name: "..." }\` — look up a specific component
+- \`get_conflicts\` — see unresolved design conflicts
+- \`get_inferred_rules\` — see design rules inferred from the codebase
+<!-- /primitiv -->
+`
+
+function writeAgentInstructions(root: string): void {
+    const candidates = ["AGENTS.md", "CLAUDE.md"]
+    let targetFile: string | null = null
+
+    for (const candidate of candidates) {
+        const p = path.join(root, candidate)
+        if (fs.existsSync(p)) {
+            targetFile = p
+            break
+        }
+    }
+
+    if (!targetFile) {
+        targetFile = path.join(root, "AGENTS.md")
+    }
+
+    const existing = fs.existsSync(targetFile) ? fs.readFileSync(targetFile, "utf-8") : ""
+    if (existing.includes(AGENT_BLOCK_MARKER)) return
+
+    fs.writeFileSync(targetFile, existing + AGENT_BLOCK, "utf-8")
+    const filename = path.basename(targetFile)
+    console.log(`✅ Updated ${filename} with Primitiv usage instructions`)
 }
 
 function readJSON(filePath: string): Record<string, unknown> | null {
