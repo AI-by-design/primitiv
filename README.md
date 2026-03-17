@@ -136,9 +136,10 @@ module.exports = {
 
 - [x] Codebase scanner (CSS variables, TypeScript tokens, React components)
 - [x] Contract builder with conflict detection
-- [x] MCP server with 4 tools
+- [x] MCP server with 5 tools
 - [x] `primitiv init` — project detection and config generation
-- [ ] Inferred rules — extract design rules from actual codebase patterns
+- [x] Inferred rules — extract design rules from actual codebase patterns
+- [x] AGENTS.md / CLAUDE.md integration — `primitiv init` writes agent instructions to the project's agent config file, ensuring `get_design_context` is called before any UI build without manual prompting
 - [ ] Token relationships — document how tokens relate and what constraints exist between them
 - [ ] Remediation steps on conflicts — tell agents what to do, not just what's wrong
 - [ ] Figma source adapter (via Figma API)
@@ -146,6 +147,7 @@ module.exports = {
 - [ ] `primitiv diff` — show what changed since last build
 - [ ] Watch mode — rebuild contract automatically on file changes
 - [ ] Conflict auto-resolution
+- [ ] Project-scoped MCP config — `primitiv init` writes a project-level MCP config so the server is scoped to the current project, not a global user-level server
 - [ ] publish to npm/JSR
 
 ## License
