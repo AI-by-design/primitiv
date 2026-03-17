@@ -1,6 +1,6 @@
 {
   "name": "primitiv",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "The reconciliation layer for agentic design systems. Sits above Figma, your codebase, and Storybook — resolves conflicts, exposes a single source of truth via MCP.",
   "main": "dist/index.js",
   "bin": {
