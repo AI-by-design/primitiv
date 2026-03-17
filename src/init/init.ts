@@ -162,7 +162,7 @@ function writeMcpConfig(root: string): void {
 
     servers.primitiv = {
         command: "bunx",
-        args: ["primitiv", "serve", "./primitiv.config.js"]
+        args: ["@ai-by-design/primitiv", "serve", "./primitiv.config.js"]
     }
 
     fs.mkdirSync(path.dirname(targetFile), { recursive: true })
