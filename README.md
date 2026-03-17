@@ -33,6 +33,8 @@ Any adapter     ──┘
 ## Install
 
 ```bash
+npm install primitiv
+# or
 bun add primitiv
 ```
 
