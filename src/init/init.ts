@@ -37,6 +37,7 @@ export async function init(targetDir?: string): Promise<void> {
     console.log("\n✅ Created primitiv.config.js")
     writeAgentInstructions(root)
     writeMcpConfig(root)
+    writeSkillFile(root)
     console.log("\nNext steps:")
     console.log("  1. Review and adjust primitiv.config.js if needed")
     console.log("  2. Run `primitiv build` to generate your contract")
@@ -210,6 +211,27 @@ function writeAgentInstructions(root: string): void {
     fs.writeFileSync(targetFile, existing + AGENT_BLOCK, "utf-8")
     const filename = path.basename(targetFile)
     console.log(`✅ Updated ${filename} with Primitiv usage instructions`)
+}
+
+const SKILL_CONTENT = `# Build Component
+
+Mode: BUILD. One component at a time. Contract before code.
+
+1. Check for Primitiv (\`.mcp.json\` or \`primitiv.contract.json\`) — if missing, fall back to CLAUDE.md only
+2. Call \`get_design_context { category: "all" }\` — load full contract
+3. Call \`get_conflicts\` — if \`actionableCount > 0\`, surface each \`suggestedFix\` and ask the user to resolve before continuing; if \`pendingDecisionCount > 0\`, warn the user that manual governance config is needed; if no conflicts, continue
+4. Confirm component spec with user: name, props, states, variants, composition, Server vs Client
+5. Build — use contract tokens only, no hardcoded values; all interactive states required; reuse existing components before creating new ones
+6. Self-check against contract: verify token usage, component naming, prop shapes
+7. Run \`primitiv build\` — update the contract with the new component
+`
+
+function writeSkillFile(root: string): void {
+    const target = path.join(root, ".claude/commands/build-component.md")
+    if (fs.existsSync(target)) return
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.writeFileSync(target, SKILL_CONTENT, "utf-8")
+    console.log("✅ Installed build-component skill → .claude/commands/build-component.md")
 }
 
 function readJSON(filePath: string): Record<string, unknown> | null {

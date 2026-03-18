@@ -190,7 +190,21 @@ export class PrimitivMCPServer {
         if (status !== "all") conflicts = conflicts.filter(c =>
           status === "pending" ? c.resolution === "pending" : c.resolution !== "pending"
         )
-        return this.json({ count: conflicts.length, conflicts })
+        const actionableCount = conflicts.filter(c => c.actionable === true).length
+        const pendingDecisionCount = conflicts.filter(c => c.actionable === false).length
+        return this.json({
+          count: conflicts.length,
+          actionableCount,
+          pendingDecisionCount,
+          conflicts: conflicts.map(c => ({
+            type: c.type,
+            name: c.name,
+            resolution: c.resolution,
+            actionable: c.actionable ?? false,
+            suggestedFix: c.suggestedFix,
+            sources: c.sources
+          }))
+        })
       }
     )
 
