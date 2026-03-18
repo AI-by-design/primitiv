@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.0](https://github.com/AI-by-design/primitiv/compare/v1.0.2...v1.1.0) (2026-03-18)
+
+
+### Features
+
+* add suggestedFix property to Conflict interface and implement fix message generation in ContractBuilder ([ca5d3d9](https://github.com/AI-by-design/primitiv/commit/ca5d3d9c35058a03821751be28674dceb25a9b8a))
+* enhance Conflict handling by adding actionable property and updating fix message generation in ContractBuilder ([df5462f](https://github.com/AI-by-design/primitiv/commit/df5462fb0967b8d98c13650ef9fc4b145c72db6a))
+
 ## [1.0.2](https://github.com/AI-by-design/primitiv/compare/v1.0.1...v1.0.2) (2026-03-17)
 
 
