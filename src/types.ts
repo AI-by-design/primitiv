@@ -85,6 +85,7 @@ export interface Conflict {
   }>
   resolved?: string
   resolution?: "auto" | "manual" | "pending"
+  suggestedFix?: string
 }
 
 export interface InferredRule {
