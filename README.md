@@ -211,14 +211,16 @@ On merge to `main`, Release Please opens a release PR. Merging that PR tags the 
 - [x] Inferred rules — extract design rules from actual codebase patterns
 - [x] AGENTS.md / CLAUDE.md integration — `primitiv init` writes agent instructions to the project's agent config file, ensuring `get_design_context` is called before any UI build without manual prompting
 - [x] Project-scoped MCP config — `primitiv init` writes a project-level MCP config so the server is scoped to the current project, not a global user-level server
+- [x] `build-component` skill — `primitiv init` installs a Claude Code slash command that queries the contract before building any UI component
+- [x] Remediation steps on conflicts — conflicts include a `suggestedFix` and `actionable` flag so agents know exactly what to do, not just what's wrong
+- [x] Published to npm — available as `@ai-by-design/primitiv`
 - [ ] Token relationships — document how tokens relate and what constraints exist between them
-- [ ] Remediation steps on conflicts — tell agents what to do, not just what's wrong
 - [ ] Figma source adapter (via Figma API)
 - [ ] Storybook source adapter (via Component Manifest)
 - [ ] `primitiv diff` — show what changed since last build
 - [ ] Watch mode — watch source files and rebuild the contract automatically when they change (the MCP server already hot-reloads the contract on disk changes; this is the missing build trigger)
 - [ ] Conflict auto-resolution
-- [ ] publish to npm/JSR
+- [ ] Publish to JSR
 
 ## License
 
