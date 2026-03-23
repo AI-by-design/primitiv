@@ -30,6 +30,10 @@ export interface StorybookSource {
   url: string
 }
 
+export interface Source {
+  scan(): Promise<{ tokens: TokenMap; components: ComponentMap }>
+}
+
 // The resolved contract — single source of truth
 export interface PrimitivContract {
   version: string

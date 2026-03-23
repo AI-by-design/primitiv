@@ -1,6 +1,8 @@
 import { CodebaseScanner } from "./scanner"
 import { ContractBuilder } from "./contract"
 import { PrimitivMCPServer } from "./mcp"
+import { FigmaAdapter } from "./sources/figma"
+import { StorybookAdapter } from "./sources/storybook"
 import { PrimitivConfig } from "./types"
 import * as path from "path"
 import * as fs from "fs"
@@ -37,7 +39,17 @@ export async function build(configPath?: string): Promise<void> {
     console.log(`   ✓ Found ${Object.keys(components).length} components`)
   }
 
-  // Future: Figma and Storybook sources go here
+  if (config.sources.figma) {
+    const adapter = new FigmaAdapter(config.sources.figma)
+    const { tokens, components } = await adapter.scan()
+    sources.push({ name: "figma", tokens, components })
+  }
+
+  if (config.sources.storybook) {
+    const adapter = new StorybookAdapter(config.sources.storybook)
+    const { tokens, components } = await adapter.scan()
+    sources.push({ name: "storybook", tokens, components })
+  }
 
   console.log("\n📋 Building contract...")
   const builder = new ContractBuilder(config)
