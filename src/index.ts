@@ -27,6 +27,7 @@ function loadConfig(configPath?: string): PrimitivConfig {
 // Build command — scan sources, resolve conflicts, write contract
 export async function build(configPath?: string): Promise<void> {
   const config = loadConfig(configPath)
+  const projectRoot = path.dirname(path.resolve(process.cwd(), configPath || "primitiv.config.js"))
   const sources = []
 
   console.log("🔍 Scanning codebase...")
@@ -54,6 +55,7 @@ export async function build(configPath?: string): Promise<void> {
   console.log("\n📋 Building contract...")
   const builder = new ContractBuilder(config)
   const contract = builder.build(sources)
+  contract.sourceRoot = projectRoot
 
   if (contract.conflicts.length > 0) {
     console.log(`\n⚠️  ${contract.conflicts.length} conflict(s) found:`)

@@ -25,10 +25,50 @@ export class PrimitivMCPServer {
       try {
         const raw = fs.readFileSync(this.contractPath, "utf-8")
         this.contract = JSON.parse(raw)
+        this.warnIfMismatched()
       } catch {
         process.stderr.write(`primitiv: failed to parse contract at ${this.contractPath}\n`)
       }
     }
+  }
+
+  private warnIfMismatched(): void {
+    if (!this.contract?.sourceRoot) return
+    const expectedRoot = path.dirname(path.resolve(this.contractPath))
+    if (this.contract.sourceRoot !== expectedRoot) {
+      process.stderr.write(
+        `primitiv: ⚠️  CONTRACT MISMATCH — this contract was built from a different project.\n` +
+        `  Contract sourceRoot: ${this.contract.sourceRoot}\n` +
+        `  Expected (contract file location): ${expectedRoot}\n` +
+        `  Run \`primitiv build\` in the correct project to fix this.\n`
+      )
+    }
+  }
+
+  private getContractWarnings(): string[] {
+    const warnings: string[] = []
+    if (!this.contract) return warnings
+
+    if (this.contract.sourceRoot) {
+      const expectedRoot = path.dirname(path.resolve(this.contractPath))
+      if (this.contract.sourceRoot !== expectedRoot) {
+        warnings.push(
+          `CONTRACT MISMATCH: this contract was built from a different project (${this.contract.sourceRoot}). ` +
+          `Run \`primitiv build\` in the current project first.`
+        )
+      }
+    }
+
+    const ageMs = Date.now() - new Date(this.contract.generatedAt).getTime()
+    const ageHours = Math.floor(ageMs / (1000 * 60 * 60))
+    if (ageHours >= 24) {
+      const ageDays = Math.floor(ageHours / 24)
+      warnings.push(
+        `STALE CONTRACT: built ${ageDays} day${ageDays === 1 ? "" : "s"} ago. Run \`primitiv build\` to refresh.`
+      )
+    }
+
+    return warnings
   }
 
   private watchContract(): void {
@@ -89,14 +129,20 @@ export class PrimitivMCPServer {
           for (const [cat, tokens] of Object.entries(this.contract.tokens)) {
             tokenCounts[cat] = Object.keys(tokens).length
           }
+          const ageMs = Date.now() - new Date(this.contract.generatedAt).getTime()
+          const contractAgeHours = Math.floor(ageMs / (1000 * 60 * 60))
+          const warnings = this.getContractWarnings()
           return this.json({
+            ...(warnings.length > 0 ? { warnings } : {}),
+            sourceRoot: this.contract.sourceRoot ?? "(unknown — rebuild with latest primitiv)",
+            generatedAt: this.contract.generatedAt,
+            contractAgeHours,
+            sources: this.contract.sources,
             tokenCounts,
             componentNames: Object.keys(this.contract.components),
             componentCount: Object.keys(this.contract.components).length,
             conflictCount: this.contract.conflicts.length,
             pendingConflicts: this.contract.conflicts.filter(c => c.resolution === "pending").length,
-            generatedAt: this.contract.generatedAt,
-            sources: this.contract.sources
           })
         }
 

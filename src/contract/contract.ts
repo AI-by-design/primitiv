@@ -21,6 +21,7 @@ export class ContractBuilder {
       version: "0.1.0",
       generatedAt: new Date().toISOString(),
       sources: sources.map(s => s.name),
+      sourceRoot: "",
       tokens: mergedTokens,
       components: mergedComponents,
       conflicts,
