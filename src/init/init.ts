@@ -177,9 +177,26 @@ const AGENT_BLOCK = `
 ${AGENT_BLOCK_MARKER}
 ## Primitiv — Design System
 
-Before building or modifying any UI, call \`get_design_context\` to load the resolved design contract. This gives you the correct tokens, components, and naming conventions for this codebase.
+Before building or modifying any UI, call \`get_design_context\` and validate the response before proceeding.
 
-- \`get_design_context\` — summary of available tokens and components
+### Step 1 — Load the contract
+Call \`get_design_context\` (no args) to get the summary.
+
+### Step 2 — Validate before using
+Check the response for two things:
+
+**a) sourceRoot must match this project.**
+The response includes a \`sourceRoot\` field — the absolute path of the project this contract was built from.
+If \`sourceRoot\` does not match the current project's directory, stop immediately.
+Do not use the contract data. Tell the user: "Primitiv is pointed at a different project (\`sourceRoot\`). Run \`primitiv init\` and \`primitiv build\` in this project first, or update your MCP config to point at this project's \`primitiv.config.js\`."
+
+**b) warnings must be empty.**
+If the response includes a \`warnings\` array, stop and surface each warning to the user before continuing.
+Each warning includes the exact command needed to fix it (e.g. \`bunx @ai-by-design/primitiv build /path/to/primitiv.config.js\`).
+
+### Step 3 — Use the contract
+Once validated, use the contract for all UI work:
+
 - \`get_design_context { category: "tokens" }\` — full token list
 - \`get_design_context { category: "components" }\` — full component list
 - \`get_token { name: "...", category: "..." }\` — look up a specific token
