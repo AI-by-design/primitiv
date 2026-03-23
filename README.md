@@ -88,6 +88,41 @@ From this point, every agent that builds UI in your codebase calls `get_design_c
 
 Primitiv works with any tool that speaks MCP — it is not tied to a specific editor or agent ecosystem.
 
+### Using Primitiv across multiple projects
+
+Primitiv runs **one MCP server process per project**, each pointed at that project's contract. This is intentional — each project has its own resolved contract, and there is no global shared state.
+
+`primitiv init` writes a project-scoped MCP config automatically. **Do not add Primitiv to your editor's global MCP config** — if you do, the global server will keep serving one project's contract regardless of which project your agent is working in.
+
+#### Per-editor setup
+
+| Editor | Project-level config | Global config (avoid for Primitiv) |
+|--------|---------------------|--------------------------------------|
+| **Claude Code** | `.mcp.json` at repo root ✅ | `~/.claude/settings.json` |
+| **Cursor** | `.cursor/mcp.json` at repo root ✅ | `~/.cursor/mcp.json` |
+| **Windsurf** | `.windsurf/mcp_config.json` at repo root ✅ | `~/.codeium/windsurf/mcp_config.json` |
+| **Zed** | `.zed/settings.json` at repo root ✅ | `~/.config/zed/settings.json` |
+
+`primitiv init` detects which editor config exists and writes to the right project-level file. If none exists, it creates `.mcp.json` (works with Claude Code and most modern editors).
+
+#### Switching between projects
+
+Each project needs its own `primitiv init` + `primitiv build`. When you switch projects in your editor, the project-scoped MCP config is loaded automatically — no manual switching needed, as long as you haven't added Primitiv to the global config.
+
+If you already added Primitiv to your global editor config, remove it:
+
+```bash
+# Cursor — edit ~/.cursor/mcp.json and remove the "primitiv" entry
+# Windsurf — edit ~/.codeium/windsurf/mcp_config.json and remove "primitiv"
+```
+
+#### Stale or mismatched contract warnings
+
+If `get_design_context` returns a `warnings` array, stop and resolve before proceeding:
+
+- **`STALE CONTRACT`** — the contract is outdated. The warning includes the exact command to rebuild, e.g.: `bunx @ai-by-design/primitiv build /path/to/your/primitiv.config.js`
+- **`CONTRACT MISMATCH`** — the server is serving a contract from a different project. This usually means Primitiv is in your global editor MCP config. Remove it from there and re-run `primitiv init` in the correct project.
+
 ### Configuration
 
 ```js

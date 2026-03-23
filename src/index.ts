@@ -56,6 +56,7 @@ export async function build(configPath?: string): Promise<void> {
   const builder = new ContractBuilder(config)
   const contract = builder.build(sources)
   contract.sourceRoot = projectRoot
+  contract.configPath = path.resolve(process.cwd(), configPath || "primitiv.config.js")
 
   if (contract.conflicts.length > 0) {
     console.log(`\n⚠️  ${contract.conflicts.length} conflict(s) found:`)

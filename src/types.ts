@@ -40,6 +40,7 @@ export interface PrimitivContract {
   generatedAt: string
   sources: string[]
   sourceRoot: string
+  configPath: string
   tokens: TokenMap
   components: ComponentMap
   conflicts: Conflict[]

@@ -49,12 +49,17 @@ export class PrimitivMCPServer {
     const warnings: string[] = []
     if (!this.contract) return warnings
 
+    const rebuildCmd = this.contract.configPath
+      ? `bunx @ai-by-design/primitiv build ${this.contract.configPath}`
+      : `bunx @ai-by-design/primitiv build`
+
     if (this.contract.sourceRoot) {
       const expectedRoot = path.dirname(path.resolve(this.contractPath))
       if (this.contract.sourceRoot !== expectedRoot) {
         warnings.push(
-          `CONTRACT MISMATCH: this contract was built from a different project (${this.contract.sourceRoot}). ` +
-          `Run \`primitiv build\` in the current project first.`
+          `CONTRACT MISMATCH: this contract was built from a different project (${this.contract.sourceRoot}), ` +
+          `not the current one (${expectedRoot}). ` +
+          `Run: ${rebuildCmd}`
         )
       }
     }
@@ -64,7 +69,7 @@ export class PrimitivMCPServer {
     if (ageHours >= 24) {
       const ageDays = Math.floor(ageHours / 24)
       warnings.push(
-        `STALE CONTRACT: built ${ageDays} day${ageDays === 1 ? "" : "s"} ago. Run \`primitiv build\` to refresh.`
+        `STALE CONTRACT: built ${ageDays} day${ageDays === 1 ? "" : "s"} ago. Run: ${rebuildCmd}`
       )
     }
 
