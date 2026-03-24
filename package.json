@@ -1,6 +1,6 @@
 {
   "name": "@ai-by-design/primitiv",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "description": "The reconciliation layer for agentic design systems. Sits above Figma, your codebase, and Storybook — resolves conflicts, exposes a single source of truth via MCP.",
   "main": "dist/index.js",
   "bin": {
