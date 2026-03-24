@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.2.0](https://github.com/AI-by-design/primitiv/compare/v1.1.0...v1.2.0) (2026-03-24)
+
+
+### Features
+
+* add Figma and Storybook adapters to support new source types in the build process ([ebc2109](https://github.com/AI-by-design/primitiv/commit/ebc21096f1dbeda82b4129afa98c8965b1d61086))
+* add sourceRoot to contract and implement warnings for contract mismatches and staleness ([b8b5f0c](https://github.com/AI-by-design/primitiv/commit/b8b5f0c73f85daf80ff2fd465a38bae16e55088a))
+* enhance README and update contract handling with project-specific config paths and improved warning messages ([dc34c2c](https://github.com/AI-by-design/primitiv/commit/dc34c2c36e71412a427ed06e6ad740f28090bf86))
+
 ## [1.1.0](https://github.com/AI-by-design/primitiv/compare/v1.0.2...v1.1.0) (2026-03-18)
 
 
