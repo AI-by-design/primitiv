@@ -33,6 +33,14 @@
     "registry": "https://registry.npmjs.org",
     "access": "public"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AI-by-design/primitiv.git"
+  },
+  "bugs": {
+    "url": "https://github.com/AI-by-design/primitiv/issues"
+  },
+  "homepage": "https://github.com/AI-by-design/primitiv#readme",
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
