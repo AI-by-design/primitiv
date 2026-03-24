@@ -45,7 +45,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "zod": "^3.22.0",
-    "glob": "^10.0.0",
+    "glob": "^13.0.6",
     "chalk": "^5.0.0",
     "ora": "^7.0.0"
   },
