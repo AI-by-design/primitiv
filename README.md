@@ -253,6 +253,10 @@ On merge to `main`, Release Please opens a release PR. Merging that PR tags the 
 - [x] Storybook source adapter — scan components via the Component Manifest
 - [ ] Token relationships — document how tokens relate and what constraints exist between them
 
+## Part of a larger system
+
+Primitiv is the contract layer. It works alongside [Design-workflow](https://github.com/AI-by-design/Design-workflow) — a build system for going from idea to working product with agents. Design-workflow gives agents the process. Primitiv gives them the source of truth.
+
 ## License
 
 MIT
