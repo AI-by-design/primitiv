@@ -249,6 +249,9 @@ On merge to `main`, Release Please opens a release PR. Merging that PR tags the 
 - [x] `build-component` skill — `primitiv init` installs a Claude Code slash command that queries the contract before building any UI component
 - [x] Remediation steps on conflicts — conflicts include a `suggestedFix` and `actionable` flag so agents know exactly what to do, not just what's wrong
 - [x] Published to npm — available as `@ai-by-design/primitiv`
+- [x] Figma source adapter — scan Figma files via the Figma API
+- [x] Storybook source adapter — scan components via the Component Manifest
+- [ ] Token relationships — document how tokens relate and what constraints exist between them
 
 ## License
 
