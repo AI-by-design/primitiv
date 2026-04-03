@@ -18,7 +18,7 @@ export class ContractBuilder {
     const inferredRules = inferRules(mergedTokens, mergedComponents)
 
     const contract: PrimitivContract = {
-      version: "0.1.0",
+      version: "0.2.0",
       generatedAt: new Date().toISOString(),
       sources: sources.map(s => s.name),
       sourceRoot: "",
@@ -52,7 +52,7 @@ export class ContractBuilder {
       shadows: {}
     }
 
-    const seen: Record<string, Record<string, { source: string; value: string }>> = {}
+    const seen: Record<string, Record<string, { adapter: string; value: string }>> = {}
 
     for (const source of sources) {
       for (const [category, tokens] of Object.entries(source.tokens)) {
@@ -67,14 +67,15 @@ export class ContractBuilder {
               )
 
               if (existingConflict) {
-                existingConflict.sources.push({ source: source.name, value: token.value })
+                existingConflict.sources.push({ source: token.source, value: token.value })
                 const fix = this.buildFixMessage("token", existingConflict.name, existingConflict.sources)
                 existingConflict.suggestedFix = fix.suggestedFix
                 existingConflict.actionable = fix.actionable
               } else {
+                const firstToken = merged[category][name]
                 const conflictSources = [
-                  { source: seen[category][name].source, value: seen[category][name].value },
-                  { source: source.name, value: token.value }
+                  { source: firstToken.source, value: firstToken.value },
+                  { source: token.source, value: token.value }
                 ]
                 const fix = this.buildFixMessage("token", `${category}.${name}`, conflictSources)
                 conflicts.push({
@@ -93,7 +94,7 @@ export class ContractBuilder {
             }
           } else {
             merged[category][name] = token
-            seen[category][name] = { source: source.name, value: token.value }
+            seen[category][name] = { adapter: source.name, value: token.value }
           }
         }
       }
@@ -110,10 +111,10 @@ export class ContractBuilder {
 
     for (const source of sources) {
       for (const [name, component] of Object.entries(source.components)) {
-        if (merged[name] && merged[name].source !== source.name) {
+        if (merged[name] && merged[name].source.adapter !== component.source.adapter) {
           const conflictSources = [
-            { source: merged[name].source, value: merged[name].path },
-            { source: source.name, value: component.path }
+            { source: merged[name].source, value: merged[name].source.file || merged[name].source.adapter },
+            { source: component.source, value: component.source.file || component.source.adapter }
           ]
           const fix = this.buildFixMessage("component", name, conflictSources)
           conflicts.push({
@@ -140,24 +141,24 @@ export class ContractBuilder {
   private buildFixMessage(
     conflictType: "token" | "component",
     name: string,
-    sources: Array<{ source: string; value: string }>
+    sources: Array<{ source: { adapter: string }; value: string }>
   ): { suggestedFix: string; actionable: boolean } {
     const sot = this.config.governance.sourceOfTruth
-    const winner = sources.find(s => s.source === sot)
-    const losers = sources.filter(s => s.source !== sot)
+    const winner = sources.find(s => s.source.adapter === sot)
+    const losers = sources.filter(s => s.source.adapter !== sot)
 
     if (conflictType === "token") {
       if (winner) {
         return {
           suggestedFix: `Token '${name}' conflicts across sources. ` +
             `'${sot}' is the source of truth (value: '${winner.value}'). ` +
-            `Update ${losers.map(s => `'${s.source}'`).join(", ")} to match, ` +
+            `Update ${losers.map(s => `'${s.source.adapter}'`).join(", ")} to match, ` +
             `or change \`governance.sourceOfTruth\` in primitiv.config.js.`,
           actionable: true
         }
       }
       return {
-        suggestedFix: `Token '${name}' conflicts across sources (${sources.map(s => `${s.source}: '${s.value}'`).join(", ")}). ` +
+        suggestedFix: `Token '${name}' conflicts across sources (${sources.map(s => `${s.source.adapter}: '${s.value}'`).join(", ")}). ` +
           `No source of truth is configured for these sources. ` +
           `Set \`governance.sourceOfTruth\` in primitiv.config.js to resolve.`,
         actionable: false
@@ -168,13 +169,13 @@ export class ContractBuilder {
       return {
         suggestedFix: `Component '${name}' is defined in multiple sources. ` +
           `'${sot}' is the source of truth (path: '${winner.value}'). ` +
-          `Remove the duplicate from ${losers.map(s => `'${s.source}'`).join(", ")}, ` +
+          `Remove the duplicate from ${losers.map(s => `'${s.source.adapter}'`).join(", ")}, ` +
           `or change \`governance.sourceOfTruth\` in primitiv.config.js.`,
         actionable: true
       }
     }
     return {
-      suggestedFix: `Component '${name}' is defined in multiple sources (${sources.map(s => `${s.source}: '${s.value}'`).join(", ")}). ` +
+      suggestedFix: `Component '${name}' is defined in multiple sources (${sources.map(s => `${s.source.adapter}: '${s.value}'`).join(", ")}). ` +
         `Set \`governance.sourceOfTruth\` in primitiv.config.js to resolve.`,
       actionable: false
     }

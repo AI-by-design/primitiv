@@ -41,15 +41,28 @@ export async function build(configPath?: string): Promise<void> {
   }
 
   if (config.sources.figma) {
-    const adapter = new FigmaAdapter(config.sources.figma)
-    const { tokens, components } = await adapter.scan()
-    sources.push({ name: "figma", tokens, components })
+    console.log("\n🎨 Scanning Figma...")
+    try {
+      const adapter = new FigmaAdapter(config.sources.figma)
+      const { tokens, components } = await adapter.scan()
+      sources.push({ name: "figma", tokens, components })
+      console.log(`   ✓ Found ${Object.values(tokens).reduce((acc, cat) => acc + Object.keys(cat).length, 0)} tokens`)
+      console.log(`   ✓ Found ${Object.keys(components).length} components`)
+    } catch (err: any) {
+      console.log(`   ✗ Figma scan failed: ${err.message}`)
+    }
   }
 
   if (config.sources.storybook) {
-    const adapter = new StorybookAdapter(config.sources.storybook)
-    const { tokens, components } = await adapter.scan()
-    sources.push({ name: "storybook", tokens, components })
+    console.log("\n📖 Scanning Storybook...")
+    try {
+      const adapter = new StorybookAdapter(config.sources.storybook)
+      const { tokens, components } = await adapter.scan()
+      sources.push({ name: "storybook", tokens, components })
+      console.log(`   ✓ Found ${Object.keys(components).length} components`)
+    } catch (err: any) {
+      console.log(`   ✗ Storybook scan failed: ${err.message}`)
+    }
   }
 
   console.log("\n📋 Building contract...")
@@ -62,7 +75,7 @@ export async function build(configPath?: string): Promise<void> {
     console.log(`\n⚠️  ${contract.conflicts.length} conflict(s) found:`)
     contract.conflicts.forEach(c => {
       console.log(`   - ${c.type}: ${c.name}`)
-      c.sources.forEach(s => console.log(`     ${s.source}: ${s.value}`))
+      c.sources.forEach(s => console.log(`     ${s.source.adapter}${s.source.file ? ` (${s.source.file})` : ""}: ${s.value}`))
     })
   }
 

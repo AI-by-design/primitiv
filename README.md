@@ -198,6 +198,7 @@ src/
 ├── index.ts        Exports build() and serve()
 ├── types.ts        All shared interfaces — define types here, not inline
 ├── scanner/        CodebaseScanner — extracts tokens and components from the filesystem
+├── sources/        Source adapters — Figma (Variables API), Storybook (manifest)
 ├── contract/       ContractBuilder — merges sources, detects conflicts, applies governance
 ├── inferrer/       inferRules() — derives design rules from token and component patterns
 ├── mcp/            PrimitivMCPServer — loads the contract and registers MCP tools
@@ -249,8 +250,9 @@ On merge to `main`, Release Please opens a release PR. Merging that PR tags the 
 - [x] `build-component` skill — `primitiv init` installs a Claude Code slash command that queries the contract before building any UI component
 - [x] Remediation steps on conflicts — conflicts include a `suggestedFix` and `actionable` flag so agents know exactly what to do, not just what's wrong
 - [x] Published to npm — available as `@ai-by-design/primitiv`
-- [x] Figma source adapter — scan Figma files via the Figma API
-- [x] Storybook source adapter — scan components via the Component Manifest
+- [x] Figma source adapter — scan Figma Variables and components via the Figma REST API
+- [x] Storybook source adapter — scan components and variants via the Storybook manifest
+- [x] Source provenance — every token and component in the contract traces back to its origin (file, line number, Figma variable ID, Storybook story ID)
 - [ ] Token relationships — document how tokens relate and what constraints exist between them
 
 ## Part of a larger system

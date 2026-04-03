@@ -58,15 +58,15 @@ export class CodebaseScanner {
       const trimmed = value.trim()
 
       // Skip aliases — tokens whose value is just a var() reference to another token.
-      // These are semantic mappings, not primitives. The resolved value will be captured separately.
       if (/^var\(--[\w-]+\)$/.test(trimmed)) continue
 
+      const line = lineFromIndex(content, match.index)
       const category = this.categorizeToken(name, trimmed)
       if (!tokens[category]) tokens[category] = {}
       tokens[category][name] = {
         name,
         value: trimmed,
-        source: file
+        source: { adapter: "codebase", file, line }
       }
     }
   }
@@ -78,10 +78,11 @@ export class CodebaseScanner {
     while ((match = colorRegex.exec(content)) !== null) {
       const [, name, value] = match
       if (!tokens.colors[name]) {
+        const line = lineFromIndex(content, match.index)
         tokens.colors[name] = {
           name,
           value: value.trim(),
-          source: file
+          source: { adapter: "codebase", file, line }
         }
       }
     }
@@ -127,13 +128,12 @@ export class CodebaseScanner {
 
     for (const file of componentFiles) {
       const content = fs.readFileSync(path.resolve(this.config.root, file), "utf-8")
-      const name = this.extractComponentName(content, file)
+      const result = this.extractComponentName(content, file)
 
-      if (name) {
-        components[name] = {
-          name,
-          path: file,
-          source: "codebase",
+      if (result) {
+        components[result.name] = {
+          name: result.name,
+          source: { adapter: "codebase", file, line: result.line },
           props: this.extractProps(content)
         }
       }
@@ -142,12 +142,16 @@ export class CodebaseScanner {
     return components
   }
 
-  private extractComponentName(content: string, file: string): string | null {
+  private extractComponentName(content: string, file: string): { name: string; line: number } | null {
     const exportMatch = content.match(/export\s+(?:default\s+)?(?:function|const)\s+([A-Z][a-zA-Z]+)/)
-    if (exportMatch) return exportMatch[1]
+    if (exportMatch) {
+      return { name: exportMatch[1], line: lineFromIndex(content, exportMatch.index!) }
+    }
 
     const basename = path.basename(file, path.extname(file))
-    if (basename[0] === basename[0].toUpperCase()) return basename
+    if (basename[0] === basename[0].toUpperCase()) {
+      return { name: basename, line: 1 }
+    }
 
     return null
   }
@@ -172,4 +176,12 @@ export class CodebaseScanner {
 
     return props
   }
+}
+
+function lineFromIndex(content: string, index: number): number {
+  let line = 1
+  for (let i = 0; i < index; i++) {
+    if (content[i] === "\n") line++
+  }
+  return line
 }

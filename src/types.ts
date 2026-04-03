@@ -34,6 +34,14 @@ export interface Source {
   scan(): Promise<{ tokens: TokenMap; components: ComponentMap }>
 }
 
+// Source provenance — tracks where every token and component came from
+export interface SourceProvenance {
+  adapter: "codebase" | "figma" | "storybook"
+  file?: string
+  line?: number
+  metadata?: Record<string, unknown>
+}
+
 // The resolved contract — single source of truth
 export interface PrimitivContract {
   version: string
@@ -59,7 +67,7 @@ export interface TokenMap {
 export interface Token {
   name: string
   value: string
-  source: string
+  source: SourceProvenance
   references?: string[]
 }
 
@@ -69,8 +77,7 @@ export interface ComponentMap {
 
 export interface Component {
   name: string
-  path: string
-  source: string
+  source: SourceProvenance
   variants?: string[]
   props?: Record<string, PropDefinition>
   [key: string]: unknown
@@ -86,7 +93,7 @@ export interface Conflict {
   type: "token" | "component"
   name: string
   sources: Array<{
-    source: string
+    source: SourceProvenance
     value: string
   }>
   resolved?: string

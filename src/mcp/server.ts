@@ -13,7 +13,7 @@ export class PrimitivMCPServer {
   constructor(private contractPath: string) {
     this.server = new McpServer({
       name: "primitiv",
-      version: "0.1.0"
+      version: "0.2.0"
     })
     this.loadContract()
     this.registerTools()
@@ -167,7 +167,7 @@ export class PrimitivMCPServer {
           result.components = Object.fromEntries(
             Object.entries(this.contract.components).map(([k, c]) => [
               k,
-              { name: c.name, path: c.path, propCount: Object.keys(c.props ?? {}).length }
+              { name: c.name, source: c.source, propCount: Object.keys(c.props ?? {}).length }
             ])
           )
         }
@@ -207,7 +207,7 @@ export class PrimitivMCPServer {
     this.server.registerTool(
       "get_component",
       {
-        description: "Look up a specific component by name. Returns path, props, and source so you can reuse it rather than recreate it.",
+        description: "Look up a specific component by name. Returns source provenance, props, and variants so you can reuse it rather than recreate it.",
         inputSchema: {
           name: z.string()
         }
