@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/AI-by-design/primitiv/compare/v1.2.0...v1.3.0) (2026-04-03)
+
+
+### Features
+
+* implement Figma and Storybook adapters with source provenance ([4d897a0](https://github.com/AI-by-design/primitiv/commit/4d897a02264fb9e5c45d512866ff807e3742cb77))
+
 ## [1.2.0](https://github.com/AI-by-design/primitiv/compare/v1.1.0...v1.2.0) (2026-03-24)
 
 
