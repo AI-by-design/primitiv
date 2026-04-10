@@ -49,3 +49,27 @@ Config → scan() per source → ContractBuilder.build() → primitiv.contract.j
 ## Stack
 
 TypeScript (strict), `@modelcontextprotocol/sdk`, `zod` (tool input validation), `glob`, `chalk`, `ora`. Compiles to CommonJS via `tsc`. No framework, no test runner yet.
+
+## Code Quality Rules
+
+**CRITICAL: Always run these checks before completing ANY task that modifies code:**
+
+1. **Lint**: Run `bun lint` - **MUST have ZERO errors AND ZERO warnings**
+2. **Format**: Run `bun fmt` - ensure all code is properly formatted
+3. **TypeScript check**: Run `bunx tsc --noEmit` to validate all TypeScript files
+4. **Build check**: Run `bun run build` to ensure the project builds successfully
+
+> ⚠️ **Do not consider a task complete until:**
+> - `bun lint` returns zero warnings and zero errors
+> - `bun test` shows all tests passing
+> - `bun run build` builds successfully
+>
+> If you introduce any lint warnings or failing tests, fix them immediately before finishing.
+
+### TypeScript Guidelines
+
+- **Never use `any` type** - always use proper types, `unknown` with type guards, or specific interfaces
+- **Never use non-null assertions (`!`)** - use proper type guards or nullish coalescing (`??`)
+- Use union types for known string values (e.g., `"pending" | "completed" | "failed"`)
+- Prefer interfaces over type aliases for object shapes
+- Add explicit return types to functions when the return type is complex
