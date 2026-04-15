@@ -1,0 +1,11 @@
+node_modules
+dist
+.git
+.github
+memory
+docs
+examples
+skills
+primitiv.contract.json
+*.log
+.DS_Store
