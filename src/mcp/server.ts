@@ -119,7 +119,7 @@ export class PrimitivMCPServer {
     this.server.registerTool(
       "get_design_context",
       {
-        description: "Get the resolved design system context before building UI. Default (no category) returns a summary of counts and names. Pass category: 'all' | 'tokens' | 'components' | 'conflicts' to get full detail. Pass tokenCategory to filter tokens: colors, spacing, typography, borderRadius, shadows.",
+        description: "Get the resolved design system context before building UI. Read-only, no side effects. Default (no category) returns a JSON summary of token counts, component names, conflict counts, and contract metadata. Pass category: 'all' | 'tokens' | 'components' | 'conflicts' to get full detail. Pass tokenCategory to filter tokens: colors, spacing, typography, borderRadius, shadows. Use this as the first call to understand what exists. For lookups by name, use get_token or get_component instead.",
         inputSchema: {
           category: z.string(),
           tokenCategory: z.string()
@@ -185,7 +185,7 @@ export class PrimitivMCPServer {
     this.server.registerTool(
       "get_token",
       {
-        description: "Look up a specific design token by name. Pass category to narrow search: colors, spacing, typography, borderRadius, shadows. Pass empty string to search all.",
+        description: "Look up a specific design token by name. Read-only, no side effects. Returns the token's name, value, and category, or an error if not found. Pass category to narrow search: colors, spacing, typography, borderRadius, shadows. Pass empty string to search all. Use this when you know the token name. For a broad overview of all tokens, use get_design_context with category 'tokens' instead.",
         inputSchema: {
           name: z.string(),
           category: z.string()
@@ -207,7 +207,7 @@ export class PrimitivMCPServer {
     this.server.registerTool(
       "get_component",
       {
-        description: "Look up a specific component by name. Returns source provenance, props, and variants so you can reuse it rather than recreate it.",
+        description: "Look up a specific component by name. Read-only, no side effects. Returns JSON with source provenance, props, and variants, or an error listing available components if not found. Use this when you need implementation details for a known component to reuse it rather than recreate it. For a list of all component names, use get_design_context with category 'components' instead.",
         inputSchema: {
           name: z.string()
         }
@@ -226,7 +226,7 @@ export class PrimitivMCPServer {
     this.server.registerTool(
       "get_conflicts",
       {
-        description: "Get conflicts between design sources. Pass type: 'all' | 'token' | 'component'. Pass status: 'all' | 'pending' | 'resolved'.",
+        description: "Get conflicts between design sources. Read-only, no side effects. Returns JSON with conflict count, actionable count, and a list of conflicts with type, name, resolution status, and suggested fixes. Pass type: 'all' | 'token' | 'component'. Pass status: 'all' | 'pending' | 'resolved'. Use this to audit disagreements between sources (e.g. Figma vs codebase). For resolved design values, use get_token or get_component instead.",
         inputSchema: {
           type: z.string(),
           status: z.string()
@@ -262,7 +262,7 @@ export class PrimitivMCPServer {
     this.server.registerTool(
       "get_inferred_rules",
       {
-        description: "Get the design rules inferred from your codebase patterns. Pass category to filter: spacing, color, typography, border-radius, naming, components. Pass empty string to get all.",
+        description: "Get the design rules inferred from your codebase patterns. Read-only, no side effects. Returns JSON with a list of rules including category, pattern, and confidence, or an error if no rules have been generated yet. Pass category to filter: spacing, color, typography, border-radius, naming, components. Pass empty string to get all. Use this to understand implicit conventions the codebase follows. For explicit design token values, use get_token. For source conflicts, use get_conflicts.",
         inputSchema: {
           category: z.string()
         }
