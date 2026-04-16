@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/AI-by-design/primitiv/compare/v1.3.0...v1.3.1) (2026-04-16)
+
+
+### Bug Fixes
+
+* **tsconfig:** add explicit types array for TS 6.x compatibility ([2871a88](https://github.com/AI-by-design/primitiv/commit/2871a88a1f89a4eb3136325b926d90f74ff874eb))
+
 ## [1.3.0](https://github.com/AI-by-design/primitiv/compare/v1.2.0...v1.3.0) (2026-04-03)
 
 
