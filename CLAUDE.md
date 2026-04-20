@@ -9,9 +9,10 @@ bun run build       # Compile TypeScript → dist/
 bun run dev         # Run src/index.ts directly via ts-node
 bun run start       # Run compiled dist/index.js
 bun run lint        # ESLint on src/**/*.ts
+bun test            # Run the test suite (bun's built-in runner)
 ```
 
-There are no tests configured yet.
+Tests live next to the code as `src/**/*.test.ts` and use `bun:test`.
 
 ## Architecture
 
@@ -33,8 +34,14 @@ Config → scan() per source → ContractBuilder.build() → primitiv.contract.j
 - `src/contract/` — `ContractBuilder` merges token/component maps across sources, detects conflicts, applies governance rules, calls the inferrer
 - `src/inferrer/` — `inferRules()` derives design rules (spacing scale, color semantics, naming conventions, etc.) from token and component patterns
 - `src/mcp/` — `PrimitivMCPServer` loads the contract JSON and registers 5 read-only MCP tools
-- `src/init/` — detects framework, Tailwind, Figma tokens, Storybook and writes a starter `primitiv.config.js`
+- `src/init/` — detects framework, Tailwind, Figma tokens, Storybook and writes a starter `primitiv.config.js`. Also merges an `mcpServers.primitiv` entry into `.mcp.json` / `.cursor/mcp.json`, appends a Primitiv block to `CLAUDE.md` / `AGENTS.md` (idempotent — re-runs refresh the block between `<!-- primitiv -->` markers), installs `.claude/commands/build-component.md`, and adds the server to Codex via `codex mcp add` when `codex` is on PATH
 - `src/types.ts` — **all shared interfaces live here** — `SourceProvenance` tracks where every token/component came from (adapter, file, line, metadata)
+
+**Runtime features in the MCP server** (not all obvious from the module list):
+- **Contract age warning** — `PrimitivMCPServer` emits a `STALE` warning in tool responses when `generatedAt` is more than 24 hours old
+- **Hot reload** — `serve` watches `primitiv.contract.json` and reloads it (debounced ~50ms) when rebuilds land, so agents see fresh data without restarting the server
+- **Source-root mismatch warning** — the server flags cases where the contract's `sourceRoot` does not match the project the MCP is running inside (catches configs pointing at the wrong project)
+- **Auto-installed skill** — `primitiv init` drops `.claude/commands/build-component.md` so Claude Code gains a `/build-component` slash command with no extra setup
 
 ## Key conventions (from `.cursor/rules/`)
 
@@ -48,7 +55,7 @@ Config → scan() per source → ContractBuilder.build() → primitiv.contract.j
 
 ## Stack
 
-TypeScript (strict), `@modelcontextprotocol/sdk`, `zod` (tool input validation), `glob`, `chalk`, `ora`. Compiles to CommonJS via `tsc`. No framework, no test runner yet.
+TypeScript (strict), `@modelcontextprotocol/sdk`, `zod` (tool input validation), `glob`, `chalk`, `ora`. Compiles to CommonJS via `tsc`. Tests use `bun:test` (`bun test`). No application framework.
 
 ## Code Quality Rules
 

@@ -13,6 +13,28 @@ export interface PrimitivConfig {
   output: {
     path: string
   }
+  // Optional per-token / per-component rationale: why it exists and when to use it.
+  // Load from a sidecar YAML (default: ./primitiv.rationale.yml) or inline.
+  rationale?: {
+    path?: string
+    inline?: RationaleMap
+  }
+}
+
+export interface Rationale {
+  why?: string
+  when?: string
+  deprecated?: boolean
+  alternatives?: string[]
+  examples?: string[]
+  tags?: string[]
+}
+
+export interface RationaleMap {
+  // Keys are dotted token paths: "colors.primary", "spacing.sm".
+  tokens?: Record<string, Rationale>
+  // Keys are component names as they appear in the contract.
+  components?: Record<string, Rationale>
 }
 
 export interface CodebaseSource {
@@ -28,6 +50,10 @@ export interface FigmaSource {
 
 export interface StorybookSource {
   url: string
+  // Optional: filesystem path where Storybook's `importPath` entries resolve.
+  // When set, the adapter reads story source files to extract argTypes as props.
+  // Usually the project root. Resolved relative to primitiv.config.js when relative.
+  sourceRoot?: string
 }
 
 export interface Source {
@@ -69,6 +95,7 @@ export interface Token {
   value: string
   source: SourceProvenance
   references?: string[]
+  rationale?: Rationale
 }
 
 export interface ComponentMap {
@@ -80,6 +107,7 @@ export interface Component {
   source: SourceProvenance
   variants?: string[]
   props?: Record<string, PropDefinition>
+  rationale?: Rationale
   [key: string]: unknown
 }
 
@@ -104,9 +132,9 @@ export interface Conflict {
 
 export interface InferredRule {
   id: string
-  category: 'spacing' | 'color' | 'typography' | 'border-radius' | 'naming' | 'components'
+  category: "spacing" | "color" | "typography" | "border-radius" | "naming" | "components"
   rule: string
-  confidence: 'high' | 'medium' | 'low'
+  confidence: "high" | "medium" | "low"
   evidence: string[]
 }
 

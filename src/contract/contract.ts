@@ -1,9 +1,9 @@
-import * as fs from "fs"
-import { PrimitivContract, TokenMap, ComponentMap, Conflict, PrimitivConfig } from "../types"
+import * as fs from "node:fs"
 import { inferRules } from "../inferrer"
+import type { ComponentMap, Conflict, PrimitivConfig, PrimitivContract, TokenMap } from "../types"
 
 export class ContractBuilder {
-  constructor(private config: PrimitivConfig) { }
+  constructor(private config: PrimitivConfig) {}
 
   build(
     sources: Array<{
@@ -20,7 +20,7 @@ export class ContractBuilder {
     const contract: PrimitivContract = {
       version: "0.2.0",
       generatedAt: new Date().toISOString(),
-      sources: sources.map(s => s.name),
+      sources: sources.map((s) => s.name),
       sourceRoot: "",
       configPath: "",
       tokens: mergedTokens,
@@ -33,11 +33,7 @@ export class ContractBuilder {
   }
 
   save(contract: PrimitivContract): void {
-    fs.writeFileSync(
-      this.config.output.path,
-      JSON.stringify(contract, null, 2),
-      "utf-8"
-    )
+    fs.writeFileSync(this.config.output.path, JSON.stringify(contract, null, 2), "utf-8")
   }
 
   private mergeTokens(
@@ -62,9 +58,7 @@ export class ContractBuilder {
         for (const [name, token] of Object.entries(tokens)) {
           if (seen[category][name]) {
             if (seen[category][name].value !== token.value) {
-              const existingConflict = conflicts.find(
-                c => c.type === "token" && c.name === `${category}.${name}`
-              )
+              const existingConflict = conflicts.find((c) => c.type === "token" && c.name === `${category}.${name}`)
 
               if (existingConflict) {
                 existingConflict.sources.push({ source: token.source, value: token.value })
@@ -144,21 +138,23 @@ export class ContractBuilder {
     sources: Array<{ source: { adapter: string }; value: string }>
   ): { suggestedFix: string; actionable: boolean } {
     const sot = this.config.governance.sourceOfTruth
-    const winner = sources.find(s => s.source.adapter === sot)
-    const losers = sources.filter(s => s.source.adapter !== sot)
+    const winner = sources.find((s) => s.source.adapter === sot)
+    const losers = sources.filter((s) => s.source.adapter !== sot)
 
     if (conflictType === "token") {
       if (winner) {
         return {
-          suggestedFix: `Token '${name}' conflicts across sources. ` +
+          suggestedFix:
+            `Token '${name}' conflicts across sources. ` +
             `'${sot}' is the source of truth (value: '${winner.value}'). ` +
-            `Update ${losers.map(s => `'${s.source.adapter}'`).join(", ")} to match, ` +
+            `Update ${losers.map((s) => `'${s.source.adapter}'`).join(", ")} to match, ` +
             `or change \`governance.sourceOfTruth\` in primitiv.config.js.`,
           actionable: true
         }
       }
       return {
-        suggestedFix: `Token '${name}' conflicts across sources (${sources.map(s => `${s.source.adapter}: '${s.value}'`).join(", ")}). ` +
+        suggestedFix:
+          `Token '${name}' conflicts across sources (${sources.map((s) => `${s.source.adapter}: '${s.value}'`).join(", ")}). ` +
           `No source of truth is configured for these sources. ` +
           `Set \`governance.sourceOfTruth\` in primitiv.config.js to resolve.`,
         actionable: false
@@ -167,15 +163,17 @@ export class ContractBuilder {
 
     if (winner) {
       return {
-        suggestedFix: `Component '${name}' is defined in multiple sources. ` +
+        suggestedFix:
+          `Component '${name}' is defined in multiple sources. ` +
           `'${sot}' is the source of truth (path: '${winner.value}'). ` +
-          `Remove the duplicate from ${losers.map(s => `'${s.source.adapter}'`).join(", ")}, ` +
+          `Remove the duplicate from ${losers.map((s) => `'${s.source.adapter}'`).join(", ")}, ` +
           `or change \`governance.sourceOfTruth\` in primitiv.config.js.`,
         actionable: true
       }
     }
     return {
-      suggestedFix: `Component '${name}' is defined in multiple sources (${sources.map(s => `${s.source.adapter}: '${s.value}'`).join(", ")}). ` +
+      suggestedFix:
+        `Component '${name}' is defined in multiple sources (${sources.map((s) => `${s.source.adapter}: '${s.value}'`).join(", ")}). ` +
         `Set \`governance.sourceOfTruth\` in primitiv.config.js to resolve.`,
       actionable: false
     }
