@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.4.0](https://github.com/AI-by-design/primitiv/compare/v1.3.1...v1.4.0) (2026-04-20)
+
+
+### Features
+
+* init polish, verify CLI, rationale layer, storybook argTypes ([ad7cdb3](https://github.com/AI-by-design/primitiv/commit/ad7cdb32f67f61a9ed61b5ddf962f5bd293d7c47))
+* init polish, verify CLI, rationale layer, storybook argTypes ([1ba5197](https://github.com/AI-by-design/primitiv/commit/1ba5197e66e33b9e24d476f472dd925165c98aae))
+* **init:** detect package manager from lockfile for MCP runner ([5b02284](https://github.com/AI-by-design/primitiv/commit/5b02284400e3380ca03388b5a728c210ba2d2e44))
+
 ## [1.3.1](https://github.com/AI-by-design/primitiv/compare/v1.3.0...v1.3.1) (2026-04-16)
 
 
