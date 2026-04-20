@@ -1,4 +1,43 @@
-import { Source, FigmaSource, TokenMap, ComponentMap, Token } from "../../types"
+import type { ComponentMap, FigmaSource, Source, TokenMap } from "../../types"
+
+type FigmaRawValue =
+  | number
+  | string
+  | { type: "VARIABLE_ALIAS"; id: string }
+  | { r: number; g: number; b: number; a: number }
+
+interface FigmaVariable {
+  id: string
+  name: string
+  remote?: boolean
+  resolvedType: string
+  variableCollectionId: string
+  valuesByMode?: Record<string, FigmaRawValue>
+}
+
+interface FigmaVariableCollection {
+  name?: string
+  defaultModeId?: string
+}
+
+interface FigmaComponentMeta {
+  name?: string
+  node_id?: string
+  key?: string
+}
+
+interface FigmaVariablesResponse {
+  meta?: {
+    variables?: Record<string, FigmaVariable>
+    variableCollections?: Record<string, FigmaVariableCollection>
+  }
+}
+
+interface FigmaComponentsResponse {
+  meta?: {
+    components?: FigmaComponentMeta[]
+  }
+}
 
 export class FigmaAdapter implements Source {
   private baseUrl = "https://api.figma.com/v1"
@@ -6,14 +45,11 @@ export class FigmaAdapter implements Source {
   constructor(private config: FigmaSource) {}
 
   async scan(): Promise<{ tokens: TokenMap; components: ComponentMap }> {
-    const [tokens, components] = await Promise.all([
-      this.extractTokens(),
-      this.extractComponents()
-    ])
+    const [tokens, components] = await Promise.all([this.extractTokens(), this.extractComponents()])
     return { tokens, components }
   }
 
-  private async fetchFigma(endpoint: string): Promise<any> {
+  private async fetchFigma<T>(endpoint: string): Promise<T> {
     const res = await fetch(`${this.baseUrl}${endpoint}`, {
       headers: { "X-Figma-Token": this.config.token }
     })
@@ -21,10 +57,10 @@ export class FigmaAdapter implements Source {
       const body = await res.text().catch(() => "")
       throw new Error(
         `Figma API error (${res.status}): ${res.statusText}${body ? ` — ${body}` : ""}. ` +
-        `Check your token and fileId in primitiv.config.js.`
+          `Check your token and fileId in primitiv.config.js.`
       )
     }
-    return res.json()
+    return (await res.json()) as T
   }
 
   private async extractTokens(): Promise<TokenMap> {
@@ -36,11 +72,11 @@ export class FigmaAdapter implements Source {
       shadows: {}
     }
 
-    const data = await this.fetchFigma(`/files/${this.config.fileId}/variables/local`)
+    const data = await this.fetchFigma<FigmaVariablesResponse>(`/files/${this.config.fileId}/variables/local`)
     const variables = data.meta?.variables || {}
     const collections = data.meta?.variableCollections || {}
 
-    for (const variable of Object.values(variables) as any[]) {
+    for (const variable of Object.values(variables)) {
       if (variable.remote) continue
 
       const collection = collections[variable.variableCollectionId]
@@ -51,7 +87,7 @@ export class FigmaAdapter implements Source {
       if (rawValue === undefined || rawValue === null) continue
 
       // Skip alias variables (references to other variables)
-      if (typeof rawValue === "object" && rawValue.type === "VARIABLE_ALIAS") continue
+      if (typeof rawValue === "object" && "type" in rawValue && rawValue.type === "VARIABLE_ALIAS") continue
 
       const resolved = this.resolveValue(variable.resolvedType, rawValue)
       if (!resolved) continue
@@ -78,7 +114,7 @@ export class FigmaAdapter implements Source {
 
   private async extractComponents(): Promise<ComponentMap> {
     const components: ComponentMap = {}
-    const data = await this.fetchFigma(`/files/${this.config.fileId}/components`)
+    const data = await this.fetchFigma<FigmaComponentsResponse>(`/files/${this.config.fileId}/components`)
     const entries = data.meta?.components || []
 
     for (const comp of entries) {
@@ -101,8 +137,8 @@ export class FigmaAdapter implements Source {
     return components
   }
 
-  private resolveValue(type: string, raw: any): string | null {
-    if (type === "COLOR" && typeof raw === "object") {
+  private resolveValue(type: string, raw: FigmaRawValue): string | null {
+    if (type === "COLOR" && typeof raw === "object" && "r" in raw) {
       return this.rgbaToHex(raw.r, raw.g, raw.b, raw.a)
     }
     if (type === "FLOAT" && typeof raw === "number") {
@@ -115,17 +151,17 @@ export class FigmaAdapter implements Source {
   }
 
   private rgbaToHex(r: number, g: number, b: number, a: number): string {
-    const toHex = (v: number) => Math.round(v * 255).toString(16).padStart(2, "0")
+    const toHex = (v: number) =>
+      Math.round(v * 255)
+        .toString(16)
+        .padStart(2, "0")
     const hex = `#${toHex(r)}${toHex(g)}${toHex(b)}`
     return a < 1 ? `${hex}${toHex(a)}` : hex
   }
 
   private normalizeName(figmaName: string): string {
     // Figma uses "/" separators (e.g., "colors/primary/500") → kebab-case
-    return figmaName
-      .replace(/\//g, "-")
-      .replace(/\s+/g, "-")
-      .toLowerCase()
+    return figmaName.replace(/\//g, "-").replace(/\s+/g, "-").toLowerCase()
   }
 
   private categorize(resolvedType: string, name: string): string {
@@ -135,7 +171,8 @@ export class FigmaAdapter implements Source {
     if (name.includes("radius") || name.includes("rounded")) return "borderRadius"
     if (name.includes("shadow")) return "shadows"
     if (name.includes("font") || name.includes("line-height") || name.includes("letter")) return "typography"
-    if (name.includes("spacing") || name.includes("margin") || name.includes("padding") || name.includes("gap")) return "spacing"
+    if (name.includes("spacing") || name.includes("margin") || name.includes("padding") || name.includes("gap"))
+      return "spacing"
     return "spacing" // default for numeric values
   }
 }

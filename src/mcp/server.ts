@@ -1,9 +1,9 @@
+import * as fs from "node:fs"
+import * as path from "node:path"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod"
-import * as fs from "fs"
-import * as path from "path"
-import { PrimitivContract } from "../types"
+import type { PrimitivContract, Rationale } from "../types"
 
 export class PrimitivMCPServer {
   private server: McpServer
@@ -38,9 +38,9 @@ export class PrimitivMCPServer {
     if (this.contract.sourceRoot !== expectedRoot) {
       process.stderr.write(
         `primitiv: ⚠️  CONTRACT MISMATCH — this contract was built from a different project.\n` +
-        `  Contract sourceRoot: ${this.contract.sourceRoot}\n` +
-        `  Expected (contract file location): ${expectedRoot}\n` +
-        `  Run \`primitiv build\` in the correct project to fix this.\n`
+          `  Contract sourceRoot: ${this.contract.sourceRoot}\n` +
+          `  Expected (contract file location): ${expectedRoot}\n` +
+          `  Run \`primitiv build\` in the correct project to fix this.\n`
       )
     }
   }
@@ -49,17 +49,20 @@ export class PrimitivMCPServer {
     const warnings: string[] = []
     if (!this.contract) return warnings
 
+    // Use npx in warning messages — it's the universal fallback every node user has.
+    // The user's actual MCP command (chosen at init time) may be bunx/pnpm dlx/yarn dlx,
+    // but we can't know that at runtime without storing it in the contract.
     const rebuildCmd = this.contract.configPath
-      ? `bunx @ai-by-design/primitiv build ${this.contract.configPath}`
-      : `bunx @ai-by-design/primitiv build`
+      ? `npx @ai-by-design/primitiv build ${this.contract.configPath}`
+      : `npx @ai-by-design/primitiv build`
 
     if (this.contract.sourceRoot) {
       const expectedRoot = path.dirname(path.resolve(this.contractPath))
       if (this.contract.sourceRoot !== expectedRoot) {
         warnings.push(
           `CONTRACT MISMATCH: this contract was built from a different project (${this.contract.sourceRoot}), ` +
-          `not the current one (${expectedRoot}). ` +
-          `Run: ${rebuildCmd}`
+            `not the current one (${expectedRoot}). ` +
+            `Run: ${rebuildCmd}`
         )
       }
     }
@@ -68,9 +71,7 @@ export class PrimitivMCPServer {
     const ageHours = Math.floor(ageMs / (1000 * 60 * 60))
     if (ageHours >= 24) {
       const ageDays = Math.floor(ageHours / 24)
-      warnings.push(
-        `STALE CONTRACT: built ${ageDays} day${ageDays === 1 ? "" : "s"} ago. Run: ${rebuildCmd}`
-      )
+      warnings.push(`STALE CONTRACT: built ${ageDays} day${ageDays === 1 ? "" : "s"} ago. Run: ${rebuildCmd}`)
     }
 
     return warnings
@@ -93,8 +94,14 @@ export class PrimitivMCPServer {
 
     const cleanup = () => this.watcher?.close()
     process.on("exit", cleanup)
-    process.on("SIGINT", () => { cleanup(); process.exit() })
-    process.on("SIGTERM", () => { cleanup(); process.exit() })
+    process.on("SIGINT", () => {
+      cleanup()
+      process.exit()
+    })
+    process.on("SIGTERM", () => {
+      cleanup()
+      process.exit()
+    })
   }
 
   private text(t: string) {
@@ -114,12 +121,11 @@ export class PrimitivMCPServer {
   }
 
   private registerTools(): void {
-    // @ts-ignore TS2589: SDK's dual Zod v3/v4 AnySchema union hits TypeScript's instantiation depth limit.
-    // Runtime is correct — this is a known tsc limitation with this SDK version.
     this.server.registerTool(
       "get_design_context",
       {
-        description: "Get the resolved design system context before building UI. Read-only, no side effects. Default (no category) returns a JSON summary of token counts, component names, conflict counts, and contract metadata. Pass category: 'all' | 'tokens' | 'components' | 'conflicts' to get full detail. Pass tokenCategory to filter tokens: colors, spacing, typography, borderRadius, shadows. Use this as the first call to understand what exists. For lookups by name, use get_token or get_component instead.",
+        description:
+          "Get the resolved design system context before building UI. Read-only, no side effects. Default (no category) returns a JSON summary of token counts, component names, conflict counts, and contract metadata. Pass category: 'all' | 'tokens' | 'components' | 'conflicts' to get full detail. Pass tokenCategory to filter tokens: colors, spacing, typography, borderRadius, shadows. Use this as the first call to understand what exists. For lookups by name, use get_token or get_component instead.",
         inputSchema: {
           category: z.string(),
           tokenCategory: z.string()
@@ -147,34 +153,50 @@ export class PrimitivMCPServer {
             componentNames: Object.keys(this.contract.components),
             componentCount: Object.keys(this.contract.components).length,
             conflictCount: this.contract.conflicts.length,
-            pendingConflicts: this.contract.conflicts.filter(c => c.resolution === "pending").length,
+            pendingConflicts: this.contract.conflicts.filter((c) => c.resolution === "pending").length
           })
         }
 
-        const stripSource = (tokens: Record<string, { name: string; value: string; references?: string[] }>) =>
-          Object.fromEntries(Object.entries(tokens).map(([k, t]) => [
-            k,
-            { name: t.name, value: t.value, ...(t.references ? { references: t.references } : {}) }
-          ]))
+        const stripSource = (
+          tokens: Record<string, { name: string; value: string; references?: string[]; rationale?: Rationale }>
+        ) =>
+          Object.fromEntries(
+            Object.entries(tokens).map(([k, t]) => [
+              k,
+              {
+                name: t.name,
+                value: t.value,
+                ...(t.references ? { references: t.references } : {}),
+                ...(t.rationale ? { rationale: t.rationale } : {})
+              }
+            ])
+          )
 
         const result: Record<string, unknown> = {}
         if (category === "all" || category === "tokens") {
           result.tokens = args.tokenCategory
             ? { [args.tokenCategory]: stripSource(this.contract.tokens[args.tokenCategory] || {}) }
-            : Object.fromEntries(Object.entries(this.contract.tokens).map(([cat, tokens]) => [cat, stripSource(tokens)]))
+            : Object.fromEntries(
+                Object.entries(this.contract.tokens).map(([cat, tokens]) => [cat, stripSource(tokens)])
+              )
         }
         if (category === "all" || category === "components") {
           result.components = Object.fromEntries(
             Object.entries(this.contract.components).map(([k, c]) => [
               k,
-              { name: c.name, source: c.source, propCount: Object.keys(c.props ?? {}).length }
+              {
+                name: c.name,
+                source: c.source,
+                propCount: Object.keys(c.props ?? {}).length,
+                ...(c.rationale ? { rationale: c.rationale } : {})
+              }
             ])
           )
         }
         if (category === "all" || category === "conflicts") {
           result.conflicts = this.contract.conflicts
           result.conflictCount = this.contract.conflicts.length
-          result.pendingConflicts = this.contract.conflicts.filter(c => c.resolution === "pending").length
+          result.pendingConflicts = this.contract.conflicts.filter((c) => c.resolution === "pending").length
         }
         result.generatedAt = this.contract.generatedAt
         result.sources = this.contract.sources
@@ -185,7 +207,8 @@ export class PrimitivMCPServer {
     this.server.registerTool(
       "get_token",
       {
-        description: "Look up a specific design token by name. Read-only, no side effects. Returns the token's name, value, and category, or an error if not found. Pass category to narrow search: colors, spacing, typography, borderRadius, shadows. Pass empty string to search all. Use this when you know the token name. For a broad overview of all tokens, use get_design_context with category 'tokens' instead.",
+        description:
+          "Look up a specific design token by name. Read-only, no side effects. Returns the token's name, value, and category, or an error if not found. Pass category to narrow search: colors, spacing, typography, borderRadius, shadows. Pass empty string to search all. Use this when you know the token name. For a broad overview of all tokens, use get_design_context with category 'tokens' instead.",
         inputSchema: {
           name: z.string(),
           category: z.string()
@@ -196,18 +219,21 @@ export class PrimitivMCPServer {
         const categories = args.category ? [args.category] : Object.keys(this.contract.tokens)
         for (const cat of categories) {
           const tokens = this.contract.tokens[cat]
-          if (tokens && tokens[args.name]) {
+          if (tokens?.[args.name]) {
             return this.json({ ...tokens[args.name], category: cat })
           }
         }
-        return this.err(`Token '${args.name}' not found. Use get_design_context with category 'tokens' to see all available tokens.`)
+        return this.err(
+          `Token '${args.name}' not found. Use get_design_context with category 'tokens' to see all available tokens.`
+        )
       }
     )
 
     this.server.registerTool(
       "get_component",
       {
-        description: "Look up a specific component by name. Read-only, no side effects. Returns JSON with source provenance, props, and variants, or an error listing available components if not found. Use this when you need implementation details for a known component to reuse it rather than recreate it. For a list of all component names, use get_design_context with category 'components' instead.",
+        description:
+          "Look up a specific component by name. Read-only, no side effects. Returns JSON with source provenance, props, and variants, or an error listing available components if not found. Use this when you need implementation details for a known component to reuse it rather than recreate it. For a list of all component names, use get_design_context with category 'components' instead.",
         inputSchema: {
           name: z.string()
         }
@@ -226,7 +252,8 @@ export class PrimitivMCPServer {
     this.server.registerTool(
       "get_conflicts",
       {
-        description: "Get conflicts between design sources. Read-only, no side effects. Returns JSON with conflict count, actionable count, and a list of conflicts with type, name, resolution status, and suggested fixes. Pass type: 'all' | 'token' | 'component'. Pass status: 'all' | 'pending' | 'resolved'. Use this to audit disagreements between sources (e.g. Figma vs codebase). For resolved design values, use get_token or get_component instead.",
+        description:
+          "Get conflicts between design sources. Read-only, no side effects. Returns JSON with conflict count, actionable count, and a list of conflicts with type, name, resolution status, and suggested fixes. Pass type: 'all' | 'token' | 'component'. Pass status: 'all' | 'pending' | 'resolved'. Use this to audit disagreements between sources (e.g. Figma vs codebase). For resolved design values, use get_token or get_component instead.",
         inputSchema: {
           type: z.string(),
           status: z.string()
@@ -237,17 +264,18 @@ export class PrimitivMCPServer {
         const type = args.type || "all"
         const status = args.status || "pending"
         let conflicts = this.contract.conflicts
-        if (type !== "all") conflicts = conflicts.filter(c => c.type === type)
-        if (status !== "all") conflicts = conflicts.filter(c =>
-          status === "pending" ? c.resolution === "pending" : c.resolution !== "pending"
-        )
-        const actionableCount = conflicts.filter(c => c.actionable === true).length
-        const pendingDecisionCount = conflicts.filter(c => c.actionable === false).length
+        if (type !== "all") conflicts = conflicts.filter((c) => c.type === type)
+        if (status !== "all")
+          conflicts = conflicts.filter((c) =>
+            status === "pending" ? c.resolution === "pending" : c.resolution !== "pending"
+          )
+        const actionableCount = conflicts.filter((c) => c.actionable === true).length
+        const pendingDecisionCount = conflicts.filter((c) => c.actionable === false).length
         return this.json({
           count: conflicts.length,
           actionableCount,
           pendingDecisionCount,
-          conflicts: conflicts.map(c => ({
+          conflicts: conflicts.map((c) => ({
             type: c.type,
             name: c.name,
             resolution: c.resolution,
@@ -262,7 +290,8 @@ export class PrimitivMCPServer {
     this.server.registerTool(
       "get_inferred_rules",
       {
-        description: "Get the design rules inferred from your codebase patterns. Read-only, no side effects. Returns JSON with a list of rules including category, pattern, and confidence, or an error if no rules have been generated yet. Pass category to filter: spacing, color, typography, border-radius, naming, components. Pass empty string to get all. Use this to understand implicit conventions the codebase follows. For explicit design token values, use get_token. For source conflicts, use get_conflicts.",
+        description:
+          "Get the design rules inferred from your codebase patterns. Read-only, no side effects. Returns JSON with a list of rules including category, pattern, and confidence, or an error if no rules have been generated yet. Pass category to filter: spacing, color, typography, border-radius, naming, components. Pass empty string to get all. Use this to understand implicit conventions the codebase follows. For explicit design token values, use get_token. For source conflicts, use get_conflicts.",
         inputSchema: {
           category: z.string()
         }
@@ -274,7 +303,7 @@ export class PrimitivMCPServer {
           return this.err("No inferred rules found. Run `primitiv build` to generate them.")
         }
         const rules = args.category
-          ? inferredRules.rules.filter(r => r.category === args.category)
+          ? inferredRules.rules.filter((r) => r.category === args.category)
           : inferredRules.rules
         return this.json({ count: rules.length, generatedAt: inferredRules.generatedAt, rules })
       }

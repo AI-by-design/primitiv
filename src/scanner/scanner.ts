@@ -1,10 +1,10 @@
+import * as fs from "node:fs"
+import * as path from "node:path"
 import { glob } from "glob"
-import * as fs from "fs"
-import * as path from "path"
-import { CodebaseSource, TokenMap, ComponentMap } from "../types"
+import type { CodebaseSource, ComponentMap, TokenMap } from "../types"
 
 export class CodebaseScanner {
-  constructor(private config: CodebaseSource) { }
+  constructor(private config: CodebaseSource) {}
 
   async scan(): Promise<{ tokens: TokenMap; components: ComponentMap }> {
     const files = await this.getFiles()
@@ -51,16 +51,15 @@ export class CodebaseScanner {
 
   private extractCSSTokens(content: string, file: string, tokens: TokenMap): void {
     const cssVarRegex = /--([\w-]+):\s*([^;]+);/g
-    let match
 
-    while ((match = cssVarRegex.exec(content)) !== null) {
+    for (const match of content.matchAll(cssVarRegex)) {
       const [, name, value] = match
       const trimmed = value.trim()
 
       // Skip aliases — tokens whose value is just a var() reference to another token.
       if (/^var\(--[\w-]+\)$/.test(trimmed)) continue
 
-      const line = lineFromIndex(content, match.index)
+      const line = lineFromIndex(content, match.index ?? 0)
       const category = this.categorizeToken(name, trimmed)
       if (!tokens[category]) tokens[category] = {}
       tokens[category][name] = {
@@ -73,12 +72,11 @@ export class CodebaseScanner {
 
   private extractTSTokens(content: string, file: string, tokens: TokenMap): void {
     const colorRegex = /(\w+):\s*['"]?(#[0-9a-fA-F]{3,8}|rgb[a]?\([^)]+\)|hsl[a]?\([^)]+\)|oklch\([^)]+\))['"]?/g
-    let match
 
-    while ((match = colorRegex.exec(content)) !== null) {
+    for (const match of content.matchAll(colorRegex)) {
       const [, name, value] = match
       if (!tokens.colors[name]) {
-        const line = lineFromIndex(content, match.index)
+        const line = lineFromIndex(content, match.index ?? 0)
         tokens.colors[name] = {
           name,
           value: value.trim(),
@@ -89,14 +87,13 @@ export class CodebaseScanner {
   }
 
   private categorizeToken(name: string, value: string): string {
-    const isColorValue = (
+    const isColorValue =
       value.startsWith("#") ||
       value.startsWith("rgb") ||
       value.startsWith("hsl") ||
       value.startsWith("oklch") ||
       value.startsWith("oklab")
-    )
-    const isColorName = (
+    const isColorName =
       name.includes("color") ||
       name.includes("bg") ||
       name.includes("background") ||
@@ -113,10 +110,11 @@ export class CodebaseScanner {
       name.includes("sidebar") ||
       name.includes("chart") ||
       name.includes("breach")
-    )
     if (isColorValue || isColorName) return "colors"
-    if (name.includes("spacing") || name.includes("margin") || name.includes("padding") || name.includes("gap")) return "spacing"
-    if (name.includes("font") || name.includes("line-height") || name.includes("letter") || name.includes("text-")) return "typography"
+    if (name.includes("spacing") || name.includes("margin") || name.includes("padding") || name.includes("gap"))
+      return "spacing"
+    if (name.includes("font") || name.includes("line-height") || name.includes("letter") || name.includes("text-"))
+      return "typography"
     if (name.includes("radius") || name.includes("rounded")) return "borderRadius"
     if (name.includes("shadow")) return "shadows"
     return "other"
@@ -124,7 +122,7 @@ export class CodebaseScanner {
 
   private async extractComponents(files: string[]): Promise<ComponentMap> {
     const components: ComponentMap = {}
-    const componentFiles = files.filter(f => f.endsWith(".tsx") || f.endsWith(".jsx"))
+    const componentFiles = files.filter((f) => f.endsWith(".tsx") || f.endsWith(".jsx"))
 
     for (const file of componentFiles) {
       const content = fs.readFileSync(path.resolve(this.config.root, file), "utf-8")
@@ -145,7 +143,7 @@ export class CodebaseScanner {
   private extractComponentName(content: string, file: string): { name: string; line: number } | null {
     const exportMatch = content.match(/export\s+(?:default\s+)?(?:function|const)\s+([A-Z][a-zA-Z]+)/)
     if (exportMatch) {
-      return { name: exportMatch[1], line: lineFromIndex(content, exportMatch.index!) }
+      return { name: exportMatch[1], line: lineFromIndex(content, exportMatch.index ?? 0) }
     }
 
     const basename = path.basename(file, path.extname(file))
@@ -164,9 +162,8 @@ export class CodebaseScanner {
 
     const propsContent = propsMatch[1]
     const propRegex = /(\w+)(\?)?\s*:\s*([^;\n]+)/g
-    let match
 
-    while ((match = propRegex.exec(propsContent)) !== null) {
+    for (const match of propsContent.matchAll(propRegex)) {
       const [, name, optional, type] = match
       props[name] = {
         type: type.trim(),

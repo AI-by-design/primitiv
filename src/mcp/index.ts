@@ -1,1 +1,1 @@
-export { PrimitivMCPServer } from './server'
+export { PrimitivMCPServer } from "./server"
