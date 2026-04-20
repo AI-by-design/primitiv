@@ -33,12 +33,39 @@ describe("init", () => {
     expect(agents).toContain("<!-- /primitiv -->")
   })
 
-  test("MCP config is created with primitiv entry", async () => {
+  test("MCP config is created with primitiv entry (default runner is npx)", async () => {
     await init(tempDir)
     const mcpPath = path.join(tempDir, ".mcp.json")
     expect(fs.existsSync(mcpPath)).toBe(true)
     const config = JSON.parse(fs.readFileSync(mcpPath, "utf-8"))
+    // No lockfile in the temp dir → detectRunner defaults to npx.
+    expect(config.mcpServers?.primitiv?.command).toBe("npx")
+    expect(config.mcpServers?.primitiv?.args[0]).toBe("@ai-by-design/primitiv")
+  })
+
+  test("MCP config uses bunx when bun.lock exists", async () => {
+    fs.writeFileSync(path.join(tempDir, "bun.lock"), "")
+    await init(tempDir)
+    const config = JSON.parse(fs.readFileSync(path.join(tempDir, ".mcp.json"), "utf-8"))
     expect(config.mcpServers?.primitiv?.command).toBe("bunx")
+    expect(config.mcpServers?.primitiv?.args).toEqual(["@ai-by-design/primitiv", "serve", "./primitiv.config.js"])
+  })
+
+  test("MCP config uses pnpm dlx when pnpm-lock.yaml exists", async () => {
+    fs.writeFileSync(path.join(tempDir, "pnpm-lock.yaml"), "")
+    await init(tempDir)
+    const config = JSON.parse(fs.readFileSync(path.join(tempDir, ".mcp.json"), "utf-8"))
+    expect(config.mcpServers?.primitiv?.command).toBe("pnpm")
+    expect(config.mcpServers?.primitiv?.args[0]).toBe("dlx")
+    expect(config.mcpServers?.primitiv?.args[1]).toBe("@ai-by-design/primitiv")
+  })
+
+  test("MCP config uses yarn dlx when yarn.lock exists", async () => {
+    fs.writeFileSync(path.join(tempDir, "yarn.lock"), "")
+    await init(tempDir)
+    const config = JSON.parse(fs.readFileSync(path.join(tempDir, ".mcp.json"), "utf-8"))
+    expect(config.mcpServers?.primitiv?.command).toBe("yarn")
+    expect(config.mcpServers?.primitiv?.args[0]).toBe("dlx")
   })
 
   test("MCP config preserves existing servers", async () => {

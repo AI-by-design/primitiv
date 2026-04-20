@@ -14,6 +14,36 @@ interface DetectedProject {
   ignore: string[]
 }
 
+export interface Runner {
+  // Executable that npm-style runners use to fetch-and-run a package (npx, bunx, pnpm, yarn).
+  command: string
+  // Any prefix tokens the runner requires before the package name (e.g. "dlx" for pnpm/yarn).
+  argsPrefix: string[]
+  // Human-readable label for the detected package manager (e.g. "npm", "pnpm", "yarn", "bun").
+  label: string
+}
+
+// Detect the project's package manager from its lockfile so the generated MCP
+// config uses a runner the user actually has installed. Defaults to npx — it's
+// the most universal and every node toolchain ships it.
+export function detectRunner(root: string): Runner {
+  if (fs.existsSync(path.join(root, "bun.lock")) || fs.existsSync(path.join(root, "bun.lockb"))) {
+    return { command: "bunx", argsPrefix: [], label: "bun" }
+  }
+  if (fs.existsSync(path.join(root, "pnpm-lock.yaml"))) {
+    return { command: "pnpm", argsPrefix: ["dlx"], label: "pnpm" }
+  }
+  if (fs.existsSync(path.join(root, "yarn.lock"))) {
+    return { command: "yarn", argsPrefix: ["dlx"], label: "yarn" }
+  }
+  // Fall through for package-lock.json, npm-shrinkwrap.json, or nothing at all.
+  return { command: "npx", argsPrefix: [], label: "npm" }
+}
+
+function formatRunnerCommand(runner: Runner, ...args: string[]): string {
+  return [runner.command, ...runner.argsPrefix, ...args].join(" ")
+}
+
 export async function init(targetDir?: string): Promise<void> {
   const root = targetDir || process.cwd()
   const configPath = path.join(root, "primitiv.config.js")
@@ -25,21 +55,23 @@ export async function init(targetDir?: string): Promise<void> {
 
   console.log("🔍 Detecting project...")
   const project = detectProject(root)
+  const runner = detectRunner(root)
 
   console.log(`   Framework:  ${project.framework}`)
   console.log(`   TypeScript: ${project.hasTypeScript ? "yes" : "no"}`)
   console.log(`   Tailwind:   ${project.hasTailwind ? "yes" : "no"}`)
   console.log(`   Figma:      ${project.hasFigma ? "token file found" : "not detected"}`)
   console.log(`   Storybook:  ${project.hasStorybook ? "yes" : "no"}`)
+  console.log(`   Package mgr:${runner.label === "npm" ? " npm (default)" : ` ${runner.label}`}`)
   console.log(`   Source:     ${project.srcRoot}`)
 
   const config = generateConfig(project, root)
   fs.writeFileSync(configPath, config, "utf-8")
 
   console.log("\n✅ Created primitiv.config.js")
-  writeAgentInstructions(root)
-  writeMcpConfig(root)
-  writeCodexConfig(root)
+  writeAgentInstructions(root, runner)
+  writeMcpConfig(root, runner)
+  writeCodexConfig(root, runner)
   writeSkillFile(root)
   console.log("\nNext steps:")
   console.log("  1. Review and adjust primitiv.config.js if needed")
@@ -155,7 +187,7 @@ module.exports = {
 `
 }
 
-function writeMcpConfig(root: string): void {
+function writeMcpConfig(root: string, runner: Runner = detectRunner(root)): void {
   const candidates = [".mcp.json", ".cursor/mcp.json"]
   let targetFile: string | null = null
 
@@ -177,19 +209,21 @@ function writeMcpConfig(root: string): void {
   if (servers.primitiv) return
 
   servers.primitiv = {
-    command: "bunx",
-    args: ["@ai-by-design/primitiv", "serve", "./primitiv.config.js"]
+    command: runner.command,
+    args: [...runner.argsPrefix, "@ai-by-design/primitiv", "serve", "./primitiv.config.js"]
   }
 
   fs.mkdirSync(path.dirname(targetFile), { recursive: true })
   fs.writeFileSync(targetFile, `${JSON.stringify({ ...existing, mcpServers: servers }, null, 2)}\n`, "utf-8")
-  console.log(`✅ Updated ${path.relative(root, targetFile)} with Primitiv MCP server`)
+  console.log(`✅ Updated ${path.relative(root, targetFile)} with Primitiv MCP server (${runner.label})`)
 }
 
 const AGENT_BLOCK_MARKER = "<!-- primitiv -->"
 const AGENT_BLOCK_END_MARKER = "<!-- /primitiv -->"
 
-const AGENT_BLOCK = `
+function buildAgentBlock(runner: Runner): string {
+  const rebuildExample = formatRunnerCommand(runner, "@ai-by-design/primitiv", "build", "/path/to/primitiv.config.js")
+  return `
 ${AGENT_BLOCK_MARKER}
 ## Primitiv — Design System
 
@@ -210,7 +244,7 @@ Do not use the contract data. Tell the user: "Primitiv is pointed at a different
 
 **b) warnings must be empty.**
 If the response includes a \`warnings\` array, stop and surface each warning to the user before continuing.
-Each warning includes the exact command needed to fix it (e.g. \`bunx @ai-by-design/primitiv build /path/to/primitiv.config.js\`).
+Each warning includes the exact command needed to fix it (e.g. \`${rebuildExample}\`).
 
 ### Step 3 — Use the contract
 Once validated, use the contract for all UI work:
@@ -230,8 +264,9 @@ Tokens and components may include a \`rationale\` object with \`why\`, \`when\`,
 - Surface \`why\` and \`when\` to the user so they understand intent, not just the value
 ${AGENT_BLOCK_END_MARKER}
 `
+}
 
-export function writeAgentInstructions(root: string): void {
+export function writeAgentInstructions(root: string, runner: Runner = detectRunner(root)): void {
   const candidates = ["AGENTS.md", "CLAUDE.md"]
   let targetFile: string | null = null
 
@@ -249,6 +284,7 @@ export function writeAgentInstructions(root: string): void {
 
   const existing = fs.existsSync(targetFile) ? fs.readFileSync(targetFile, "utf-8") : ""
   const hadBlock = existing.includes(AGENT_BLOCK_MARKER)
+  const block = buildAgentBlock(runner)
 
   let next: string
   if (hadBlock) {
@@ -256,9 +292,9 @@ export function writeAgentInstructions(root: string): void {
     const blockRegex = new RegExp(
       `\\n?${escapeRegex(AGENT_BLOCK_MARKER)}[\\s\\S]*?${escapeRegex(AGENT_BLOCK_END_MARKER)}\\n?`
     )
-    next = existing.replace(blockRegex, AGENT_BLOCK)
+    next = existing.replace(blockRegex, block)
   } else {
-    next = existing + AGENT_BLOCK
+    next = existing + block
   }
 
   fs.writeFileSync(targetFile, next, "utf-8")
@@ -271,7 +307,7 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
-function writeCodexConfig(root: string): void {
+function writeCodexConfig(root: string, runner: Runner = detectRunner(root)): void {
   // Prefer $HOME so tests can redirect the lookup to a temp dir; fall back to os.homedir() for portability.
   const home = process.env.HOME || os.homedir()
   const codexDir = path.join(home, ".codex")
@@ -291,8 +327,9 @@ function writeCodexConfig(root: string): void {
   }
 
   const configPath = path.join(root, "primitiv.config.js")
+  const runnerCmd = formatRunnerCommand(runner, "@ai-by-design/primitiv", "serve", configPath)
   try {
-    execSync(`codex mcp add primitiv -- bunx @ai-by-design/primitiv serve ${configPath}`, { stdio: "ignore" })
+    execSync(`codex mcp add primitiv -- ${runnerCmd}`, { stdio: "ignore" })
     console.log("✅ Added Primitiv to Codex (~/.codex/config.toml)")
   } catch {
     console.log("⚠️  `codex mcp add` failed. Add [mcp_servers.primitiv] to ~/.codex/config.toml manually.")

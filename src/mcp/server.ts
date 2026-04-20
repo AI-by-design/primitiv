@@ -49,9 +49,12 @@ export class PrimitivMCPServer {
     const warnings: string[] = []
     if (!this.contract) return warnings
 
+    // Use npx in warning messages — it's the universal fallback every node user has.
+    // The user's actual MCP command (chosen at init time) may be bunx/pnpm dlx/yarn dlx,
+    // but we can't know that at runtime without storing it in the contract.
     const rebuildCmd = this.contract.configPath
-      ? `bunx @ai-by-design/primitiv build ${this.contract.configPath}`
-      : `bunx @ai-by-design/primitiv build`
+      ? `npx @ai-by-design/primitiv build ${this.contract.configPath}`
+      : `npx @ai-by-design/primitiv build`
 
     if (this.contract.sourceRoot) {
       const expectedRoot = path.dirname(path.resolve(this.contractPath))
@@ -155,10 +158,7 @@ export class PrimitivMCPServer {
         }
 
         const stripSource = (
-          tokens: Record<
-            string,
-            { name: string; value: string; references?: string[]; rationale?: Rationale }
-          >
+          tokens: Record<string, { name: string; value: string; references?: string[]; rationale?: Rationale }>
         ) =>
           Object.fromEntries(
             Object.entries(tokens).map(([k, t]) => [

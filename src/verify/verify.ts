@@ -162,11 +162,10 @@ async function findSourceFilesNewerThan(
   return newer
 }
 
-function decideStatus(params: {
-  isStale: boolean
-  hasUnresolvedConflicts: boolean
-  strict: boolean
-}): { status: VerifyStatus; exitCode: VerifyExitCode } {
+function decideStatus(params: { isStale: boolean; hasUnresolvedConflicts: boolean; strict: boolean }): {
+  status: VerifyStatus
+  exitCode: VerifyExitCode
+} {
   if (params.hasUnresolvedConflicts) return { status: "unresolved-conflicts", exitCode: 2 }
   if (params.isStale) return { status: "stale", exitCode: params.strict ? 2 : 1 }
   return { status: "clean", exitCode: 0 }
