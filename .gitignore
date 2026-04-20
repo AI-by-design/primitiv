@@ -1,3 +1,5 @@
 dist/
 node_modules/
-primitiv.contract.json
+# Only ignore a contract at the repo root — demo contracts under examples/ are
+# committed so the README recording can reference them without a local build.
+/primitiv.contract.json

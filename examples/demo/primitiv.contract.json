@@ -1,0 +1,463 @@
+{
+  "version": "0.2.0",
+  "generatedAt": "2026-04-20T15:35:17.197Z",
+  "sources": [
+    "codebase"
+  ],
+  "sourceRoot": "/Users/ana/projects/primitiv/examples/demo",
+  "configPath": "/Users/ana/projects/primitiv/examples/demo/primitiv.config.js",
+  "tokens": {
+    "colors": {
+      "color-primary": {
+        "name": "color-primary",
+        "value": "oklch(0.62 0.22 260)",
+        "source": {
+          "adapter": "codebase",
+          "file": "tokens.css",
+          "line": 11
+        },
+        "rationale": {
+          "why": "Brand primary — identifies the product in UI",
+          "when": "Primary actions, links, focused states",
+          "examples": [
+            "Submit button background",
+            "Focus ring on inputs"
+          ],
+          "tags": [
+            "brand"
+          ]
+        }
+      },
+      "color-primary-hover": {
+        "name": "color-primary-hover",
+        "value": "oklch(0.56 0.24 260)",
+        "source": {
+          "adapter": "codebase",
+          "file": "tokens.css",
+          "line": 12
+        }
+      },
+      "color-primary-active": {
+        "name": "color-primary-active",
+        "value": "oklch(0.5 0.24 260)",
+        "source": {
+          "adapter": "codebase",
+          "file": "tokens.css",
+          "line": 13
+        }
+      },
+      "color-bg": {
+        "name": "color-bg",
+        "value": "oklch(0.13 0 0)",
+        "source": {
+          "adapter": "codebase",
+          "file": "tokens.css",
+          "line": 55
+        }
+      },
+      "color-bg-muted": {
+        "name": "color-bg-muted",
+        "value": "oklch(0.17 0 0)",
+        "source": {
+          "adapter": "codebase",
+          "file": "tokens.css",
+          "line": 56
+        },
+        "rationale": {
+          "why": "Subtle surface used to group related content without adding a border",
+          "when": "Table zebra rows, code blocks, inactive panels"
+        }
+      },
+      "color-fg": {
+        "name": "color-fg",
+        "value": "oklch(0.96 0 0)",
+        "source": {
+          "adapter": "codebase",
+          "file": "tokens.css",
+          "line": 57
+        }
+      },
+      "color-fg-muted": {
+        "name": "color-fg-muted",
+        "value": "oklch(0.7 0 0)",
+        "source": {
+          "adapter": "codebase",
+          "file": "tokens.css",
+          "line": 58
+        }
+      },
+      "color-border": {
+        "name": "color-border",
+        "value": "oklch(0.24 0 0)",
+        "source": {
+          "adapter": "codebase",
+          "file": "tokens.css",
+          "line": 59
+        }
+      },
+      "color-destructive": {
+        "name": "color-destructive",
+        "value": "oklch(0.55 0.22 25)",
+        "source": {
+          "adapter": "codebase",
+          "file": "tokens.css",
+          "line": 23
+        },
+        "rationale": {
+          "why": "Communicates irreversible or dangerous actions",
+          "when": "Delete buttons, error states, destructive confirmations",
+          "tags": [
+            "semantic"
+          ]
+        }
+      },
+      "color-success": {
+        "name": "color-success",
+        "value": "oklch(0.62 0.18 150)",
+        "source": {
+          "adapter": "codebase",
+          "file": "tokens.css",
+          "line": 24
+        }
+      }
+    },
+    "spacing": {
+      "spacing-xs": {
+        "name": "spacing-xs",
+        "value": "4px",
+        "source": {
+          "adapter": "codebase",
+          "file": "tokens.css",
+          "line": 27
+        }
+      },
+      "spacing-sm": {
+        "name": "spacing-sm",
+        "value": "8px",
+        "source": {
+          "adapter": "codebase",
+          "file": "tokens.css",
+          "line": 28
+        }
+      },
+      "spacing-md": {
+        "name": "spacing-md",
+        "value": "16px",
+        "source": {
+          "adapter": "codebase",
+          "file": "tokens.css",
+          "line": 29
+        },
+        "rationale": {
+          "why": "Default spacing between related elements on the 8px base scale",
+          "when": "Between form fields, list items, paragraph text"
+        }
+      },
+      "spacing-lg": {
+        "name": "spacing-lg",
+        "value": "24px",
+        "source": {
+          "adapter": "codebase",
+          "file": "tokens.css",
+          "line": 30
+        }
+      },
+      "spacing-xl": {
+        "name": "spacing-xl",
+        "value": "32px",
+        "source": {
+          "adapter": "codebase",
+          "file": "tokens.css",
+          "line": 31
+        }
+      },
+      "spacing-2xl": {
+        "name": "spacing-2xl",
+        "value": "48px",
+        "source": {
+          "adapter": "codebase",
+          "file": "tokens.css",
+          "line": 32
+        }
+      }
+    },
+    "typography": {
+      "font-sans": {
+        "name": "font-sans",
+        "value": "\"Inter\", system-ui, sans-serif",
+        "source": {
+          "adapter": "codebase",
+          "file": "tokens.css",
+          "line": 41
+        }
+      },
+      "font-mono": {
+        "name": "font-mono",
+        "value": "\"JetBrains Mono\", ui-monospace, monospace",
+        "source": {
+          "adapter": "codebase",
+          "file": "tokens.css",
+          "line": 42
+        }
+      },
+      "font-size-sm": {
+        "name": "font-size-sm",
+        "value": "14px",
+        "source": {
+          "adapter": "codebase",
+          "file": "tokens.css",
+          "line": 43
+        }
+      },
+      "font-size-md": {
+        "name": "font-size-md",
+        "value": "16px",
+        "source": {
+          "adapter": "codebase",
+          "file": "tokens.css",
+          "line": 44
+        }
+      },
+      "font-size-lg": {
+        "name": "font-size-lg",
+        "value": "18px",
+        "source": {
+          "adapter": "codebase",
+          "file": "tokens.css",
+          "line": 45
+        }
+      },
+      "font-weight-regular": {
+        "name": "font-weight-regular",
+        "value": "400",
+        "source": {
+          "adapter": "codebase",
+          "file": "tokens.css",
+          "line": 46
+        }
+      },
+      "font-weight-medium": {
+        "name": "font-weight-medium",
+        "value": "500",
+        "source": {
+          "adapter": "codebase",
+          "file": "tokens.css",
+          "line": 47
+        }
+      },
+      "font-weight-bold": {
+        "name": "font-weight-bold",
+        "value": "600",
+        "source": {
+          "adapter": "codebase",
+          "file": "tokens.css",
+          "line": 48
+        }
+      },
+      "line-height-tight": {
+        "name": "line-height-tight",
+        "value": "1.2",
+        "source": {
+          "adapter": "codebase",
+          "file": "tokens.css",
+          "line": 49
+        }
+      },
+      "line-height-normal": {
+        "name": "line-height-normal",
+        "value": "1.5",
+        "source": {
+          "adapter": "codebase",
+          "file": "tokens.css",
+          "line": 50
+        }
+      }
+    },
+    "borderRadius": {
+      "radius-sm": {
+        "name": "radius-sm",
+        "value": "4px",
+        "source": {
+          "adapter": "codebase",
+          "file": "tokens.css",
+          "line": 35
+        }
+      },
+      "radius-md": {
+        "name": "radius-md",
+        "value": "8px",
+        "source": {
+          "adapter": "codebase",
+          "file": "tokens.css",
+          "line": 36
+        }
+      },
+      "radius-lg": {
+        "name": "radius-lg",
+        "value": "12px",
+        "source": {
+          "adapter": "codebase",
+          "file": "tokens.css",
+          "line": 37
+        }
+      },
+      "radius-full": {
+        "name": "radius-full",
+        "value": "9999px",
+        "source": {
+          "adapter": "codebase",
+          "file": "tokens.css",
+          "line": 38
+        }
+      }
+    },
+    "shadows": {}
+  },
+  "components": {
+    "Card": {
+      "name": "Card",
+      "source": {
+        "adapter": "codebase",
+        "file": "Card.tsx",
+        "line": 9
+      },
+      "props": {
+        "elevated": {
+          "type": "boolean",
+          "required": false
+        },
+        "padding": {
+          "type": "\"sm\" | \"md\" | \"lg\"",
+          "required": false
+        },
+        "children": {
+          "type": "ReactNode",
+          "required": true
+        }
+      },
+      "rationale": {
+        "why": "Groups related content with a visual boundary",
+        "when": "A cohesive unit of information — a post, a product, a settings group",
+        "examples": [
+          "<Card elevated><PostPreview /></Card>"
+        ]
+      }
+    },
+    "Button": {
+      "name": "Button",
+      "source": {
+        "adapter": "codebase",
+        "file": "Button.tsx",
+        "line": 11
+      },
+      "props": {
+        "variant": {
+          "type": "\"primary\" | \"secondary\" | \"destructive\"",
+          "required": false
+        },
+        "size": {
+          "type": "\"sm\" | \"md\" | \"lg\"",
+          "required": false
+        },
+        "disabled": {
+          "type": "boolean",
+          "required": false
+        },
+        "onClick": {
+          "type": "() => void",
+          "required": false
+        },
+        "children": {
+          "type": "ReactNode",
+          "required": true
+        }
+      },
+      "rationale": {
+        "why": "The single entry point for all clickable actions in the system",
+        "when": "Any primary or secondary user action",
+        "examples": [
+          "<Button onClick={save}>Save</Button>",
+          "<Button variant=\"destructive\">Delete</Button>"
+        ]
+      }
+    }
+  },
+  "conflicts": [],
+  "inferredRules": {
+    "generatedAt": "2026-04-20T15:35:17.196Z",
+    "rules": [
+      {
+        "id": "spacing-4px-base",
+        "category": "spacing",
+        "rule": "Spacing follows a 4px base scale. All spacing values are multiples of 4.",
+        "confidence": "high",
+        "evidence": [
+          "spacing-xs: 4px",
+          "spacing-sm: 8px",
+          "spacing-md: 16px",
+          "spacing-lg: 24px",
+          "spacing-xl: 32px",
+          "spacing-2xl: 48px"
+        ]
+      },
+      {
+        "id": "color-semantic-naming",
+        "category": "color",
+        "rule": "Colors are named semantically by role (primary, destructive, muted) rather than by value (red, blue). When adding colors, name them for their purpose, not their appearance.",
+        "confidence": "high",
+        "evidence": [
+          "color-primary",
+          "color-primary-hover",
+          "color-primary-active",
+          "color-bg-muted",
+          "color-fg-muted"
+        ]
+      },
+      {
+        "id": "border-radius-scale",
+        "category": "border-radius",
+        "rule": "Border radius follows a defined scale with 4 steps. Use the nearest scale token rather than custom values.",
+        "confidence": "medium",
+        "evidence": [
+          "radius-sm: 4px",
+          "radius-md: 8px",
+          "radius-lg: 12px",
+          "radius-full: 9999px"
+        ]
+      },
+      {
+        "id": "typography-mono-for-code",
+        "category": "typography",
+        "rule": "A monospace font token exists for code and technical content. Use the mono font token for any code, technical strings, or data values.",
+        "confidence": "high",
+        "evidence": [
+          "font-mono: \"JetBrains Mono\", ui-monospace, monospace"
+        ]
+      },
+      {
+        "id": "naming-kebab-case",
+        "category": "naming",
+        "rule": "Token names use kebab-case. New tokens must follow this convention.",
+        "confidence": "high",
+        "evidence": [
+          "color-primary",
+          "color-primary-hover",
+          "color-primary-active",
+          "color-bg"
+        ]
+      },
+      {
+        "id": "naming-category-prefix",
+        "category": "naming",
+        "rule": "Token names are prefixed with their category (color-, spacing-, font-, radius-). New tokens must follow this prefix convention.",
+        "confidence": "high",
+        "evidence": [
+          "color-primary",
+          "color-primary-hover",
+          "color-primary-active",
+          "color-bg"
+        ]
+      }
+    ]
+  }
+}
