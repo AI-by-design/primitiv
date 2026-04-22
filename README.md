@@ -1,16 +1,30 @@
 # Primitiv
 
-The design contract layer for your agents.
+**The design contract layer for your agents.**
 
-Primitiv is the design contract layer for agent-first codebases. It sits above your design sources — Figma, codebase, Storybook, token files — scans them, actively reconciles conflicts between them, and infers the design rules your codebase is already following. The result is a single machine-readable contract exposed via MCP. Unlike read-only retrieval tools, Primitiv doesn't just surface what exists — it resolves what's true. Any agentic tool that connects gets one authoritative answer before it builds anything. Your code never leaves your machine.
+Retrieval gives you data. Reconciliation gives you truth.
+
+<video src="./docs/media/hero-demo.mp4" poster="./docs/media/hero-demo-poster.jpg" controls muted playsinline width="100%"></video>
+
+Primitiv sits above your design sources — Figma, codebase, Storybook, token files — scans them, reconciles conflicts between them, and exposes a single machine-readable contract via MCP. Any agent that connects gets one authoritative answer before it builds. Your code never leaves your machine.
+
+## Quick start
+
+```bash
+npx @ai-by-design/primitiv init     # detect your stack, write config + MCP registration
+npx @ai-by-design/primitiv build    # scan sources, resolve conflicts, write the contract
+npx @ai-by-design/primitiv serve    # start the MCP server
+```
+
+`init` writes a `.mcp.json` to your project root, so Cursor, Claude Code, Codex, Windsurf, and any other MCP-compatible tool pick up the server without manual config.
+
+From here, every agent that builds UI calls `get_design_context` first and gets your resolved design contract back.
 
 ## The problem
 
-Design-relevant information in most codebases is spread across sources that were never meant to stay in sync — Figma files, token definitions, Storybook docs, and the codebase itself. They drift. Humans can reconcile the gaps by inference and judgment. Agents cannot.
+Design-relevant information is spread across Figma, tokens, Storybook, and the codebase itself — sources that were never meant to stay in sync. Humans reconcile the drift by inference; agents can't, so they fall back on training-data patterns and build UI that works but doesn't fit.
 
-When an agent encounters inconsistent or missing design context, it falls back on generalised patterns from its training data. The result is UI that works but doesn't fit — components recreated instead of reused, tokens hardcoded, naming conventions ignored.
-
-For teams with large or long-lived codebases, the problem runs deeper still. Years of design decisions exist only in the code — patterns that were never written down, conventions that spread by imitation. Primitiv addresses both: it sits above all your sources, resolves conflicts between them, surfaces the rules your codebase is already following, and exposes a single machine-readable contract via MCP. Any agent that connects gets one consistent answer before it builds anything.
+Primitiv resolves it: one contract, built from every source, served live to every agent.
 
 ## How it works
 
@@ -32,41 +46,13 @@ Any adapter     ──┘
 
 ---
 
-## Getting started
-
-### Install
+## Install
 
 ```bash
 npm install @ai-by-design/primitiv
 # or
 bun add @ai-by-design/primitiv
 ```
-
-### Quick start
-
-**1. Run init in your project root:**
-
-```bash
-bunx @ai-by-design/primitiv init
-```
-
-Primitiv detects your framework, TypeScript, Tailwind, Figma token files, and Storybook automatically and generates a tailored `primitiv.config.js`.
-
-**2. Build your contract:**
-
-```bash
-bunx @ai-by-design/primitiv build
-```
-
-**3. Start the MCP server:**
-
-```bash
-bunx @ai-by-design/primitiv serve
-```
-
-`primitiv init` writes a `.mcp.json` to your project root automatically, so Cursor, Claude Code, and any other MCP-compatible tool will pick up the server without manual config.
-
-From this point, every agent that builds UI in your codebase calls `get_design_context` first and gets your resolved design contract back.
 
 ### CLI
 
@@ -120,7 +106,7 @@ If you already added Primitiv to your global editor config, remove it:
 
 If `get_design_context` returns a `warnings` array, stop and resolve before proceeding:
 
-- **`STALE CONTRACT`** — the contract is outdated. The warning includes the exact command to rebuild, e.g.: `bunx @ai-by-design/primitiv build /path/to/your/primitiv.config.js`
+- **`STALE CONTRACT`** — the contract is outdated. The warning includes the exact command to rebuild, e.g.: `npx @ai-by-design/primitiv build /path/to/your/primitiv.config.js`
 - **`CONTRACT MISMATCH`** — the server is serving a contract from a different project. This usually means Primitiv is in your global editor MCP config. Remove it from there and re-run `primitiv init` in the correct project.
 
 ### Configuration
