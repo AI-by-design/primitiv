@@ -4,7 +4,7 @@
 
 Retrieval gives you data. Reconciliation gives you truth.
 
-[![Primitiv demo — click to watch](./docs/media/hero-demo-poster.jpg)](./docs/media/hero-demo.mp4)
+<video src="https://github.com/user-attachments/assets/deb63812-72ea-4651-b248-31d817725d10" controls muted></video>
 
 Primitiv sits above your design sources — Figma, codebase, Storybook, token files — scans them, reconciles conflicts between them, and exposes a single machine-readable contract via MCP. Any agent that connects gets one authoritative answer before it builds. Your code never leaves your machine.
 
