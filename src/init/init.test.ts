@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { execSync } from "node:child_process"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
-import { init, writeAgentInstructions } from "./init"
+import { init, writeAgentInstructions, writeGitHubWorkflow } from "./init"
 
 let tempDir: string
 let origHome: string | undefined
@@ -103,5 +104,153 @@ describe("writeAgentInstructions idempotency", () => {
     expect(second).toContain("## More user notes")
     const markerCount = (second.match(/<!-- primitiv -->/g) || []).length
     expect(markerCount).toBe(1)
+  })
+})
+
+// Helper: stand up a real git repo in `dir` with optional remote and default
+// branch. Real git is faster than mocks here and catches shell-escaping bugs
+// that would surface in user environments.
+function setupGitRepo(dir: string, opts: { remote?: string; defaultBranch?: string } = {}): void {
+  const branch = opts.defaultBranch ?? "main"
+  execSync("git init", { cwd: dir, stdio: "ignore" })
+  // `git symbolic-ref HEAD refs/heads/<branch>` works on older git too;
+  // `git init -b` only landed in 2.28. Keeps the test compatible.
+  execSync(`git symbolic-ref HEAD refs/heads/${branch}`, { cwd: dir, stdio: "ignore" })
+  execSync('git config --local user.email "test@example.com"', { cwd: dir, stdio: "ignore" })
+  execSync('git config --local user.name "Test"', { cwd: dir, stdio: "ignore" })
+  // Empty commit so HEAD resolves to a real branch ref for `rev-parse`.
+  execSync('git commit --allow-empty -m "init"', { cwd: dir, stdio: "ignore" })
+  if (opts.remote) {
+    execSync(`git remote add origin ${opts.remote}`, { cwd: dir, stdio: "ignore" })
+    // Mirror what `git clone` sets so detection picks the right default branch.
+    try {
+      execSync(`git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/${branch}`, {
+        cwd: dir,
+        stdio: "ignore"
+      })
+    } catch {
+      // Some git versions reject this without a fetch. Detection still falls back to rev-parse HEAD.
+    }
+  }
+}
+
+function captureConsoleLog<T>(fn: () => T): { result: T; logs: string[] } {
+  const logs: string[] = []
+  const original = console.log
+  console.log = (...args: unknown[]) => {
+    logs.push(args.map((a) => String(a)).join(" "))
+  }
+  try {
+    const result = fn()
+    return { result, logs }
+  } finally {
+    console.log = original
+  }
+}
+
+describe("writeGitHubWorkflow", () => {
+  const workflowRel = ".github/workflows/primitiv-verify.yml"
+
+  test("skips on non-git directory", () => {
+    const { logs } = captureConsoleLog(() => writeGitHubWorkflow(tempDir))
+    expect(fs.existsSync(path.join(tempDir, workflowRel))).toBe(false)
+    expect(logs.some((l) => l.includes("Not a git repository"))).toBe(true)
+  })
+
+  test("skips on non-GitHub remote", () => {
+    setupGitRepo(tempDir, { remote: "https://gitlab.com/x/y.git" })
+    const { logs } = captureConsoleLog(() => writeGitHubWorkflow(tempDir))
+    expect(fs.existsSync(path.join(tempDir, workflowRel))).toBe(false)
+    expect(logs.some((l) => l.includes("not on GitHub"))).toBe(true)
+  })
+
+  test("installs workflow on GitHub https remote", () => {
+    setupGitRepo(tempDir, { remote: "https://github.com/test/repo.git" })
+    writeGitHubWorkflow(tempDir)
+
+    const target = path.join(tempDir, workflowRel)
+    expect(fs.existsSync(target)).toBe(true)
+    const content = fs.readFileSync(target, "utf-8")
+    expect(content).toContain("# <!-- primitiv -->")
+    expect(content).toContain("# <!-- /primitiv -->")
+    expect(content).toContain("name: Primitiv Verify")
+    expect(content).toContain("npx --yes @ai-by-design/primitiv verify")
+    expect(content).toContain("branches: [main]")
+  })
+
+  test("installs workflow on GitHub ssh remote", () => {
+    setupGitRepo(tempDir, { remote: "git@github.com:test/repo.git" })
+    writeGitHubWorkflow(tempDir)
+    expect(fs.existsSync(path.join(tempDir, workflowRel))).toBe(true)
+  })
+
+  test("uses detected default branch when not main", () => {
+    setupGitRepo(tempDir, { remote: "https://github.com/test/repo.git", defaultBranch: "develop" })
+    writeGitHubWorkflow(tempDir)
+    const content = fs.readFileSync(path.join(tempDir, workflowRel), "utf-8")
+    expect(content).toContain("branches: [develop]")
+    expect(content).not.toContain("branches: [main]")
+  })
+
+  test("re-running is idempotent (single marker, stable content)", () => {
+    setupGitRepo(tempDir, { remote: "https://github.com/test/repo.git" })
+    writeGitHubWorkflow(tempDir)
+    const first = fs.readFileSync(path.join(tempDir, workflowRel), "utf-8")
+    writeGitHubWorkflow(tempDir)
+    const second = fs.readFileSync(path.join(tempDir, workflowRel), "utf-8")
+
+    expect(second).toBe(first)
+    const markerCount = (second.match(/# <!-- primitiv -->/g) || []).length
+    expect(markerCount).toBe(1)
+  })
+
+  test("refresh preserves content outside markers", () => {
+    setupGitRepo(tempDir, { remote: "https://github.com/test/repo.git" })
+    const target = path.join(tempDir, workflowRel)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    const userHeader = "# User comment above the block\n"
+    const oldBlock = `# <!-- primitiv -->\n# old block content\n# <!-- /primitiv -->\n`
+    const userFooter = "\n# User comment below the block\n"
+    fs.writeFileSync(target, userHeader + oldBlock + userFooter)
+
+    writeGitHubWorkflow(tempDir)
+
+    const content = fs.readFileSync(target, "utf-8")
+    expect(content).toContain("# User comment above the block")
+    expect(content).toContain("# User comment below the block")
+    expect(content).toContain("name: Primitiv Verify")
+    expect(content).not.toContain("# old block content")
+  })
+
+  test("skips when existing file has no Primitiv marker", () => {
+    setupGitRepo(tempDir, { remote: "https://github.com/test/repo.git" })
+    const target = path.join(tempDir, workflowRel)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    const userContent = "# Some user-managed workflow\nname: Custom\n"
+    fs.writeFileSync(target, userContent)
+
+    const { logs } = captureConsoleLog(() => writeGitHubWorkflow(tempDir))
+
+    expect(fs.readFileSync(target, "utf-8")).toBe(userContent)
+    expect(logs.some((l) => l.includes("not Primitiv-managed"))).toBe(true)
+  })
+
+  test("preserves other workflow files", () => {
+    setupGitRepo(tempDir, { remote: "https://github.com/test/repo.git" })
+    const otherPath = path.join(tempDir, ".github/workflows/test.yml")
+    fs.mkdirSync(path.dirname(otherPath), { recursive: true })
+    const otherContent = "name: Test\nrun-name: Some test workflow\n"
+    fs.writeFileSync(otherPath, otherContent)
+
+    writeGitHubWorkflow(tempDir)
+
+    expect(fs.readFileSync(otherPath, "utf-8")).toBe(otherContent)
+    expect(fs.existsSync(path.join(tempDir, workflowRel))).toBe(true)
+  })
+
+  test("post-install message includes owner/repo settings link", () => {
+    setupGitRepo(tempDir, { remote: "https://github.com/AI-by-design/primitiv.git" })
+    const { logs } = captureConsoleLog(() => writeGitHubWorkflow(tempDir))
+    expect(logs.join("\n")).toContain("https://github.com/AI-by-design/primitiv/settings/branches")
   })
 })

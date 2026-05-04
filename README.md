@@ -18,6 +18,8 @@ npx @ai-by-design/primitiv serve    # start the MCP server
 
 `init` writes a `.mcp.json` to your project root, so Cursor, Claude Code, Codex, Windsurf, and any other MCP-compatible tool pick up the server without manual config.
 
+If your project is on GitHub, `init` also installs `.github/workflows/primitiv-verify.yml` — a workflow that runs `primitiv verify` on every PR and push. Pair it with branch protection on your default branch and the merge is blocked when an agent ships UI that breaks the contract.
+
 From here, every agent that builds UI calls `get_design_context` first and gets your resolved design contract back.
 
 ## The problem
@@ -108,6 +110,19 @@ If `get_design_context` returns a `warnings` array, stop and resolve before proc
 
 - **`STALE CONTRACT`** — the contract is outdated. The warning includes the exact command to rebuild, e.g.: `npx @ai-by-design/primitiv build /path/to/your/primitiv.config.js`
 - **`CONTRACT MISMATCH`** — the server is serving a contract from a different project. This usually means Primitiv is in your global editor MCP config. Remove it from there and re-run `primitiv init` in the correct project.
+
+### CI / GitHub Actions
+
+`primitiv init` auto-installs `.github/workflows/primitiv-verify.yml` when the project's remote is on GitHub. The workflow runs on every pull request and push to your default branch and fails the check when the contract is stale or has unresolved conflicts.
+
+To turn the failed check into a hard merge gate, enable branch protection on the default branch — `init` prints the exact settings URL after install (`https://github.com/<owner>/<repo>/settings/branches`).
+
+The workflow uses `npx --yes @ai-by-design/primitiv verify`, so it works regardless of your project's package manager. Two notes:
+
+- **Monorepos** — the workflow runs at repo root. If `primitiv.config.js` lives in a subdirectory, add a `working-directory:` to the verify step in the generated YAML.
+- **Pinning** — `npx --yes @ai-by-design/primitiv` fetches the latest version. To pin, edit the workflow's `run:` line to `npx --yes @ai-by-design/primitiv@1.4.0 verify` (or your chosen version).
+
+The workflow is idempotent — re-running `primitiv init` refreshes the block between `# <!-- primitiv -->` markers, preserving any content you've added outside them.
 
 ### Configuration
 
@@ -239,6 +254,7 @@ On merge to `main`, Release Please opens a release PR. Merging that PR tags the 
 - [x] Figma source adapter — scan Figma Variables and components via the Figma REST API
 - [x] Storybook source adapter — scan components and variants via the Storybook manifest
 - [x] Source provenance — every token and component in the contract traces back to its origin (file, line number, Figma variable ID, Storybook story ID)
+- [x] CI enforcement — `primitiv init` auto-installs a GitHub Actions workflow that runs `primitiv verify` on every PR; pair with branch protection to block merges on contract drift
 - [ ] Token relationships — document how tokens relate and what constraints exist between them
 
 ## Part of a larger system

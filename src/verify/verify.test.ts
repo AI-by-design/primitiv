@@ -70,12 +70,14 @@ describe("verify", () => {
     expect(result.exitCode).toBe(3)
   })
 
-  test("returns clean (exit 0) when contract is fresh and conflict-free", async () => {
+  test("returns clean (exit 0) when contract matches a fresh rebuild", async () => {
     writeConfig(tempDir)
     writeContract(tempDir)
     const result = await verify(undefined, { cwd: tempDir })
     expect(result.status).toBe("clean")
     expect(result.exitCode).toBe(0)
+    expect(result.drift.isStale).toBe(false)
+    expect(result.drift.changes).toEqual([])
     expect(result.conflicts.pending).toBe(0)
   })
 
@@ -88,25 +90,33 @@ describe("verify", () => {
     expect(result.conflicts.pending).toBe(1)
   })
 
-  test("returns stale (exit 1) when source files are newer than the contract", async () => {
-    fs.writeFileSync(path.join(tempDir, "styles.css"), ":root { --color-primary: #000 }")
+  test("returns stale (exit 1) when a token in source is missing from the contract", async () => {
+    fs.writeFileSync(path.join(tempDir, "styles.css"), ":root { --color-primary: oklch(0.5 0.2 260); }")
     writeConfig(tempDir)
-    // Contract stamped one hour in the past so the just-written css is "newer".
-    const oldDate = new Date(Date.now() - 60 * 60 * 1000).toISOString()
-    writeContract(tempDir, { generatedAt: oldDate })
+    // Contract has no tokens — a fresh rebuild will find color-primary in the CSS,
+    // so the structural diff will report it as added.
+    writeContract(tempDir)
 
     const result = await verify(undefined, { cwd: tempDir })
     expect(result.status).toBe("stale")
     expect(result.exitCode).toBe(1)
-    expect(result.staleness.contractOlderThanSources).toBe(true)
-    expect(result.staleness.sampleNewerFiles).toContain("styles.css")
+    expect(result.drift.isStale).toBe(true)
+    expect(result.drift.changes.some((c) => c.includes("color-primary"))).toBe(true)
+  })
+
+  test("stale message identifies the specific token that drifted", async () => {
+    fs.writeFileSync(path.join(tempDir, "styles.css"), ":root { --color-warning: oklch(0.7 0.18 60); }")
+    writeConfig(tempDir)
+    writeContract(tempDir)
+
+    const result = await verify(undefined, { cwd: tempDir })
+    expect(result.drift.changes).toContain("token added: colors.color-warning")
   })
 
   test("--strict escalates stale from exit 1 to exit 2", async () => {
-    fs.writeFileSync(path.join(tempDir, "styles.css"), ":root { --color-primary: #000 }")
+    fs.writeFileSync(path.join(tempDir, "styles.css"), ":root { --color-primary: oklch(0.5 0.2 260); }")
     writeConfig(tempDir)
-    const oldDate = new Date(Date.now() - 60 * 60 * 1000).toISOString()
-    writeContract(tempDir, { generatedAt: oldDate })
+    writeContract(tempDir)
 
     const result = await verify(undefined, { cwd: tempDir, strict: true })
     expect(result.status).toBe("stale")
@@ -114,13 +124,9 @@ describe("verify", () => {
   })
 
   test("unresolved conflicts take priority over staleness", async () => {
-    fs.writeFileSync(path.join(tempDir, "styles.css"), ":root { --color-primary: #000 }")
+    fs.writeFileSync(path.join(tempDir, "styles.css"), ":root { --color-primary: oklch(0.5 0.2 260); }")
     writeConfig(tempDir)
-    const oldDate = new Date(Date.now() - 60 * 60 * 1000).toISOString()
-    writeContract(tempDir, {
-      generatedAt: oldDate,
-      conflicts: [pendingConflict()]
-    })
+    writeContract(tempDir, { conflicts: [pendingConflict()] })
 
     const result = await verify(undefined, { cwd: tempDir })
     // Even though both conditions hold, we report the conflict as the primary status.
@@ -133,6 +139,30 @@ describe("verify", () => {
     writeContract(tempDir)
     const explicit = path.join(tempDir, "primitiv.config.js")
     const result = await verify(explicit, { cwd: "/" })
+    expect(result.status).toBe("clean")
+    expect(result.exitCode).toBe(0)
+  })
+})
+
+describe("verify --fast (legacy mtime check)", () => {
+  test("returns stale when source mtimes are newer than contract.generatedAt", async () => {
+    fs.writeFileSync(path.join(tempDir, "styles.css"), ":root { --color-primary: oklch(0.5 0.2 260); }")
+    writeConfig(tempDir)
+    // Stamp contract one hour in the past so the just-written css is "newer" by mtime.
+    const oldDate = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+    writeContract(tempDir, { generatedAt: oldDate })
+
+    const result = await verify(undefined, { cwd: tempDir, fast: true })
+    expect(result.status).toBe("stale")
+    expect(result.exitCode).toBe(1)
+    expect(result.drift.isStale).toBe(true)
+    expect(result.drift.changes.some((c) => c.includes("source modified") && c.includes("styles.css"))).toBe(true)
+  })
+
+  test("returns clean when no source mtimes exceed contract.generatedAt", async () => {
+    writeConfig(tempDir)
+    writeContract(tempDir)
+    const result = await verify(undefined, { cwd: tempDir, fast: true })
     expect(result.status).toBe("clean")
     expect(result.exitCode).toBe(0)
   })

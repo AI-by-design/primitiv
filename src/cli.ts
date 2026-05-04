@@ -22,7 +22,8 @@ async function main() {
     case "verify": {
       const strict = process.argv.includes("--strict")
       const json = process.argv.includes("--json")
-      const result = await verify(arg, { strict, json })
+      const fast = process.argv.includes("--fast")
+      const result = await verify(arg, { strict, json, fast })
       if (json) {
         console.log(JSON.stringify(result, null, 2))
       } else {
@@ -45,13 +46,15 @@ Options:
   primitiv init   [dir]    Target directory (default: current directory)
   primitiv build  [config] Path to config file (default: primitiv.config.js)
   primitiv serve  [config] Path to config file (default: primitiv.config.js)
-  primitiv verify [config] [--strict] [--json]
+  primitiv verify [config] [--strict] [--json] [--fast]
                            --strict: treat a stale contract as a hard failure (exit 2)
                            --json:   emit a machine-readable report instead of text
+                           --fast:   skip the rebuild-and-compare step; use file mtimes
+                                     instead. Faster but unreliable in CI / fresh clones.
 
 Exit codes for verify:
-  0  clean — contract is fresh and all conflicts resolved
-  1  stale — source files modified since the contract was built
+  0  clean — contract matches a fresh rebuild and all conflicts resolved
+  1  stale — committed contract differs from a fresh rebuild
   2  unresolved conflicts (or stale in --strict)
   3  no config or contract found
 
