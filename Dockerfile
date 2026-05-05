@@ -1,13 +1,13 @@
 # syntax=docker/dockerfile:1
 
-FROM node:20-alpine AS builder
+FROM oven/bun:alpine AS builder
 WORKDIR /app
 
-COPY package.json package-lock.json tsconfig.json ./
-RUN npm ci --ignore-scripts
+COPY package.json bun.lock tsconfig.json ./
+RUN bun install --frozen-lockfile --ignore-scripts
 
 COPY src ./src
-RUN npm run build
+RUN bun run build
 
 FROM node:20-alpine
 WORKDIR /app
