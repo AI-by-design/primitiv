@@ -263,4 +263,4 @@ Primitiv is the contract layer. It works alongside [Design-workflow](https://git
 
 ## License
 
-MIT
+Apache-2.0
