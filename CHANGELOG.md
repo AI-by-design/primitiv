@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.1](https://github.com/AI-by-design/primitiv/compare/v1.5.0...v1.5.1) (2026-05-05)
+
+
+### Bug Fixes
+
+* correct export order in rationale and verify modules ([4c9cf6d](https://github.com/AI-by-design/primitiv/commit/4c9cf6de858558f4b37c179fc0a51bf59f15e14b))
+
 ## [1.5.0](https://github.com/AI-by-design/primitiv/compare/v1.4.0...v1.5.0) (2026-05-04)
 
 
