@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/AI-by-design/primitiv/compare/v1.4.0...v1.5.0) (2026-05-04)
+
+
+### Features
+
+* content-based verify + auto-install CI workflow ([445f31f](https://github.com/AI-by-design/primitiv/commit/445f31f8364154c8e2941625ab9019092f692904))
+
 ## [1.4.0](https://github.com/AI-by-design/primitiv/compare/v1.3.1...v1.4.0) (2026-04-20)
 
 
