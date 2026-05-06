@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.2](https://github.com/AI-by-design/primitiv/compare/v1.5.1...v1.5.2) (2026-05-05)
+
+
+### Bug Fixes
+
+* **docker:** switch builder stage to bun, use bun.lock ([5e5d3fb](https://github.com/AI-by-design/primitiv/commit/5e5d3fb724c0557517fcce5c746d2a9e5a3ce90b))
+
 ## [1.5.1](https://github.com/AI-by-design/primitiv/compare/v1.5.0...v1.5.1) (2026-05-05)
 
 
