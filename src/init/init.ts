@@ -277,6 +277,10 @@ Once validated, use the contract for all UI work:
 - \`get_component { name: "..." }\` — look up a specific component
 - \`get_conflicts\` — see unresolved design conflicts
 - \`get_inferred_rules\` — see design rules inferred from the codebase
+- \`get_violations\` — see hardcoded literals in the codebase that bypass the contract
+
+### Step 4 — Avoid token misuse
+Before generating any \`className\` or style with a literal value (e.g. \`bg-[#hex]\`, \`p-[8px]\`), call \`get_violations\` to see active misuses and \`get_design_context\` for available tokens. Prefer existing tokens — \`bg-[var(--color-primary)]\`, \`p-[var(--spacing-2)]\` — over hardcoded literals. If a violation already has a \`suggestion.token\`, use that name.
 
 ### Rationale (when present)
 Tokens and components may include a \`rationale\` object with \`why\`, \`when\`, \`deprecated\`, \`alternatives\`, \`examples\`, or \`tags\`. When rationale is present:
@@ -419,7 +423,7 @@ jobs:
         with:
           node-version: 20
       - name: Verify Primitiv contract
-        run: npx --yes @ai-by-design/primitiv verify
+        run: npx --yes @ai-by-design/primitiv verify --strict
 ${WORKFLOW_BLOCK_END_MARKER}
 `
 }

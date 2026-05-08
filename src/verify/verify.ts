@@ -2,7 +2,7 @@ import * as fs from "node:fs"
 import * as path from "node:path"
 import { glob } from "glob"
 import { buildContract, loadConfig } from "../index"
-import type { Conflict, PrimitivConfig, PrimitivContract } from "../types"
+import type { Conflict, PrimitivConfig, PrimitivContract, Violation } from "../types"
 
 export interface VerifyOptions {
   strict?: boolean
@@ -15,7 +15,13 @@ export interface VerifyOptions {
   fast?: boolean
 }
 
-export type VerifyStatus = "clean" | "stale" | "unresolved-conflicts" | "missing-config" | "missing-contract"
+export type VerifyStatus =
+  | "clean"
+  | "stale"
+  | "unresolved-conflicts"
+  | "token-misuse-detected"
+  | "missing-config"
+  | "missing-contract"
 export type VerifyExitCode = 0 | 1 | 2 | 3
 
 export interface VerifyResult {
@@ -37,10 +43,17 @@ export interface VerifyResult {
     // source files ("source modified: tokens.css").
     changes: string[]
   }
+  violations: {
+    total: number
+    // First N violations included for direct display. Full list is on the
+    // contract itself; agents fetch it via the get_violations MCP tool.
+    reported: Violation[]
+  }
 }
 
 const MAX_REPORTED_CHANGES = 10
 const MAX_REPORTED_CONFLICTS = 5
+const MAX_REPORTED_VIOLATIONS = 5
 const MAX_DETECTED_NEWER_FILES = 10
 
 export async function verify(configPath: string | undefined, options: VerifyOptions = {}): Promise<VerifyResult> {
@@ -54,7 +67,8 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
       messages: [`No config found at ${resolvedConfigPath}. Run \`primitiv init\` in this project first.`],
       contract: {},
       conflicts: { total: 0, pending: 0 },
-      drift: { isStale: false, changes: [] }
+      drift: { isStale: false, changes: [] },
+      violations: { total: 0, reported: [] }
     }
   }
 
@@ -68,7 +82,8 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
       messages: [`No contract at ${contractPath}. Run \`primitiv build\` to generate one.`],
       contract: {},
       conflicts: { total: 0, pending: 0 },
-      drift: { isStale: false, changes: [] }
+      drift: { isStale: false, changes: [] },
+      violations: { total: 0, reported: [] }
     }
   }
 
@@ -79,9 +94,15 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
   const pendingConflicts = contract.conflicts.filter((c) => c.resolution === "pending")
   const hasUnresolvedConflicts = pendingConflicts.length > 0
 
-  const drift = options.fast
-    ? await detectDriftByMtime(config, resolvedConfigPath, generatedAt)
-    : await detectDriftByRebuild(contract, configPath, cwd)
+  // In default (rebuild) mode, the rebuilt contract has fresh violations from
+  // the current source tree. In --fast mode we trust the committed contract,
+  // accepting that violations may be stale (same tradeoff as drift detection).
+  const driftAndLint = options.fast
+    ? { ...(await detectDriftByMtime(config, resolvedConfigPath, generatedAt)), violations: contract.violations ?? [] }
+    : await detectDriftAndLintByRebuild(contract, configPath, cwd)
+  const drift = { isStale: driftAndLint.isStale, changes: driftAndLint.changes }
+  const violations = driftAndLint.violations
+  const hasViolations = violations.length > 0
 
   const messages: string[] = []
 
@@ -100,8 +121,23 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
     }
   }
 
-  if (drift.isStale) {
+  if (hasViolations) {
     const severity = options.strict || !hasUnresolvedConflicts ? "✗" : "!"
+    const noun = violations.length === 1 ? "misuse" : "misuses"
+    messages.push(`${severity} ${violations.length} token ${noun} detected:`)
+    for (const v of violations.slice(0, MAX_REPORTED_VIOLATIONS)) {
+      const suggestion = v.suggestion ? ` → use --${v.suggestion.token}` : ` → no matching token`
+      messages.push(`  - ${v.source.file}:${v.source.line}  ${v.context}${suggestion}`)
+    }
+    if (violations.length > MAX_REPORTED_VIOLATIONS) {
+      messages.push(
+        `  ... and ${violations.length - MAX_REPORTED_VIOLATIONS} more. Call get_violations via the MCP server for the full list.`
+      )
+    }
+  }
+
+  if (drift.isStale) {
+    const severity = options.strict || (!hasUnresolvedConflicts && !hasViolations) ? "✗" : "!"
     const noun = drift.changes.length === 1 ? "change" : "changes"
     messages.push(`${severity} Contract is stale: ${drift.changes.length} ${noun} detected since contract was built.`)
     for (const change of drift.changes.slice(0, MAX_REPORTED_CHANGES)) {
@@ -113,13 +149,14 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
     messages.push(`  Run \`primitiv build\` to refresh.`)
   }
 
-  if (!drift.isStale && !hasUnresolvedConflicts) {
-    messages.push(`✓ Contract is fresh (age ${formatAge(ageHours)}) and all conflicts resolved.`)
+  if (!drift.isStale && !hasUnresolvedConflicts && !hasViolations) {
+    messages.push(`✓ Contract is fresh (age ${formatAge(ageHours)}), conflicts resolved, no token misuses.`)
   }
 
   const { status, exitCode } = decideStatus({
     isStale: drift.isStale,
     hasUnresolvedConflicts,
+    hasViolations,
     strict: options.strict === true
   })
 
@@ -135,23 +172,26 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
       total: contract.conflicts.length,
       pending: pendingConflicts.length
     },
-    drift
+    drift,
+    violations: {
+      total: violations.length,
+      reported: violations.slice(0, MAX_REPORTED_VIOLATIONS)
+    }
   }
 }
 
-// Default drift detection: rebuild the contract in memory using the existing
-// build pipeline, then compare structurally against the committed contract.
-// Works in any environment because it doesn't depend on file mtimes — the
-// only thing that matters is whether a fresh build would produce a different
-// contract.
-async function detectDriftByRebuild(
+// Default drift + lint pass: rebuild the contract in memory using the existing
+// build pipeline (which now includes the lint pass), compare structurally
+// against the committed contract, and surface fresh violations from the rebuild.
+// Works in any environment because it doesn't depend on file mtimes.
+async function detectDriftAndLintByRebuild(
   committed: PrimitivContract,
   configPath: string | undefined,
   cwd: string
-): Promise<{ isStale: boolean; changes: string[] }> {
+): Promise<{ isStale: boolean; changes: string[]; violations: Violation[] }> {
   const fresh = await buildContract(configPath, { silent: true, cwd })
   const changes = diffContracts(committed, fresh)
-  return { isStale: changes.length > 0, changes }
+  return { isStale: changes.length > 0, changes, violations: fresh.violations ?? [] }
 }
 
 // Compare two contracts and return a list of human-readable change descriptions.
@@ -241,11 +281,19 @@ async function findSourceFilesNewerThan(
   return newer
 }
 
-function decideStatus(params: { isStale: boolean; hasUnresolvedConflicts: boolean; strict: boolean }): {
+function decideStatus(params: {
+  isStale: boolean
+  hasUnresolvedConflicts: boolean
+  hasViolations: boolean
+  strict: boolean
+}): {
   status: VerifyStatus
   exitCode: VerifyExitCode
 } {
+  // Precedence: data integrity (conflicts) > usage (violations) > freshness (stale).
+  // A fresh build with violations is more important to surface than a stale-but-clean one.
   if (params.hasUnresolvedConflicts) return { status: "unresolved-conflicts", exitCode: 2 }
+  if (params.hasViolations) return { status: "token-misuse-detected", exitCode: params.strict ? 2 : 1 }
   if (params.isStale) return { status: "stale", exitCode: params.strict ? 2 : 1 }
   return { status: "clean", exitCode: 0 }
 }

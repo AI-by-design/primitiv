@@ -144,6 +144,104 @@ describe("verify", () => {
   })
 })
 
+describe("verify — token misuse violations", () => {
+  function writeConfigWithJSX(root: string) {
+    const body = `module.exports = {
+  sources: {
+    codebase: { root: ".", patterns: ["**/*.tsx", "**/*.css"], ignore: ["node_modules/**"] }
+  },
+  governance: { sourceOfTruth: "codebase", onConflict: "warn" },
+  output: { path: "./primitiv.contract.json" }
+}
+`
+    fs.writeFileSync(path.join(root, "primitiv.config.js"), body)
+  }
+
+  test("returns token-misuse-detected (exit 1) when violations exist", async () => {
+    writeConfigWithJSX(tempDir)
+    fs.writeFileSync(path.join(tempDir, "Button.tsx"), `<button className="bg-[#ff0000]" />`)
+    writeContract(tempDir)
+
+    const result = await verify(undefined, { cwd: tempDir })
+    expect(result.status).toBe("token-misuse-detected")
+    expect(result.exitCode).toBe(1)
+    expect(result.violations.total).toBe(1)
+    expect(result.violations.reported[0].context).toBe("bg-[#ff0000]")
+  })
+
+  test("--strict escalates token-misuse from exit 1 to exit 2", async () => {
+    writeConfigWithJSX(tempDir)
+    fs.writeFileSync(path.join(tempDir, "Button.tsx"), `<button className="bg-[#ff0000]" />`)
+    writeContract(tempDir)
+
+    const result = await verify(undefined, { cwd: tempDir, strict: true })
+    expect(result.status).toBe("token-misuse-detected")
+    expect(result.exitCode).toBe(2)
+  })
+
+  test("conflicts take precedence over violations in reported status", async () => {
+    writeConfigWithJSX(tempDir)
+    fs.writeFileSync(path.join(tempDir, "Button.tsx"), `<button className="bg-[#ff0000]" />`)
+    writeContract(tempDir, { conflicts: [pendingConflict()] })
+
+    const result = await verify(undefined, { cwd: tempDir })
+    expect(result.status).toBe("unresolved-conflicts")
+    expect(result.exitCode).toBe(2)
+    // Violations are still tracked even when conflicts win the status field.
+    expect(result.violations.total).toBe(1)
+  })
+
+  test("violation message includes smart-match suggestion to a matching token", async () => {
+    writeConfigWithJSX(tempDir)
+    fs.writeFileSync(path.join(tempDir, "tokens.css"), ":root { --color-destructive: #ff0000; }")
+    fs.writeFileSync(path.join(tempDir, "Button.tsx"), `<button className="bg-[#ff0000]" />`)
+    writeContract(tempDir, {
+      tokens: {
+        colors: {
+          "color-destructive": {
+            name: "color-destructive",
+            value: "#ff0000",
+            source: { adapter: "codebase", file: "tokens.css", line: 1 }
+          }
+        },
+        spacing: {},
+        typography: {},
+        borderRadius: {},
+        shadows: {}
+      }
+    })
+
+    const result = await verify(undefined, { cwd: tempDir })
+    expect(result.status).toBe("token-misuse-detected")
+    expect(result.violations.reported[0].suggestion?.token).toBe("color-destructive")
+    expect(result.messages.some((m) => m.includes("use --color-destructive"))).toBe(true)
+  })
+
+  test("// primitiv-ignore-next-line suppresses a violation end-to-end", async () => {
+    writeConfigWithJSX(tempDir)
+    // Use lowercase filename so the scanner's filename-component fallback
+    // (Button.tsx → component "Button") doesn't add unrelated drift here.
+    fs.writeFileSync(
+      path.join(tempDir, "button.tsx"),
+      ["// primitiv-ignore-next-line", `<button className="bg-[#ff0000]" />`].join("\n")
+    )
+    writeContract(tempDir)
+
+    const result = await verify(undefined, { cwd: tempDir })
+    expect(result.status).toBe("clean")
+    expect(result.violations.total).toBe(0)
+  })
+
+  test("legacy contract without violations field doesn't crash (--fast)", async () => {
+    writeConfig(tempDir)
+    writeContract(tempDir)
+    // No violations field on the contract — older Primitiv writes look like this.
+    const result = await verify(undefined, { cwd: tempDir, fast: true })
+    expect(result.violations.total).toBe(0)
+    expect(result.violations.reported).toEqual([])
+  })
+})
+
 describe("verify --fast (legacy mtime check)", () => {
   test("returns stale when source mtimes are newer than contract.generatedAt", async () => {
     fs.writeFileSync(path.join(tempDir, "styles.css"), ":root { --color-primary: oklch(0.5 0.2 260); }")

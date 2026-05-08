@@ -153,7 +153,8 @@ export class PrimitivMCPServer {
             componentNames: Object.keys(this.contract.components),
             componentCount: Object.keys(this.contract.components).length,
             conflictCount: this.contract.conflicts.length,
-            pendingConflicts: this.contract.conflicts.filter((c) => c.resolution === "pending").length
+            pendingConflicts: this.contract.conflicts.filter((c) => c.resolution === "pending").length,
+            violationCount: (this.contract.violations ?? []).length
           })
         }
 
@@ -306,6 +307,35 @@ export class PrimitivMCPServer {
           ? inferredRules.rules.filter((r) => r.category === args.category)
           : inferredRules.rules
         return this.json({ count: rules.length, generatedAt: inferredRules.generatedAt, rules })
+      }
+    )
+
+    this.server.registerTool(
+      "get_violations",
+      {
+        description:
+          "Get token-misuse violations: hardcoded literals in source code that bypass the design contract. Read-only, no side effects. Returns JSON with violation count, suggestion-coverage stats, and a list of violations with file:line:column, the captured literal, the surrounding utility (e.g. 'bg-[#ff0000]'), and an optional smart-match suggestion when a contract token has the same value. Pass category to filter: 'all' | 'colors' | 'spacing' | 'typography' | 'borderRadius' | 'shadows'. Call this BEFORE generating UI with literal values — prefer the suggested token over a hardcoded literal. For available tokens to use instead, use get_design_context or get_token.",
+        inputSchema: {
+          category: z.string()
+        }
+      },
+      async (args) => {
+        if (!this.contract) return this.noContract()
+        const all = this.contract.violations
+        if (all === undefined) {
+          return this.err(
+            "Contract has no violations field — likely built with an older Primitiv. Run `primitiv build` to refresh."
+          )
+        }
+        const filtered =
+          args.category && args.category !== "all" ? all.filter((v) => v.category === args.category) : all
+        const withSuggestion = filtered.filter((v) => v.suggestion !== undefined).length
+        return this.json({
+          count: filtered.length,
+          withSuggestion,
+          withoutSuggestion: filtered.length - withSuggestion,
+          violations: filtered
+        })
       }
     )
   }
