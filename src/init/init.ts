@@ -4,7 +4,18 @@ import * as os from "node:os"
 import * as path from "node:path"
 
 interface DetectedProject {
-  framework: "next" | "vite" | "react" | "unknown"
+  framework:
+    | "next"
+    | "nuxt"
+    | "astro"
+    | "sveltekit"
+    | "remix"
+    | "expo"
+    | "qwik"
+    | "vite"
+    | "solid"
+    | "react"
+    | "unknown"
   hasTypeScript: boolean
   hasTailwind: boolean
   hasFigma: boolean
@@ -86,10 +97,20 @@ function detectProject(root: string): DetectedProject {
   const devDependencies: Record<string, string> = (pkg?.devDependencies as Record<string, string>) || {}
   const deps = { ...dependencies, ...devDependencies }
 
-  // Framework
+  // Framework. Order matters — meta-frameworks (Next, Nuxt, SvelteKit, Remix,
+  // Astro, Expo, Qwik) are checked before the underlying libs they're built on
+  // (React, Vite, Solid). Many of them depend on Vite internally, so a flat
+  // "deps.vite first" check would mislabel Astro/SvelteKit/Remix as Vite.
   let framework: DetectedProject["framework"] = "unknown"
   if (deps.next) framework = "next"
+  else if (deps.nuxt) framework = "nuxt"
+  else if (deps.astro) framework = "astro"
+  else if (deps["@sveltejs/kit"]) framework = "sveltekit"
+  else if (deps["@remix-run/react"] || deps["@remix-run/node"]) framework = "remix"
+  else if (deps.expo) framework = "expo"
+  else if (deps["@builder.io/qwik"]) framework = "qwik"
   else if (deps.vite) framework = "vite"
+  else if (deps["solid-js"]) framework = "solid"
   else if (deps.react) framework = "react"
 
   // TypeScript
