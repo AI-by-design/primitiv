@@ -268,30 +268,25 @@ ${AGENT_BLOCK_END_MARKER}
 }
 
 export function writeAgentInstructions(root: string, runner: Runner = detectRunner(root)): void {
+  // Write to every existing agent-instruction file. Claude Code reads CLAUDE.md;
+  // Codex/Cursor/others read AGENTS.md. If both exist we need both, otherwise
+  // one tool sees the Primitiv block and the other doesn't. If neither exists,
+  // create AGENTS.md as the cross-tool default.
   const candidates = ["AGENTS.md", "CLAUDE.md"]
-  let targetFile: string | null = null
+  const existing = candidates.filter((c) => fs.existsSync(path.join(root, c)))
+  const targets = existing.length > 0 ? existing : ["AGENTS.md"]
 
-  for (const candidate of candidates) {
-    const p = path.join(root, candidate)
-    if (fs.existsSync(p)) {
-      targetFile = p
-      break
-    }
-  }
-
-  if (!targetFile) {
-    targetFile = path.join(root, "AGENTS.md")
-  }
-
-  const existing = fs.existsSync(targetFile) ? fs.readFileSync(targetFile, "utf-8") : ""
-  const hadBlock = existing.includes(AGENT_BLOCK_MARKER)
   const block = buildAgentBlock(runner)
-  const next = replaceMarkedBlock(existing, block, AGENT_BLOCK_MARKER, AGENT_BLOCK_END_MARKER)
+  for (const filename of targets) {
+    const p = path.join(root, filename)
+    const content = fs.existsSync(p) ? fs.readFileSync(p, "utf-8") : ""
+    const hadBlock = content.includes(AGENT_BLOCK_MARKER)
+    const next = replaceMarkedBlock(content, block, AGENT_BLOCK_MARKER, AGENT_BLOCK_END_MARKER)
 
-  fs.writeFileSync(targetFile, next, "utf-8")
-  const filename = path.basename(targetFile)
-  const action = hadBlock ? "Refreshed" : "Added"
-  console.log(`✅ ${action} Primitiv block in ${filename}`)
+    fs.writeFileSync(p, next, "utf-8")
+    const action = hadBlock ? "Refreshed" : "Added"
+    console.log(`✅ ${action} Primitiv block in ${filename}`)
+  }
 }
 
 // Refresh a marker-delimited block inside `existing`. If the start marker isn't
