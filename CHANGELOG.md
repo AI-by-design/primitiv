@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.6.0](https://github.com/AI-by-design/primitiv/compare/v1.5.2...v1.6.0) (2026-05-08)
+
+
+### Features
+
+* **init:** broaden framework detection beyond next/vite/react ([5c98c43](https://github.com/AI-by-design/primitiv/commit/5c98c436a2a41513e74f514902104167510ce3b0))
+* token-misuse detection + init AGENTS/CLAUDE and framework fixes ([66f9919](https://github.com/AI-by-design/primitiv/commit/66f991932b73b430e382e353ea9c3b3a2b201e30))
+* token-misuse detection in verify (smart-match against contract) ([07040bd](https://github.com/AI-by-design/primitiv/commit/07040bd778868014d11dfbdd479224a44d2c8e3c))
+
+
+### Bug Fixes
+
+* **init:** write Primitiv block to both AGENTS.md and CLAUDE.md when both exist ([3794e8f](https://github.com/AI-by-design/primitiv/commit/3794e8f3c4086a53ec6388c00144e197adf30344))
+
 ## [1.5.2](https://github.com/AI-by-design/primitiv/compare/v1.5.1...v1.5.2) (2026-05-05)
 
 
