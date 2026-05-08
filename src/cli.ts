@@ -47,15 +47,15 @@ Options:
   primitiv build  [config] Path to config file (default: primitiv.config.js)
   primitiv serve  [config] Path to config file (default: primitiv.config.js)
   primitiv verify [config] [--strict] [--json] [--fast]
-                           --strict: treat a stale contract as a hard failure (exit 2)
+                           --strict: escalate stale contract / token misuses to hard failure (exit 2)
                            --json:   emit a machine-readable report instead of text
                            --fast:   skip the rebuild-and-compare step; use file mtimes
                                      instead. Faster but unreliable in CI / fresh clones.
 
 Exit codes for verify:
-  0  clean — contract matches a fresh rebuild and all conflicts resolved
-  1  stale — committed contract differs from a fresh rebuild
-  2  unresolved conflicts (or stale in --strict)
+  0  clean — contract matches a fresh rebuild, conflicts resolved, no token misuses
+  1  stale or token misuse detected (warning level)
+  2  unresolved conflicts (or stale / token misuses in --strict)
   3  no config or contract found
 
 Quick start:

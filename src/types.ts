@@ -79,6 +79,8 @@ export interface PrimitivContract {
   components: ComponentMap
   conflicts: Conflict[]
   inferredRules?: InferredRules
+  // Optional so older contract files (pre-1.6) load without crashing.
+  violations?: Violation[]
 }
 
 export interface TokenMap {
@@ -141,4 +143,23 @@ export interface InferredRule {
 export interface InferredRules {
   generatedAt: string
   rules: InferredRule[]
+}
+
+// A token-misuse violation: a hardcoded literal in component code that
+// bypasses the contract. Surfaced by `primitiv build` and `primitiv verify`.
+export interface Violation {
+  type: "token-misuse"
+  category: "colors" | "spacing" | "typography" | "borderRadius" | "shadows"
+  // The raw literal as captured (e.g. "#ff0000", "7px").
+  found: string
+  // The surrounding utility (e.g. "bg-[#ff0000]") for context in the report.
+  context: string
+  source: { file: string; line: number; column: number }
+  // Present iff a contract token's value matches `found` after normalization.
+  // The smart-match suggestion that turns the report into a fix.
+  suggestion?: {
+    token: string
+    category: string
+    value: string
+  }
 }

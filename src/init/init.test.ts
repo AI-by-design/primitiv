@@ -107,6 +107,50 @@ describe("writeAgentInstructions idempotency", () => {
   })
 })
 
+describe("writeAgentInstructions target selection", () => {
+  test("writes to CLAUDE.md only when AGENTS.md is absent", () => {
+    fs.writeFileSync(path.join(tempDir, "CLAUDE.md"), "# Project notes\n")
+    writeAgentInstructions(tempDir)
+
+    const claude = fs.readFileSync(path.join(tempDir, "CLAUDE.md"), "utf-8")
+    expect(claude).toContain("<!-- primitiv -->")
+    expect(claude).toContain("# Project notes")
+    expect(fs.existsSync(path.join(tempDir, "AGENTS.md"))).toBe(false)
+  })
+
+  test("writes to AGENTS.md only when CLAUDE.md is absent", () => {
+    fs.writeFileSync(path.join(tempDir, "AGENTS.md"), "# Project notes\n")
+    writeAgentInstructions(tempDir)
+
+    const agents = fs.readFileSync(path.join(tempDir, "AGENTS.md"), "utf-8")
+    expect(agents).toContain("<!-- primitiv -->")
+    expect(agents).toContain("# Project notes")
+    expect(fs.existsSync(path.join(tempDir, "CLAUDE.md"))).toBe(false)
+  })
+
+  test("writes to BOTH when AGENTS.md and CLAUDE.md both exist", () => {
+    fs.writeFileSync(path.join(tempDir, "AGENTS.md"), "# Agents notes\n")
+    fs.writeFileSync(path.join(tempDir, "CLAUDE.md"), "# Claude notes\n")
+    writeAgentInstructions(tempDir)
+
+    const agents = fs.readFileSync(path.join(tempDir, "AGENTS.md"), "utf-8")
+    const claude = fs.readFileSync(path.join(tempDir, "CLAUDE.md"), "utf-8")
+    expect(agents).toContain("<!-- primitiv -->")
+    expect(claude).toContain("<!-- primitiv -->")
+    expect(agents).toContain("# Agents notes")
+    expect(claude).toContain("# Claude notes")
+  })
+
+  test("creates AGENTS.md when neither file exists", () => {
+    writeAgentInstructions(tempDir)
+
+    expect(fs.existsSync(path.join(tempDir, "AGENTS.md"))).toBe(true)
+    expect(fs.existsSync(path.join(tempDir, "CLAUDE.md"))).toBe(false)
+    const agents = fs.readFileSync(path.join(tempDir, "AGENTS.md"), "utf-8")
+    expect(agents).toContain("<!-- primitiv -->")
+  })
+})
+
 // Helper: stand up a real git repo in `dir` with optional remote and default
 // branch. Real git is faster than mocks here and catches shell-escaping bugs
 // that would surface in user environments.

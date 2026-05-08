@@ -1,6 +1,7 @@
 import * as fs from "node:fs"
 import * as path from "node:path"
 import { ContractBuilder } from "./contract"
+import { lintTokenMisuse } from "./lint"
 import { PrimitivMCPServer } from "./mcp"
 import { applyRationale, loadRationale } from "./rationale"
 import { CodebaseScanner } from "./scanner"
@@ -102,6 +103,14 @@ export async function buildContract(
     log(`\n📝 Rationale: ${rationaleTokenCount} tokens, ${rationaleComponentCount} components`)
   }
 
+  // Lint pass: scan source files for hardcoded literals that bypass the contract.
+  // Runs last so the smart-match index sees the final reconciled token set.
+  const violations = await lintTokenMisuse(config, contract)
+  contract.violations = violations
+  if (violations.length > 0) {
+    log(`\n🔎 Lint: ${violations.length} token misuse${violations.length === 1 ? "" : "s"} detected`)
+  }
+
   return contract
 }
 
@@ -128,6 +137,7 @@ export async function build(configPath?: string): Promise<void> {
   )
   console.log(`   ${Object.keys(contract.components).length} components indexed`)
   console.log(`   ${contract.conflicts.filter((c) => c.resolution === "pending").length} pending conflicts`)
+  console.log(`   ${(contract.violations ?? []).length} token misuses`)
 }
 
 // Serve command — start MCP server
