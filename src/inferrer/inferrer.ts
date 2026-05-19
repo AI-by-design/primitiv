@@ -1,17 +1,4 @@
-import type { ComponentMap, TokenMap } from "../types"
-
-export interface InferredRule {
-  id: string
-  category: "spacing" | "color" | "typography" | "border-radius" | "naming" | "components"
-  rule: string
-  confidence: "high" | "medium" | "low"
-  evidence: string[]
-}
-
-export interface InferredRules {
-  generatedAt: string
-  rules: InferredRule[]
-}
+import type { ComponentMap, InferredRule, InferredRules, TokenMap } from "../types"
 
 // Flatten TokenMap into a single array for easier analysis
 function flattenTokens(tokenMap: TokenMap): Array<{ name: string; value: string; category: string }> {
