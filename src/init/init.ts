@@ -58,32 +58,32 @@ function formatRunnerCommand(runner: Runner, ...args: string[]): string {
 export async function init(targetDir?: string): Promise<void> {
   const root = targetDir || process.cwd()
   const configPath = path.join(root, "primitiv.config.js")
-
-  if (fs.existsSync(configPath)) {
-    console.log("⚠️  primitiv.config.js already exists. Remove it first to reinitialise.")
-    process.exit(1)
-  }
-
-  console.log("🔍 Detecting project...")
-  const project = detectProject(root)
   const runner = detectRunner(root)
 
-  console.log(`   Framework:  ${project.framework}`)
-  console.log(`   TypeScript: ${project.hasTypeScript ? "yes" : "no"}`)
-  console.log(`   Tailwind:   ${project.hasTailwind ? "yes" : "no"}`)
-  console.log(`   Figma:      ${project.hasFigma ? "token file found" : "not detected"}`)
-  console.log(`   Storybook:  ${project.hasStorybook ? "yes" : "no"}`)
-  console.log(`   Package mgr:${runner.label === "npm" ? " npm (default)" : ` ${runner.label}`}`)
-  console.log(`   Source:     ${project.srcRoot}`)
+  if (fs.existsSync(configPath)) {
+    console.log("ℹ️  primitiv.config.js already exists — keeping yours, refreshing other wiring.")
+  } else {
+    console.log("🔍 Detecting project...")
+    const project = detectProject(root)
 
-  const config = generateConfig(project, root)
-  fs.writeFileSync(configPath, config, "utf-8")
+    console.log(`   Framework:  ${project.framework}`)
+    console.log(`   TypeScript: ${project.hasTypeScript ? "yes" : "no"}`)
+    console.log(`   Tailwind:   ${project.hasTailwind ? "yes" : "no"}`)
+    console.log(`   Figma:      ${project.hasFigma ? "token file found" : "not detected"}`)
+    console.log(`   Storybook:  ${project.hasStorybook ? "yes" : "no"}`)
+    console.log(`   Package mgr:${runner.label === "npm" ? " npm (default)" : ` ${runner.label}`}`)
+    console.log(`   Source:     ${project.srcRoot}`)
 
-  console.log("\n✅ Created primitiv.config.js")
+    const config = generateConfig(project, root)
+    fs.writeFileSync(configPath, config, "utf-8")
+    console.log("\n✅ Created primitiv.config.js")
+  }
+
   writeAgentInstructions(root, runner)
   writeMcpConfig(root, runner)
   writeCodexConfig(root, runner)
   writeSkillFile(root)
+  writeSetupSkill(root)
   writeGitHubWorkflow(root)
   console.log("\nNext steps:")
   console.log("  1. Review and adjust primitiv.config.js if needed")
@@ -517,6 +517,39 @@ function writeSkillFile(root: string): void {
   fs.mkdirSync(path.dirname(target), { recursive: true })
   fs.writeFileSync(target, SKILL_CONTENT, "utf-8")
   console.log("✅ Installed build-component skill → .claude/commands/build-component.md")
+}
+
+const SETUP_SKILL_CONTENT = `# Primitiv Setup
+
+Mode: SETUP. One-time install for Primitiv in this project. Idempotent — safe to re-run.
+
+## What runs
+
+\`primitiv init\` writes or refreshes:
+- **Project config + contract** — \`primitiv.config.js\`, \`primitiv.contract.json\`
+- **Claude Code wiring** — \`/build-component\` skill at \`.claude/commands/build-component.md\`
+- **Agent instructions** — Primitiv block in \`AGENTS.md\` or \`CLAUDE.md\`
+
+Also adds an entry to \`.mcp.json\` or \`.cursor/mcp.json\`. Takes ~30 seconds.
+
+## Steps
+
+1. Confirm with the user what will be created (use the 3 groups above) and ask for consent before proceeding.
+2. Run \`npx @ai-by-design/primitiv init\` in the project root.
+3. Run \`npx @ai-by-design/primitiv build\`.
+4. Confirm setup is complete. Agents can now use Primitiv tools (\`get_design_context\`, \`get_token\`, \`get_component\`, \`get_conflicts\`, \`get_inferred_rules\`, \`get_violations\`).
+
+## Uninstall
+
+Delete \`primitiv.config.js\`, \`primitiv.contract.json\`, \`.claude/commands/build-component.md\`, \`.claude/commands/primitiv-setup.md\`, and remove the \`<!-- primitiv -->\` block from \`AGENTS.md\`/\`CLAUDE.md\`. Remove the \`primitiv\` entry from your MCP config.
+`
+
+function writeSetupSkill(root: string): void {
+  const target = path.join(root, ".claude/commands/primitiv-setup.md")
+  if (fs.existsSync(target)) return
+  fs.mkdirSync(path.dirname(target), { recursive: true })
+  fs.writeFileSync(target, SETUP_SKILL_CONTENT, "utf-8")
+  console.log("✅ Installed primitiv-setup skill → .claude/commands/primitiv-setup.md")
 }
 
 function readJSON(filePath: string): Record<string, unknown> | null {

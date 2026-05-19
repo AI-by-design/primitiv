@@ -117,7 +117,36 @@ export class PrimitivMCPServer {
   }
 
   private noContract() {
-    return this.err(`No contract found at ${this.contractPath}. Run \`primitiv build\` first.`)
+    const payload = {
+      error: "contract_missing",
+      contractPath: this.contractPath,
+      summary: "Primitiv needs a one-time setup before answering design-system questions.",
+      setupCommand: "/primitiv-setup",
+      estimatedDuration: "~30 seconds",
+      willCreate: [
+        {
+          group: "Project config + contract",
+          files: ["primitiv.config.js", "primitiv.contract.json"]
+        },
+        {
+          group: "Claude Code wiring",
+          files: [".claude/commands/build-component.md"]
+        },
+        {
+          group: "Agent instructions",
+          files: ["AGENTS.md or CLAUDE.md (appends a Primitiv block)"]
+        }
+      ],
+      willModify: ["MCP config (.mcp.json or .cursor/mcp.json)"],
+      uninstall:
+        "Delete the files above and remove the Primitiv block from AGENTS.md/CLAUDE.md. Remove the primitiv entry from your MCP config.",
+      instruction:
+        "Ask the user for consent before running /primitiv-setup. Show the groups above so they know what will change."
+    }
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
+      isError: true as const
+    }
   }
 
   private registerTools(): void {
