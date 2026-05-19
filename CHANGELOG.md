@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.7.0](https://github.com/AI-by-design/primitiv/compare/v1.6.0...v1.7.0) (2026-05-19)
+
+
+### Features
+
+* structured cold-install path via /primitiv-setup ([2047f02](https://github.com/AI-by-design/primitiv/commit/2047f0265fe76fa868b9dfe32421c8722ef870e5))
+* structured cold-install path via /primitiv-setup ([529bc2f](https://github.com/AI-by-design/primitiv/commit/529bc2f195f567cd1cd25eb7d8bf4c3fc9cf3652))
+
 ## [1.6.0](https://github.com/AI-by-design/primitiv/compare/v1.5.2...v1.6.0) (2026-05-08)
 
 
