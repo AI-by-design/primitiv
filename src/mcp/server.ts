@@ -20,6 +20,11 @@ export class PrimitivMCPServer {
     this.watchContract()
   }
 
+  async start(): Promise<void> {
+    const transport = new StdioServerTransport()
+    await this.server.connect(transport)
+  }
+
   private loadContract(): void {
     if (fs.existsSync(this.contractPath)) {
       try {
@@ -359,18 +364,17 @@ export class PrimitivMCPServer {
         const filtered =
           args.category && args.category !== "all" ? all.filter((v) => v.category === args.category) : all
         const withSuggestion = filtered.filter((v) => v.suggestion !== undefined).length
-        return this.json({
+        const payload = {
           count: filtered.length,
           withSuggestion,
           withoutSuggestion: filtered.length - withSuggestion,
           violations: filtered
-        })
+        }
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
+          structuredContent: payload
+        }
       }
     )
-  }
-
-  async start(): Promise<void> {
-    const transport = new StdioServerTransport()
-    await this.server.connect(transport)
   }
 }
