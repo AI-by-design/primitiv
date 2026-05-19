@@ -16,7 +16,7 @@ npx @ai-by-design/primitiv build    # scan sources, resolve conflicts, write the
 npx @ai-by-design/primitiv serve    # start the MCP server
 ```
 
-`init` writes a `.mcp.json` to your project root, so Cursor, Claude Code, Codex, Windsurf, and any other MCP-compatible tool pick up the server without manual config.
+`init` writes a `.mcp.json` to your project root, so Cursor, Claude Code, Codex, Windsurf, and any other MCP-compatible tool pick up the server without manual config. `primitiv init` is safe to re-run — it keeps your `primitiv.config.js` and refreshes the other wiring (MCP config, agent instructions, skill files, CI workflow).
 
 If your project is on GitHub, `init` also installs `.github/workflows/primitiv-verify.yml` — a workflow that runs `primitiv verify` on every PR and push. Pair it with branch protection on your default branch and the merge is blocked when an agent ships UI that breaks the contract.
 

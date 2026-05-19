@@ -85,6 +85,35 @@ describe("init", () => {
     const skillPath = path.join(tempDir, ".claude/commands/build-component.md")
     expect(fs.existsSync(skillPath)).toBe(true)
   })
+
+  test("primitiv-setup skill file is installed", async () => {
+    await init(tempDir)
+    const setupSkillPath = path.join(tempDir, ".claude/commands/primitiv-setup.md")
+    expect(fs.existsSync(setupSkillPath)).toBe(true)
+  })
+
+  test("init is idempotent — second run keeps user config and refreshes wiring", async () => {
+    await init(tempDir)
+
+    // Simulate user customization of the config so we can verify it survives a re-run.
+    const customizedConfig = "// my custom edit\nmodule.exports = { custom: true }\n"
+    fs.writeFileSync(path.join(tempDir, "primitiv.config.js"), customizedConfig)
+
+    // Delete a wiring file to verify the second run refreshes it instead of erroring.
+    fs.rmSync(path.join(tempDir, ".claude/commands/build-component.md"), { force: true })
+
+    // Re-run init — must not exit, must not throw.
+    await init(tempDir)
+
+    // User config is preserved verbatim.
+    const finalConfig = fs.readFileSync(path.join(tempDir, "primitiv.config.js"), "utf-8")
+    expect(finalConfig).toContain("my custom edit")
+
+    // Deleted wiring is restored; other wiring still in place.
+    expect(fs.existsSync(path.join(tempDir, ".claude/commands/build-component.md"))).toBe(true)
+    expect(fs.existsSync(path.join(tempDir, ".mcp.json"))).toBe(true)
+    expect(fs.existsSync(path.join(tempDir, "AGENTS.md"))).toBe(true)
+  })
 })
 
 describe("writeAgentInstructions idempotency", () => {
@@ -96,7 +125,8 @@ describe("writeAgentInstructions idempotency", () => {
     const withUserContent = `# My project notes\n\nKeep me.\n${firstContents}\n\n## More user notes\n`
     fs.writeFileSync(path.join(tempDir, "AGENTS.md"), withUserContent)
 
-    // Re-run just the instructions writer (init() would exit because config already exists).
+    // Re-run the instructions writer in isolation. init() is also idempotent now, but this
+    // narrower test guards against future regressions in the marker-replacement logic.
     writeAgentInstructions(tempDir)
 
     const second = fs.readFileSync(path.join(tempDir, "AGENTS.md"), "utf-8")
