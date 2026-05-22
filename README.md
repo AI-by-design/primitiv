@@ -1,6 +1,6 @@
 # Primitiv
 
-**The design contract layer for your agents.**
+**The design system contract keeping teams and agents in sync.**
 
 Retrieval gives you data. Reconciliation gives you truth.
 
