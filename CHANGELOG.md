@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.1](https://github.com/AI-by-design/primitiv/compare/v1.7.0...v1.7.1) (2026-05-22)
+
+
+### Bug Fixes
+
+* **license:** restore canonical Apache-2.0 layout for GitHub detection ([ee09ae1](https://github.com/AI-by-design/primitiv/commit/ee09ae1ae5b50e3945d3ec846571266f256fbe51))
+
 ## [1.7.0](https://github.com/AI-by-design/primitiv/compare/v1.6.0...v1.7.0) (2026-05-19)
 
 
