@@ -18,9 +18,9 @@ npx @ai-by-design/primitiv serve    # start the MCP server
 
 `init` writes a `.mcp.json` to your project root, so Cursor, Claude Code, Codex, Windsurf, and any other MCP-compatible tool pick up the server without manual config. `primitiv init` is safe to re-run — it keeps your `primitiv.config.js` and refreshes the other wiring (MCP config, agent instructions, skill files, CI workflow).
 
-If your project is on GitHub, `init` also installs `.github/workflows/primitiv-verify.yml` — a workflow that runs `primitiv verify` on every PR and push. Pair it with branch protection on your default branch and the merge is blocked when an agent ships UI that breaks the contract.
+If your project is on GitHub, `init` also installs `.github/workflows/primitiv-verify.yml` — a workflow that runs `primitiv verify --strict` on every PR and push. Pair it with branch protection on your default branch and the merge is blocked when an agent ships UI that breaks the contract or sneaks a hardcoded value past it.
 
-From here, every agent that builds UI calls `get_design_context` first and gets your resolved design contract back.
+From here, every agent that builds UI calls `get_design_context` first, then `get_violations` before generating any literal value — and gets your resolved design contract back.
 
 ## The problem
 
@@ -60,21 +60,25 @@ bun add @ai-by-design/primitiv
 
 | Command | Description |
 |---------|-------------|
-| `primitiv init [dir]` | Detect your project and generate `primitiv.config.js` |
-| `primitiv build [config]` | Scan sources, resolve conflicts, write the contract |
-| `primitiv serve [config]` | Start the MCP server |
+| `primitiv init [dir]` | Detect your project (framework, TypeScript, Tailwind, Figma, Storybook, package manager) and generate `primitiv.config.js`. Also writes a project-scoped MCP config, refreshes a Primitiv block in `AGENTS.md` and `CLAUDE.md`, installs a `verify --strict` GitHub Actions workflow, and drops a `/build-component` skill for Claude Code. |
+| `primitiv build [config]` | Scan sources, resolve conflicts, lint for token misuse, write the contract |
+| `primitiv serve [config]` | Start the MCP server against the built contract. Hot-reloads when the contract file changes. |
+| `primitiv verify [config]` | Re-run `build` and exit non-zero if conflicts are unresolved, token misuse is detected, or the contract is stale. Flags: `--strict`, `--json`, `--fast`. Intended for CI. |
+
+`init` detects Next, Nuxt, Astro, SvelteKit, Remix, Expo, Qwik, Vite, Solid, and React. Package manager is read from the lockfile (`bun.lock` → `bunx`, `pnpm-lock.yaml` → `pnpm dlx`, `yarn.lock` → `yarn dlx`, otherwise `npx`) and used in the generated MCP config.
 
 ### MCP tools
 
 | Tool | Description |
 |------|-------------|
-| `get_design_context` | Get all tokens, components, conflicts, and inferred rules. Pass `category: "all"` to get everything. |
-| `get_token` | Look up a specific token by name |
-| `get_component` | Look up a specific component and its props |
-| `get_conflicts` | Get unresolved conflicts between sources |
-| `get_inferred_rules` | Get the design rules Primitiv has extracted from your codebase patterns |
+| `get_design_context` | Get tokens, components, conflicts, inferred rules, and violation count. Default (no category) returns a summary with counts. Pass `category: "all" \| "tokens" \| "components" \| "conflicts"` for full detail. Filter tokens with `tokenCategory`. |
+| `get_token` | Look up a specific token by name. Pass `category` to narrow search (e.g. `"colors"`, `"spacing"`). |
+| `get_component` | Look up a specific component by name. Returns props, variants, and source provenance. |
+| `get_conflicts` | Get conflicts between sources. Pass `type: "all" \| "token" \| "component"` and `status: "all" \| "pending" \| "resolved"`. Returns `actionableCount` and `pendingDecisionCount` alongside the list. |
+| `get_inferred_rules` | Get the design rules Primitiv has extracted from your codebase patterns. Pass `category` to filter. |
+| `get_violations` | List token-misuse violations — hardcoded literals in source that bypass the contract. Smart-matched to a suggested token when the literal matches one. Pass `category: "all" \| "colors" \| "spacing"` to filter. |
 
-Primitiv works with any tool that speaks MCP — it is not tied to a specific editor or agent ecosystem.
+All tools are read-only — they never modify your code or contract. Primitiv works with any tool that speaks MCP — it is not tied to a specific editor or agent ecosystem.
 
 ### Using Primitiv across multiple projects
 
@@ -113,16 +117,64 @@ If `get_design_context` returns a `warnings` array, stop and resolve before proc
 
 ### CI / GitHub Actions
 
-`primitiv init` auto-installs `.github/workflows/primitiv-verify.yml` when the project's remote is on GitHub. The workflow runs on every pull request and push to your default branch and fails the check when the contract is stale or has unresolved conflicts.
+`primitiv init` auto-installs `.github/workflows/primitiv-verify.yml` when the project's remote is on GitHub. The workflow runs `verify --strict` on every pull request and push to your default branch, and fails the check on **unresolved conflicts**, **token misuse**, or a **stale contract**.
 
 To turn the failed check into a hard merge gate, enable branch protection on the default branch — `init` prints the exact settings URL after install (`https://github.com/<owner>/<repo>/settings/branches`).
 
-The workflow uses `npx --yes @ai-by-design/primitiv verify`, so it works regardless of your project's package manager. Two notes:
+The workflow uses `npx --yes @ai-by-design/primitiv verify --strict`, so it works regardless of your project's package manager. Two notes:
 
 - **Monorepos** — the workflow runs at repo root. If `primitiv.config.js` lives in a subdirectory, add a `working-directory:` to the verify step in the generated YAML.
-- **Pinning** — `npx --yes @ai-by-design/primitiv` fetches the latest version. To pin, edit the workflow's `run:` line to `npx --yes @ai-by-design/primitiv@1.4.0 verify` (or your chosen version).
+- **Pinning** — `npx --yes @ai-by-design/primitiv` fetches the latest version. To pin, edit the workflow's `run:` line to `npx --yes @ai-by-design/primitiv@1.5.2 verify --strict` (or your chosen version).
+
+#### Verify exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Contract is fresh, conflicts resolved, no token misuse |
+| `1` | Stale contract OR token misuse detected (warning level, default) |
+| `2` | Unresolved conflicts, OR `--strict` escalation of stale / token misuse |
+| `3` | No config or contract found |
 
 The workflow is idempotent — re-running `primitiv init` refreshes the block between `# <!-- primitiv -->` markers, preserving any content you've added outside them.
+
+### Token misuse
+
+Every `primitiv build` and `primitiv verify` scans your source for hardcoded literals that bypass the contract — Tailwind arbitrary values like `bg-[#ff0000]` or `p-[8px]`. When a literal matches the value of a token already in your contract, the violation is smart-matched to a suggested replacement:
+
+```
+$ primitiv verify
+
+! 3 token misuses detected:
+  - src/components/Button.tsx:14  bg-[#ff0000] → use --color-destructive
+  - src/components/Card.tsx:7     p-[8px]      → use --spacing-2
+  - src/components/Hero.tsx:22    text-[#abcdef] → no matching token
+```
+
+Violations surface through the `get_violations` MCP tool so agents see the same list before generating UI. Suppress an intentional one-off with a directive on the line above:
+
+```tsx
+// primitiv-ignore-next-line
+<div className="bg-[#fef3c7]" /> // intentional — promo banner
+```
+
+### Rationale layer
+
+A YAML sidecar (`primitiv.rationale.yml`) lets you annotate tokens with **why** they exist, **when** to use them, whether they're **deprecated**, and what **alternatives** to prefer:
+
+```yaml
+# primitiv.rationale.yml
+
+color.brand:
+  why: "Primary action colour across all surfaces"
+  when: "CTAs, primary navigation, focus rings"
+
+color.primary.old:
+  deprecated: true
+  why: "Replaced by color.brand in v2 — old hue failed WCAG AA on dark surfaces"
+  alternatives: [color.brand]
+```
+
+Agents reading the contract via MCP prefer annotated tokens, refuse deprecated ones, and surface the reasoning when asked. The rationale layer is authored by humans — it documents intent, not structure.
 
 ### Configuration
 
@@ -157,69 +209,7 @@ module.exports = {
 
 ## Contributing
 
-### Local setup
-
-```bash
-git clone https://github.com/AI-by-design/primitiv.git
-cd primitiv
-bun install
-bun run build
-```
-
-### Running in development
-
-To run the MCP server against local source without a build step, point your MCP config directly at the source file. Bun runs TypeScript directly so changes are picked up on the next server restart:
-
-```json
-{
-  "mcpServers": {
-    "primitiv": {
-      "command": "bun",
-      "args": ["/path/to/primitiv/src/cli.ts", "serve", "./primitiv.config.js"]
-    }
-  }
-}
-```
-
-The MCP server also hot-reloads `primitiv.contract.json` automatically whenever `primitiv build` runs.
-
-### Build commands
-
-```bash
-bun run build   # Compile TypeScript → dist/
-bun run dev     # Run src/index.ts directly via ts-node
-bun run lint    # ESLint on src/**/*.ts
-```
-
-### Architecture
-
-```
-src/
-├── cli.ts          Entry point — routes init / build / serve
-├── index.ts        Exports build() and serve()
-├── types.ts        All shared interfaces — define types here, not inline
-├── scanner/        CodebaseScanner — extracts tokens and components from the filesystem
-├── sources/        Source adapters — Figma (Variables API), Storybook (manifest)
-├── contract/       ContractBuilder — merges sources, detects conflicts, applies governance
-├── inferrer/       inferRules() — derives design rules from token and component patterns
-├── mcp/            PrimitivMCPServer — loads the contract and registers MCP tools
-└── init/           init() — detects framework and writes primitiv.config.js
-```
-
-See `CLAUDE.md` for conventions on adding new sources, MCP tools, and types.
-
-### Releases
-
-Releases are managed by [Release Please](https://github.com/googleapis/release-please). Commit messages must follow the [Conventional Commits](https://www.conventionalcommits.org/) format:
-
-| Prefix | Effect |
-|--------|--------|
-| `fix: ...` | Patch release (0.1.0 → 0.1.1) |
-| `feat: ...` | Minor release (0.1.0 → 0.2.0) |
-| `feat!: ...` or `BREAKING CHANGE:` | Major release |
-| `chore:`, `docs:`, `refactor:` | No release |
-
-On merge to `main`, Release Please opens a release PR. Merging that PR tags the release and publishes to the package registry automatically.
+Bug reports, feature ideas, and PRs are welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md) for local setup, the architecture map, commit conventions, and the release flow. Participation is governed by the [Code of Conduct](./CODE_OF_CONDUCT.md). For security reports, see [SECURITY.md](./SECURITY.md) — please don't open a public issue.
 
 ---
 
@@ -243,10 +233,11 @@ On merge to `main`, Release Please opens a release PR. Merging that PR tags the 
 
 - [x] Codebase scanner (CSS variables, TypeScript tokens, React components)
 - [x] Contract builder with conflict detection
-- [x] MCP server with 5 tools
-- [x] `primitiv init` — project detection and config generation
+- [x] MCP server with 6 read-only tools
+- [x] `primitiv init` — project detection and config generation across Next, Nuxt, Astro, SvelteKit, Remix, Expo, Qwik, Vite, Solid, and React
+- [x] Package-manager auto-detection — `init` reads the lockfile and writes `bunx` / `pnpm dlx` / `yarn dlx` / `npx` into the generated MCP config
 - [x] Inferred rules — extract design rules from actual codebase patterns
-- [x] AGENTS.md / CLAUDE.md integration — `primitiv init` writes agent instructions to the project's agent config file, ensuring `get_design_context` is called before any UI build without manual prompting
+- [x] AGENTS.md / CLAUDE.md integration — `primitiv init` writes agent instructions so `get_design_context` is called before any UI build without manual prompting
 - [x] Project-scoped MCP config — `primitiv init` writes a project-level MCP config so the server is scoped to the current project, not a global user-level server
 - [x] `build-component` skill — `primitiv init` installs a Claude Code slash command that queries the contract before building any UI component
 - [x] Remediation steps on conflicts — conflicts include a `suggestedFix` and `actionable` flag so agents know exactly what to do, not just what's wrong
@@ -254,7 +245,9 @@ On merge to `main`, Release Please opens a release PR. Merging that PR tags the 
 - [x] Figma source adapter — scan Figma Variables and components via the Figma REST API
 - [x] Storybook source adapter — scan components and variants via the Storybook manifest
 - [x] Source provenance — every token and component in the contract traces back to its origin (file, line number, Figma variable ID, Storybook story ID)
-- [x] CI enforcement — `primitiv init` auto-installs a GitHub Actions workflow that runs `primitiv verify` on every PR; pair with branch protection to block merges on contract drift
+- [x] Token-misuse detection — `build` and `verify` lint for hardcoded Tailwind arbitrary values and smart-match them to existing tokens; exposed via the `get_violations` MCP tool
+- [x] Rationale layer — annotate tokens with `why` / `when` / `deprecated` / `alternatives` via `primitiv.rationale.yml`; agents prefer annotated tokens and refuse deprecated ones
+- [x] CI enforcement — `primitiv init` auto-installs a GitHub Actions workflow that runs `verify --strict` on every PR, failing on conflicts, token misuse, or stale contracts
 - [ ] Token relationships — document how tokens relate and what constraints exist between them
 
 ## Part of a larger system
