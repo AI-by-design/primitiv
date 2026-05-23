@@ -92,6 +92,23 @@ describe("init", () => {
     expect(fs.existsSync(setupSkillPath)).toBe(true)
   })
 
+  test("skill files contain valid frontmatter with required fields", async () => {
+    await init(tempDir)
+
+    const buildComponent = fs.readFileSync(path.join(tempDir, ".claude/commands/build-component.md"), "utf-8")
+    expect(buildComponent.startsWith("---\n")).toBe(true)
+    expect(buildComponent).toContain("name: build-component")
+    expect(buildComponent).toContain("description:")
+
+    const setup = fs.readFileSync(path.join(tempDir, ".claude/commands/primitiv-setup.md"), "utf-8")
+    expect(setup.startsWith("---\n")).toBe(true)
+    expect(setup).toContain("name: primitiv-setup")
+    expect(setup).toContain("description:")
+    expect(setup).toContain(
+      "allowed-tools: Bash(npx @ai-by-design/primitiv init *) Bash(npx @ai-by-design/primitiv build *)"
+    )
+  })
+
   test("init is idempotent — second run keeps user config and refreshes wiring", async () => {
     await init(tempDir)
 

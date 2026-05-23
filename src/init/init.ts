@@ -498,7 +498,12 @@ function writeCodexConfig(root: string, runner: Runner = detectRunner(root)): vo
   }
 }
 
-const SKILL_CONTENT = `# Build Component
+const SKILL_CONTENT = `---
+name: build-component
+description: Build a UI component using the project's design contract. Use when the user asks to build, create, or scaffold a component.
+---
+
+# Build Component
 
 Mode: BUILD. One component at a time. Contract before code.
 
@@ -519,7 +524,13 @@ function writeSkillFile(root: string): void {
   console.log("✅ Installed build-component skill → .claude/commands/build-component.md")
 }
 
-const SETUP_SKILL_CONTENT = `# Primitiv Setup
+const SETUP_SKILL_CONTENT = `---
+name: primitiv-setup
+description: One-time install for Primitiv in this project. Run when the user asks to install Primitiv or when an MCP tool returns a noContract error.
+allowed-tools: Bash(npx @ai-by-design/primitiv init *) Bash(npx @ai-by-design/primitiv build *)
+---
+
+# Primitiv Setup
 
 Mode: SETUP. One-time install for Primitiv in this project. Idempotent — safe to re-run.
 
