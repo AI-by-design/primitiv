@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.8.0](https://github.com/AI-by-design/primitiv/compare/v1.7.1...v1.8.0) (2026-05-26)
+
+
+### Features
+
+* **init:** scope /primitiv-setup Bash via skill frontmatter ([1b0083d](https://github.com/AI-by-design/primitiv/commit/1b0083d81dcac9d5953c7db20460e657759ec702))
+* **init:** scope /primitiv-setup Bash via skill frontmatter ([f2f536d](https://github.com/AI-by-design/primitiv/commit/f2f536df35581d50bc8dc09eed74fb11dd41c53b))
+
 ## [1.7.1](https://github.com/AI-by-design/primitiv/compare/v1.7.0...v1.7.1) (2026-05-22)
 
 
