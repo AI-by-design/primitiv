@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.8.1](https://github.com/AI-by-design/primitiv/compare/v1.8.0...v1.8.1) (2026-06-03)
+
+
+### Bug Fixes
+
+* **mcp:** align inferred-rule categories with token vocabulary ([3479c04](https://github.com/AI-by-design/primitiv/commit/3479c048658cca022ff8418f6cc74ce47cf9a77d))
+* **mcp:** align inferred-rule categories with token vocabulary ([b30cda2](https://github.com/AI-by-design/primitiv/commit/b30cda262865e8c857b8fcc3fe44efd7ed9978ee))
+
 ## [1.8.0](https://github.com/AI-by-design/primitiv/compare/v1.7.1...v1.8.0) (2026-05-26)
 
 
