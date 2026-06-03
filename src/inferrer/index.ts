@@ -1,1 +1,1 @@
-export { inferRules } from "./inferrer"
+export { inferRules, normalizeRuleCategory, RULE_CATEGORIES } from "./inferrer"
