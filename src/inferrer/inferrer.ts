@@ -1,5 +1,24 @@
 import type { ComponentMap, InferredRule, InferredRules, TokenMap } from "../types"
 
+// Canonical rule categories — match the token-map vocabulary so every MCP tool
+// filters on one spelling (see CATEGORY_VOCAB_PLAN.md).
+export const RULE_CATEGORIES: readonly string[] = [
+  "spacing",
+  "colors",
+  "typography",
+  "borderRadius",
+  "naming",
+  "components"
+]
+
+// Map legacy rule-category spellings to the canonical token vocabulary so a
+// caller passing "color"/"border-radius" doesn't silently get an empty list.
+export function normalizeRuleCategory(category: string): string {
+  if (category === "color") return "colors"
+  if (category === "border-radius") return "borderRadius"
+  return category
+}
+
 // Flatten TokenMap into a single array for easier analysis
 function flattenTokens(tokenMap: TokenMap): Array<{ name: string; value: string; category: string }> {
   return Object.entries(tokenMap).flatMap(([category, tokens]) =>
@@ -85,7 +104,7 @@ function inferSpacingRules(tokens: Array<{ name: string; value: string; category
 
 function inferColorRules(tokens: Array<{ name: string; value: string; category: string }>): InferredRule[] {
   const rules: InferredRule[] = []
-  const colorTokens = tokens.filter((t) => t.category === "color" || t.category === "colors")
+  const colorTokens = tokens.filter((t) => t.category === "colors")
   if (colorTokens.length === 0) return rules
 
   // Check for semantic naming pattern (role-based vs descriptive)
@@ -111,7 +130,7 @@ function inferColorRules(tokens: Array<{ name: string; value: string; category: 
   if (semanticCount > descriptiveCount) {
     rules.push({
       id: "color-semantic-naming",
-      category: "color",
+      category: "colors",
       rule: "Colors are named semantically by role (primary, destructive, muted) rather than by value (red, blue). When adding colors, name them for their purpose, not their appearance.",
       confidence: "high",
       evidence: colorTokens
@@ -132,7 +151,7 @@ function inferColorRules(tokens: Array<{ name: string; value: string; category: 
     if (ratio > 0.3) {
       rules.push({
         id: "color-interactive-variants",
-        category: "color",
+        category: "colors",
         rule: "Interactive colors have explicit hover/active/focus token variants. Do not hardcode state colors — use the corresponding variant token.",
         confidence: "high",
         evidence: hoverColors.slice(0, 3).map((t) => t.name)
@@ -145,7 +164,7 @@ function inferColorRules(tokens: Array<{ name: string; value: string; category: 
   if (darkTokens.length > 2) {
     rules.push({
       id: "color-dark-mode-tokens",
-      category: "color",
+      category: "colors",
       rule: "The codebase maintains explicit dark mode color tokens. Always pair light and dark variants when adding new color tokens.",
       confidence: "medium",
       evidence: darkTokens.slice(0, 3).map((t) => t.name)
@@ -159,7 +178,7 @@ function inferColorRules(tokens: Array<{ name: string; value: string; category: 
 
 function inferBorderRadiusRules(tokens: Array<{ name: string; value: string; category: string }>): InferredRule[] {
   const rules: InferredRule[] = []
-  const radiusTokens = tokens.filter((t) => t.category === "border-radius" || t.category === "borderRadius")
+  const radiusTokens = tokens.filter((t) => t.category === "borderRadius")
   if (radiusTokens.length === 0) return rules
 
   // Check if there's a single dominant radius (uniform UI)
@@ -169,7 +188,7 @@ function inferBorderRadiusRules(tokens: Array<{ name: string; value: string; cat
   if (uniqueValues.length === 1) {
     rules.push({
       id: "border-radius-uniform",
-      category: "border-radius",
+      category: "borderRadius",
       rule: `Border radius is uniform across all components: ${uniqueValues[0]}. Do not introduce custom border radius values.`,
       confidence: "high",
       evidence: radiusTokens.map((t) => `${t.name}: ${t.value}`)
@@ -184,7 +203,7 @@ function inferBorderRadiusRules(tokens: Array<{ name: string; value: string; cat
     if (numericValues.length >= 3) {
       rules.push({
         id: "border-radius-scale",
-        category: "border-radius",
+        category: "borderRadius",
         rule: `Border radius follows a defined scale with ${radiusTokens.length} steps. Use the nearest scale token rather than custom values.`,
         confidence: "medium",
         evidence: radiusTokens.map((t) => `${t.name}: ${t.value}`)

@@ -134,7 +134,7 @@ export interface Conflict {
 
 export interface InferredRule {
   id: string
-  category: "spacing" | "color" | "typography" | "border-radius" | "naming" | "components"
+  category: "spacing" | "colors" | "typography" | "borderRadius" | "naming" | "components"
   rule: string
   confidence: "high" | "medium" | "low"
   evidence: string[]

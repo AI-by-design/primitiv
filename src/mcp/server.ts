@@ -3,6 +3,7 @@ import * as path from "node:path"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod"
+import { normalizeRuleCategory, RULE_CATEGORIES } from "../inferrer"
 import type { PrimitivContract, Rationale } from "../types"
 
 export class PrimitivMCPServer {
@@ -326,7 +327,7 @@ export class PrimitivMCPServer {
       "get_inferred_rules",
       {
         description:
-          "Get the design rules inferred from your codebase patterns. Read-only, no side effects. Returns JSON with a list of rules including category, pattern, and confidence, or an error if no rules have been generated yet. Pass category to filter: spacing, color, typography, border-radius, naming, components. Pass empty string to get all. Use this to understand implicit conventions the codebase follows. For explicit design token values, use get_token. For source conflicts, use get_conflicts.",
+          "Get the design rules inferred from your codebase patterns. Read-only, no side effects. Returns JSON with a list of rules including category, pattern, and confidence, or an error if no rules have been generated yet. Pass category to filter: spacing, colors, typography, borderRadius, naming, components. Pass empty string to get all. Use this to understand implicit conventions the codebase follows. For explicit design token values, use get_token. For source conflicts, use get_conflicts.",
         inputSchema: {
           category: z.string()
         }
@@ -337,9 +338,20 @@ export class PrimitivMCPServer {
         if (!inferredRules || inferredRules.rules.length === 0) {
           return this.err("No inferred rules found. Run `primitiv build` to generate them.")
         }
-        const rules = args.category
-          ? inferredRules.rules.filter((r) => r.category === args.category)
-          : inferredRules.rules
+        if (!args.category) {
+          return this.json({
+            count: inferredRules.rules.length,
+            generatedAt: inferredRules.generatedAt,
+            rules: inferredRules.rules
+          })
+        }
+        const category = normalizeRuleCategory(args.category)
+        if (!RULE_CATEGORIES.includes(category)) {
+          return this.err(
+            `Unknown rule category '${args.category}'. Valid categories: ${RULE_CATEGORIES.join(", ")}. Pass empty string to get all.`
+          )
+        }
+        const rules = inferredRules.rules.filter((r) => r.category === category)
         return this.json({ count: rules.length, generatedAt: inferredRules.generatedAt, rules })
       }
     )
