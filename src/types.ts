@@ -119,6 +119,14 @@ export interface PropDefinition {
   default?: string
 }
 
+// A same-name component collision found during a codebase scan: two or more files
+// export a component with the same name. Surfaced (not silently dropped) by the
+// scanner; the first occurrence wins in the contract until path-qualified identity lands.
+export interface Collision {
+  name: string
+  files: string[]
+}
+
 export interface Conflict {
   type: "token" | "component"
   name: string

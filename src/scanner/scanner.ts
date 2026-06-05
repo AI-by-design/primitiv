@@ -1,16 +1,16 @@
 import * as fs from "node:fs"
 import * as path from "node:path"
 import { glob } from "glob"
-import type { CodebaseSource, ComponentMap, TokenMap } from "../types"
+import type { CodebaseSource, Collision, ComponentMap, TokenMap } from "../types"
 
 export class CodebaseScanner {
   constructor(private config: CodebaseSource) {}
 
-  async scan(): Promise<{ tokens: TokenMap; components: ComponentMap }> {
+  async scan(): Promise<{ tokens: TokenMap; components: ComponentMap; collisions: Collision[] }> {
     const files = await this.getFiles()
     const tokens = await this.extractTokens(files)
-    const components = await this.extractComponents(files)
-    return { tokens, components }
+    const { components, collisions } = await this.extractComponents(files)
+    return { tokens, components, collisions }
   }
 
   private async getFiles(): Promise<string[]> {
@@ -111,24 +111,60 @@ export class CodebaseScanner {
       name.includes("chart") ||
       name.includes("breach")
     if (isColorValue || isColorName) return "colors"
-    if (name.includes("spacing") || name.includes("margin") || name.includes("padding") || name.includes("gap"))
-      return "spacing"
-    if (name.includes("font") || name.includes("line-height") || name.includes("letter") || name.includes("text-"))
+    // Typography first so `letter-spacing`/`leading`/`tracking` don't get pulled into spacing.
+    if (
+      name.includes("font") ||
+      name.includes("line-height") ||
+      name.includes("leading") ||
+      name.includes("letter") ||
+      name.includes("tracking") ||
+      name.includes("text-")
+    )
       return "typography"
     if (name.includes("radius") || name.includes("rounded")) return "borderRadius"
-    if (name.includes("shadow")) return "shadows"
+    if (name.includes("shadow") || name.includes("elevation")) return "shadows"
+    if (name.includes("z-index") || name.includes("zindex") || name.includes("stacking")) return "zIndex"
+    if (name.includes("breakpoint") || name.includes("screen")) return "breakpoints"
+    if (
+      name.includes("duration") ||
+      name.includes("easing") ||
+      name.includes("transition") ||
+      name.includes("animation") ||
+      name.includes("animate") ||
+      name.includes("motion") ||
+      name.includes("delay")
+    )
+      return "motion"
+    if (
+      name.includes("spacing") ||
+      name.includes("space") ||
+      name.includes("margin") ||
+      name.includes("padding") ||
+      name.includes("gap") ||
+      name.includes("inset")
+    )
+      return "spacing"
     return "other"
   }
 
-  private async extractComponents(files: string[]): Promise<ComponentMap> {
+  private async extractComponents(files: string[]): Promise<{ components: ComponentMap; collisions: Collision[] }> {
     const components: ComponentMap = {}
+    const collided: Record<string, string[]> = {}
     const componentFiles = files.filter((f) => f.endsWith(".tsx") || f.endsWith(".jsx"))
 
     for (const file of componentFiles) {
       const content = fs.readFileSync(path.resolve(this.config.root, file), "utf-8")
-      const result = this.extractComponentName(content, file)
+      const found = this.extractComponentNames(content, file)
 
-      if (result) {
+      for (const result of found) {
+        const existing = components[result.name]
+        if (existing) {
+          // Same-name collision: keep the first, record the rest so the loss isn't silent.
+          // (Coexistence via path-qualified identity is the AST/Option-C work — see COMPONENT_IDENTITY_PLAN.md.)
+          if (!collided[result.name]) collided[result.name] = [existing.source.file ?? "?"]
+          collided[result.name].push(file)
+          continue
+        }
         components[result.name] = {
           name: result.name,
           source: { adapter: "codebase", file, line: result.line },
@@ -137,21 +173,23 @@ export class CodebaseScanner {
       }
     }
 
-    return components
+    const collisions: Collision[] = Object.entries(collided).map(([name, fileList]) => ({ name, files: fileList }))
+    return { components, collisions }
   }
 
-  private extractComponentName(content: string, file: string): { name: string; line: number } | null {
-    const exportMatch = content.match(/export\s+(?:default\s+)?(?:function|const)\s+([A-Z][a-zA-Z]+)/)
-    if (exportMatch) {
-      return { name: exportMatch[1], line: lineFromIndex(content, exportMatch.index ?? 0) }
+  // Enumerate every exported component in a file (not just the first). Falls back to the
+  // capitalized filename only when the regex matches nothing (e.g. `export { X }` re-export styles).
+  private extractComponentNames(content: string, file: string): Array<{ name: string; line: number }> {
+    const results: Array<{ name: string; line: number }> = []
+    const re = /export\s+(?:default\s+)?(?:function|const)\s+([A-Z][a-zA-Z]+)/g
+    for (const match of content.matchAll(re)) {
+      results.push({ name: match[1], line: lineFromIndex(content, match.index ?? 0) })
     }
-
-    const basename = path.basename(file, path.extname(file))
-    if (basename[0] === basename[0].toUpperCase()) {
-      return { name: basename, line: 1 }
+    if (results.length === 0) {
+      const basename = path.basename(file, path.extname(file))
+      if (basename[0] === basename[0].toUpperCase()) results.push({ name: basename, line: 1 })
     }
-
-    return null
+    return results
   }
 
   private extractProps(content: string): Record<string, { type: string; required: boolean }> {

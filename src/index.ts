@@ -58,10 +58,22 @@ export async function buildContract(
 
   if (config.sources.codebase) {
     const scanner = new CodebaseScanner(config.sources.codebase)
-    const { tokens, components } = await scanner.scan()
+    const { tokens, components, collisions } = await scanner.scan()
     sources.push({ name: "codebase", tokens, components })
     log(`   ✓ Found ${Object.values(tokens).reduce((acc, cat) => acc + Object.keys(cat).length, 0)} tokens`)
     log(`   ✓ Found ${Object.keys(components).length} components`)
+    if (collisions.length > 0) {
+      const dropped = collisions.reduce((n, c) => n + c.files.length - 1, 0)
+      const top = collisions
+        .slice()
+        .sort((a, b) => b.files.length - a.files.length)
+        .slice(0, 8)
+        .map((c) => `${c.name}(×${c.files.length})`)
+        .join(", ")
+      log(
+        `   ⚠ ${collisions.length} same-name component collision${collisions.length === 1 ? "" : "s"} — ${dropped} dropped (kept first). Top: ${top}`
+      )
+    }
   }
 
   if (config.sources.figma) {
