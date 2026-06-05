@@ -172,6 +172,8 @@ export class PrimitivMCPServer {
       text: "typography",
       typo: "typography",
       space: "spacing",
+      size: "sizes",
+      sizing: "sizes",
       "z-index": "zIndex",
       zindex: "zIndex",
       breakpoint: "breakpoints",
@@ -187,7 +189,7 @@ export class PrimitivMCPServer {
       "get_design_context",
       {
         description:
-          "Get the resolved design system context before building UI. Read-only, no side effects. Default (no category) returns a JSON summary of token counts, component names, conflict counts, and contract metadata. Pass category: 'all' | 'tokens' | 'components' | 'conflicts' to get full detail. Pass tokenCategory to filter tokens: colors, spacing, typography, borderRadius, shadows, zIndex, breakpoints, motion (unknown/aliased categories return an actionable error, not a silent empty result). Use this as the first call to understand what exists. For lookups by name, use get_token or get_component instead.",
+          "Get the resolved design system context before building UI. Read-only, no side effects. Default (no category) returns a JSON summary of token counts, component names, conflict counts, and contract metadata. Pass category: 'all' | 'tokens' | 'components' | 'conflicts' to get full detail. Pass tokenCategory to filter tokens: colors, spacing, sizes, typography, borderRadius, shadows, zIndex, breakpoints, motion (unknown/aliased categories return an actionable error, not a silent empty result). Use this as the first call to understand what exists. For lookups by name, use get_token or get_component instead.",
         inputSchema: {
           category: z.string(),
           tokenCategory: z.string()
@@ -257,6 +259,7 @@ export class PrimitivMCPServer {
               k,
               {
                 name: c.name,
+                ...(c.kind ? { kind: c.kind } : {}),
                 source: c.source,
                 propCount: Object.keys(c.props ?? {}).length,
                 ...(c.rationale ? { rationale: c.rationale } : {})
@@ -279,7 +282,7 @@ export class PrimitivMCPServer {
       "get_token",
       {
         description:
-          "Look up a specific design token by name. Read-only, no side effects. Returns the token's name, value, and category, or an error if not found. Pass category to narrow search: colors, spacing, typography, borderRadius, shadows, zIndex, breakpoints, motion (aliases like 'color'/'radius'/'z-index' are normalized). Pass empty string to search all. Use this when you know the token name. For a broad overview of all tokens, use get_design_context with category 'tokens' instead.",
+          "Look up a specific design token by name. Read-only, no side effects. Returns the token's name, value, and category, or an error if not found. Pass category to narrow search: colors, spacing, sizes, typography, borderRadius, shadows, zIndex, breakpoints, motion (aliases like 'color'/'radius'/'z-index' are normalized). Pass empty string to search all. Use this when you know the token name. For a broad overview of all tokens, use get_design_context with category 'tokens' instead.",
         inputSchema: {
           name: z.string(),
           category: z.string()
