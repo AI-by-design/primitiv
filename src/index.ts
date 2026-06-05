@@ -58,10 +58,15 @@ export async function buildContract(
 
   if (config.sources.codebase) {
     const scanner = new CodebaseScanner(config.sources.codebase)
-    const { tokens, components, collisions } = await scanner.scan()
+    const { tokens, components, collisions, internalCssVars } = await scanner.scan()
     sources.push({ name: "codebase", tokens, components })
     log(`   ✓ Found ${Object.values(tokens).reduce((acc, cat) => acc + Object.keys(cat).length, 0)} tokens`)
+    if (internalCssVars > 0) {
+      log(`     (excluded ${internalCssVars} component-internal CSS var${internalCssVars === 1 ? "" : "s"})`)
+    }
     log(`   ✓ Found ${Object.keys(components).length} components`)
+    const kindBreakdown = summarizeKinds(components)
+    if (kindBreakdown) log(`     ${kindBreakdown}`)
     if (collisions.length > 0) {
       const dropped = collisions.reduce((n, c) => n + c.files.length - 1, 0)
       const top = collisions
@@ -161,4 +166,19 @@ export async function serve(configPath?: string): Promise<void> {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
+}
+
+// "kind: component 285 · icon 40 · screen 12" — the AST classifier's breakdown, so a build log
+// shows how much of the component count is reusable UI vs screens/providers/icons/other noise.
+function summarizeKinds(components: Record<string, { kind?: string }>): string {
+  const counts: Record<string, number> = {}
+  for (const c of Object.values(components)) {
+    const kind = c.kind ?? "component"
+    counts[kind] = (counts[kind] ?? 0) + 1
+  }
+  const order = ["component", "screen", "provider", "icon", "other"]
+  const parts = Object.entries(counts)
+    .sort((a, b) => (order.indexOf(a[0]) - order.indexOf(b[0])) || b[1] - a[1])
+    .map(([kind, n]) => `${kind} ${n}`)
+  return parts.length > 1 ? `kind: ${parts.join(" · ")}` : ""
 }

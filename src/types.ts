@@ -104,8 +104,13 @@ export interface ComponentMap {
   [name: string]: Component
 }
 
+export type ComponentKind = "component" | "screen" | "provider" | "icon" | "other"
+
 export interface Component {
   name: string
+  // What the AST scanner judged this export to be. Reusable UI = "component";
+  // screens/providers/icons are tagged (not dropped) so consumers can filter noise.
+  kind?: ComponentKind
   source: SourceProvenance
   variants?: string[]
   props?: Record<string, PropDefinition>
