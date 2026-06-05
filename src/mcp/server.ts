@@ -154,12 +154,39 @@ export class PrimitivMCPServer {
     }
   }
 
+  // Fold common/alias spellings to the canonical token-category key so a filter
+  // never silently returns empty on e.g. "color"/"radius"/"z-index".
+  private normalizeTokenCategory(category: string): string {
+    const aliases: Record<string, string> = {
+      color: "colors",
+      colour: "colors",
+      colours: "colors",
+      shadow: "shadows",
+      elevation: "shadows",
+      radius: "borderRadius",
+      rounded: "borderRadius",
+      "border-radius": "borderRadius",
+      font: "typography",
+      fonts: "typography",
+      text: "typography",
+      typo: "typography",
+      space: "spacing",
+      "z-index": "zIndex",
+      zindex: "zIndex",
+      breakpoint: "breakpoints",
+      screen: "breakpoints",
+      animation: "motion",
+      transition: "motion"
+    }
+    return aliases[category.toLowerCase()] ?? category
+  }
+
   private registerTools(): void {
     this.server.registerTool(
       "get_design_context",
       {
         description:
-          "Get the resolved design system context before building UI. Read-only, no side effects. Default (no category) returns a JSON summary of token counts, component names, conflict counts, and contract metadata. Pass category: 'all' | 'tokens' | 'components' | 'conflicts' to get full detail. Pass tokenCategory to filter tokens: colors, spacing, typography, borderRadius, shadows. Use this as the first call to understand what exists. For lookups by name, use get_token or get_component instead.",
+          "Get the resolved design system context before building UI. Read-only, no side effects. Default (no category) returns a JSON summary of token counts, component names, conflict counts, and contract metadata. Pass category: 'all' | 'tokens' | 'components' | 'conflicts' to get full detail. Pass tokenCategory to filter tokens: colors, spacing, typography, borderRadius, shadows, zIndex, breakpoints, motion (unknown/aliased categories return an actionable error, not a silent empty result). Use this as the first call to understand what exists. For lookups by name, use get_token or get_component instead.",
         inputSchema: {
           category: z.string(),
           tokenCategory: z.string()
@@ -209,11 +236,19 @@ export class PrimitivMCPServer {
 
         const result: Record<string, unknown> = {}
         if (category === "all" || category === "tokens") {
-          result.tokens = args.tokenCategory
-            ? { [args.tokenCategory]: stripSource(this.contract.tokens[args.tokenCategory] || {}) }
-            : Object.fromEntries(
-                Object.entries(this.contract.tokens).map(([cat, tokens]) => [cat, stripSource(tokens)])
+          if (args.tokenCategory) {
+            const tc = this.normalizeTokenCategory(args.tokenCategory)
+            if (!(tc in this.contract.tokens)) {
+              return this.err(
+                `Unknown token category '${args.tokenCategory}'. Available: ${Object.keys(this.contract.tokens).join(", ")}. Pass no tokenCategory to get all.`
               )
+            }
+            result.tokens = { [tc]: stripSource(this.contract.tokens[tc] ?? {}) }
+          } else {
+            result.tokens = Object.fromEntries(
+              Object.entries(this.contract.tokens).map(([cat, tokens]) => [cat, stripSource(tokens)])
+            )
+          }
         }
         if (category === "all" || category === "components") {
           result.components = Object.fromEntries(
@@ -243,7 +278,7 @@ export class PrimitivMCPServer {
       "get_token",
       {
         description:
-          "Look up a specific design token by name. Read-only, no side effects. Returns the token's name, value, and category, or an error if not found. Pass category to narrow search: colors, spacing, typography, borderRadius, shadows. Pass empty string to search all. Use this when you know the token name. For a broad overview of all tokens, use get_design_context with category 'tokens' instead.",
+          "Look up a specific design token by name. Read-only, no side effects. Returns the token's name, value, and category, or an error if not found. Pass category to narrow search: colors, spacing, typography, borderRadius, shadows, zIndex, breakpoints, motion (aliases like 'color'/'radius'/'z-index' are normalized). Pass empty string to search all. Use this when you know the token name. For a broad overview of all tokens, use get_design_context with category 'tokens' instead.",
         inputSchema: {
           name: z.string(),
           category: z.string()
@@ -251,7 +286,9 @@ export class PrimitivMCPServer {
       },
       async (args) => {
         if (!this.contract) return this.noContract()
-        const categories = args.category ? [args.category] : Object.keys(this.contract.tokens)
+        const categories = args.category
+          ? [this.normalizeTokenCategory(args.category)]
+          : Object.keys(this.contract.tokens)
         for (const cat of categories) {
           const tokens = this.contract.tokens[cat]
           if (tokens?.[args.name]) {
