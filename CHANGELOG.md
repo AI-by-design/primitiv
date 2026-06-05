@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.9.0](https://github.com/AI-by-design/primitiv/compare/v1.8.1...v1.9.0) (2026-06-05)
+
+
+### Features
+
+* **scanner:** expand token taxonomy, capture all components per file, surface collisions ([f3faa61](https://github.com/AI-by-design/primitiv/commit/f3faa616cd45f696bcaa41de7cf2250e62a64b60))
+* **scanner:** expand token taxonomy, capture all components per file, surface collisions ([db4074d](https://github.com/AI-by-design/primitiv/commit/db4074d8945e42a7196951141345bc4691833bc3))
+
 ## [1.8.1](https://github.com/AI-by-design/primitiv/compare/v1.8.0...v1.8.1) (2026-06-03)
 
 
