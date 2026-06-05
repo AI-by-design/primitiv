@@ -60,13 +60,13 @@ describe("token taxonomy", () => {
   })
 })
 
-describe("component extraction", () => {
+describe("component extraction (AST)", () => {
   test("captures every component in a file, not just the first", async () => {
     writeFixture(
       "Card.tsx",
-      `export function Card() { return null }
-export function CardHeader() { return null }
-export const CardBody = () => null`
+      `export function Card() { return <div /> }
+export function CardHeader() { return <header /> }
+export const CardBody = () => <section />`
     )
     const { components } = await new CodebaseScanner(source()).scan()
     expect(Object.keys(components)).toContain("Card")
@@ -74,9 +74,52 @@ export const CardBody = () => null`
     expect(Object.keys(components)).toContain("CardBody")
   })
 
+  test("detects forwardRef/memo components exported via a local specifier", async () => {
+    writeFixture(
+      "Button.tsx",
+      `import { forwardRef, memo } from "react"
+const Button = forwardRef((props, ref) => <button ref={ref} {...props} />)
+const Badge = memo(() => <span />)
+export { Button, Badge }`
+    )
+    const { components } = await new CodebaseScanner(source()).scan()
+    expect(Object.keys(components)).toContain("Button")
+    expect(Object.keys(components)).toContain("Badge")
+  })
+
+  test("ignores re-exports from another module (no barrel double-count / false collision)", async () => {
+    writeFixture("ui/Button.tsx", `export function Button() { return <button /> }`)
+    writeFixture("ui/index.tsx", `export { Button } from "./Button"`)
+    const { components, collisions } = await new CodebaseScanner(source()).scan()
+    expect(Object.keys(components).filter((n) => n === "Button")).toHaveLength(1)
+    expect(collisions.find((c) => c.name === "Button")).toBeUndefined()
+  })
+
+  test("excludes non-components (hooks, constants, plain objects)", async () => {
+    writeFixture(
+      "stuff.tsx",
+      `export const MAX = 42
+export function useThing() { return 5 }
+export const config = { a: 1 }
+export function Widget() { return <div /> }`
+    )
+    const { components } = await new CodebaseScanner(source()).scan()
+    expect(Object.keys(components)).toEqual(["Widget"])
+  })
+
+  test("classifies kind (icon / provider / component)", async () => {
+    writeFixture("ChevronIcon.tsx", `export const ChevronIcon = () => <svg />`)
+    writeFixture("ThemeProvider.tsx", `export function ThemeProvider() { return <div /> }`)
+    writeFixture("Button.tsx", `export function Button() { return <button /> }`)
+    const { components } = await new CodebaseScanner(source()).scan()
+    expect(components.ChevronIcon?.kind).toBe("icon")
+    expect(components.ThemeProvider?.kind).toBe("provider")
+    expect(components.Button?.kind).toBe("component")
+  })
+
   test("surfaces same-name collisions instead of silently dropping them", async () => {
-    writeFixture("list/Item.tsx", `export function Item() { return null }`)
-    writeFixture("menu/Item.tsx", `export function Item() { return null }`)
+    writeFixture("list/Item.tsx", `export function Item() { return <li /> }`)
+    writeFixture("menu/Item.tsx", `export function Item() { return <li /> }`)
     const { components, collisions } = await new CodebaseScanner(source()).scan()
     expect(Object.keys(components).filter((n) => n === "Item")).toHaveLength(1)
     const itemCollision = collisions.find((c) => c.name === "Item")
