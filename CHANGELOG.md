@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.10.0](https://github.com/AI-by-design/primitiv/compare/v1.9.0...v1.10.0) (2026-06-05)
+
+
+### Features
+
+* **scanner:** AST token extraction + CSS selector-scope split ([03f699f](https://github.com/AI-by-design/primitiv/commit/03f699fabda7b9693b1208614a839218a06e9fc3))
+* **scanner:** AST-based component detection + classification ([936b1e9](https://github.com/AI-by-design/primitiv/commit/936b1e9a79d5804c8ab641ab6b27eda2931e1397))
+* **scanner:** AST-based extraction (Phases 1–3 — components, TS tokens, CSS scope) ([762ca5c](https://github.com/AI-by-design/primitiv/commit/762ca5c261bc957a8b2fa1e1c8811d3d891b8c39))
+
 ## [1.9.0](https://github.com/AI-by-design/primitiv/compare/v1.8.1...v1.9.0) (2026-06-05)
 
 
