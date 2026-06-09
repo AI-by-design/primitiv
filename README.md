@@ -40,7 +40,7 @@ Tokens file     ──┤
 Any adapter     ──┘
 ```
 
-1. **Scan** — Primitiv ingests from any configured source via adapters
+1. **Scan** — Primitiv ingests from any configured source via adapters. The codebase scanner parses TypeScript/JSX structurally (AST, not regex): every component in a file is captured at its definition site and classified by `kind`, theme tokens are pulled across all categories, and component-internal CSS variables are separated from the global design-token scale
 2. **Reconcile** — Conflicts between sources are surfaced and resolved according to your governance configuration
 3. **Infer** — Design rules are extracted from actual codebase patterns and written into the contract
 4. **Contract** — A single `primitiv.contract.json` is written as the canonical reference
@@ -71,9 +71,9 @@ bun add @ai-by-design/primitiv
 
 | Tool | Description |
 |------|-------------|
-| `get_design_context` | Get tokens, components, conflicts, inferred rules, and violation count. Default (no category) returns a summary with counts. Pass `category: "all" \| "tokens" \| "components" \| "conflicts"` for full detail. Filter tokens with `tokenCategory`. |
-| `get_token` | Look up a specific token by name. Pass `category` to narrow search (e.g. `"colors"`, `"spacing"`). |
-| `get_component` | Look up a specific component by name. Returns props, variants, and source provenance. |
+| `get_design_context` | Get tokens, components, conflicts, inferred rules, and violation count. Default (no category) returns a summary with counts. Pass `category: "all" \| "tokens" \| "components" \| "conflicts"` for full detail. Filter tokens with `tokenCategory`: `colors`, `spacing`, `sizes`, `typography`, `borderRadius`, `shadows`, `zIndex`, `breakpoints`, `motion`. |
+| `get_token` | Look up a specific token by name. Pass `category` to narrow search (e.g. `"colors"`, `"spacing"`, `"borderRadius"`); aliases like `"radius"` / `"z-index"` are normalized. |
+| `get_component` | Look up a specific component by name. Returns props, variants, source provenance, and `kind` — `component`, `screen`, `provider`, `icon`, or `other`, so agents reuse real UI and skip screens/providers/icons. |
 | `get_conflicts` | Get conflicts between sources. Pass `type: "all" \| "token" \| "component"` and `status: "all" \| "pending" \| "resolved"`. Returns `actionableCount` and `pendingDecisionCount` alongside the list. |
 | `get_inferred_rules` | Get the design rules Primitiv has extracted from your codebase patterns. Pass `category` to filter. |
 | `get_violations` | List token-misuse violations — hardcoded literals in source that bypass the contract. Smart-matched to a suggested token when the literal matches one. Pass `category: "all" \| "colors" \| "spacing"` to filter. |
@@ -248,6 +248,7 @@ Bug reports, feature ideas, and PRs are welcome. See [CONTRIBUTING.md](./CONTRIB
 - [x] Token-misuse detection — `build` and `verify` lint for hardcoded Tailwind arbitrary values and smart-match them to existing tokens; exposed via the `get_violations` MCP tool
 - [x] Rationale layer — annotate tokens with `why` / `when` / `deprecated` / `alternatives` via `primitiv.rationale.yml`; agents prefer annotated tokens and refuse deprecated ones
 - [x] CI enforcement — `primitiv init` auto-installs a GitHub Actions workflow that runs `verify --strict` on every PR, failing on conflicts, token misuse, or stale contracts
+- [x] Structural (AST) extraction — the codebase scanner parses TypeScript/JSX with an AST instead of regex: every component is captured at its definition site (incl. `forwardRef` / `memo` / `styled` / factory wrappers) and classified by `kind`; theme tokens are extracted across nine categories (colors, spacing, sizes, typography, border-radius, shadows, z-index, breakpoints, motion) with Tailwind class strings rejected and scale aliases resolved; component-internal CSS variables are separated from the global design-token scale
 - [ ] Token relationships — document how tokens relate and what constraints exist between them
 
 ## Part of a larger system
