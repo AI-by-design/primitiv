@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.11.0](https://github.com/AI-by-design/primitiv/compare/v1.10.0...v1.11.0) (2026-06-09)
+
+
+### Features
+
+* **init:** rewrite build-component skill with reuse + token ladders ([1c7575a](https://github.com/AI-by-design/primitiv/commit/1c7575aa1952b86dd38558b34ca63dee7b2fabb6))
+* **init:** rewrite build-component skill with reuse + token ladders ([19befaa](https://github.com/AI-by-design/primitiv/commit/19befaa4e8193fd0ec71be4e73edc982f112d945))
+
 ## [1.10.0](https://github.com/AI-by-design/primitiv/compare/v1.9.0...v1.10.0) (2026-06-05)
 
 
