@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.0.0](https://github.com/AI-by-design/primitiv/compare/v1.12.0...v2.0.0) (2026-06-15)
+
+
+### ⚠ BREAKING CHANGES
+
+* **mcp:** component contract keys moved from bare name to path-qualified id (contract version 0.2.0 -> 0.3.0), first shipped in 1.12.0. 2.0.0 re-releases it with the correct major version. The first rebuild reports a one-time informative re-key diff; the MCP server reads pre-0.3 contracts via a derived name index.
+
+### Features
+
+* **mcp:** surface contract schema version in get_design_context ([a1d7fe0](https://github.com/AI-by-design/primitiv/commit/a1d7fe054480f8605eaac900c3cfb9dde82bb77a))
+* **mcp:** surface contract schema version in get_design_context ([93a94d1](https://github.com/AI-by-design/primitiv/commit/93a94d1938a8c8a317e2f950d85eb3ab71fcc7ff))
+
 ## [1.12.0](https://github.com/AI-by-design/primitiv/compare/v1.11.0...v1.12.0) (2026-06-15)
 
 
