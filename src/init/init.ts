@@ -274,7 +274,7 @@ Once validated, use the contract for all UI work:
 - \`get_design_context { category: "tokens" }\` — full token list
 - \`get_design_context { category: "components" }\` — full component list
 - \`get_token { name: "...", category: "..." }\` — look up a specific token
-- \`get_component { name: "..." }\` — look up a specific component
+- \`get_component { name: "...", context: "<your working file or dir>" }\` — look up a specific component; pass your working path so same-name components resolve by scope. An \`ambiguous\` response carries an \`instruction\` — follow it (scope → \`rationale.when\` vs the user's intent → ask the user); never pick one arbitrarily
 - \`get_conflicts\` — see unresolved design conflicts
 - \`get_inferred_rules\` — see design rules inferred from the codebase
 - \`get_violations\` — see hardcoded literals in the codebase that bypass the contract

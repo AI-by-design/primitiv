@@ -58,7 +58,7 @@ export async function buildContract(
 
   if (config.sources.codebase) {
     const scanner = new CodebaseScanner(config.sources.codebase)
-    const { tokens, components, collisions, internalCssVars } = await scanner.scan()
+    const { tokens, components, internalCssVars } = await scanner.scan()
     sources.push({ name: "codebase", tokens, components })
     log(`   ✓ Found ${Object.values(tokens).reduce((acc, cat) => acc + Object.keys(cat).length, 0)} tokens`)
     if (internalCssVars > 0) {
@@ -67,18 +67,6 @@ export async function buildContract(
     log(`   ✓ Found ${Object.keys(components).length} components`)
     const kindBreakdown = summarizeKinds(components)
     if (kindBreakdown) log(`     ${kindBreakdown}`)
-    if (collisions.length > 0) {
-      const dropped = collisions.reduce((n, c) => n + c.files.length - 1, 0)
-      const top = collisions
-        .slice()
-        .sort((a, b) => b.files.length - a.files.length)
-        .slice(0, 8)
-        .map((c) => `${c.name}(×${c.files.length})`)
-        .join(", ")
-      log(
-        `   ⚠ ${collisions.length} same-name component collision${collisions.length === 1 ? "" : "s"} — ${dropped} dropped (kept first). Top: ${top}`
-      )
-    }
   }
 
   if (config.sources.figma) {
@@ -112,8 +100,23 @@ export async function buildContract(
   contract.sourceRoot = projectRoot
   contract.configPath = path.resolve(cwd, configPath || "primitiv.config.js")
 
+  // Non-blocking notice: same-name components now coexist under qualified ids instead of
+  // first-wins. Surfaced so nobody mistakes a multi-id name for a duplicate-scan bug.
+  const coexisting = Object.entries(contract.componentNameIndex ?? {}).filter(([, ids]) => ids.length > 1)
+  if (coexisting.length > 0) {
+    const top = coexisting
+      .sort((a, b) => b[1].length - a[1].length)
+      .slice(0, 8)
+      .map(([name, ids]) => `${name}(×${ids.length})`)
+      .join(", ")
+    log(
+      `   ℹ ${coexisting.length} component name${coexisting.length === 1 ? "" : "s"} with multiple implementations — coexisting, resolved at lookup by scope/rationale. Top: ${top}`
+    )
+  }
+
   const rationale = loadRationale(config, projectRoot)
-  applyRationale(contract.tokens, contract.components, rationale)
+  const rationaleWarnings = applyRationale(contract.tokens, contract.components, rationale)
+  for (const warning of rationaleWarnings) log(`   ⚠ ${warning}`)
   const rationaleTokenCount = Object.keys(rationale.tokens ?? {}).length
   const rationaleComponentCount = Object.keys(rationale.components ?? {}).length
   if (rationaleTokenCount > 0 || rationaleComponentCount > 0) {

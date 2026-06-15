@@ -37,11 +37,16 @@ export function loadRationale(config: PrimitivConfig, configDir: string): Ration
 /**
  * Attach rationale entries to tokens and components in-place.
  * Token keys use dotted paths ("colors.primary" → tokens.colors.primary).
- * Component keys use the component name as it appears in the contract.
+ * Component keys are either a qualified id ("components/ui/Card") or a bare
+ * display name ("Card"); a bare name only applies when exactly one component
+ * carries it — an ambiguous bare name applies to nothing and comes back as a
+ * warning telling the user to qualify by id, since each same-name component
+ * needs its own `when` for lookup-time resolution to mean anything.
  * Unknown keys are silently ignored — lets rationale files drift ahead of
  * the contract without breaking the build.
  */
-export function applyRationale(tokens: TokenMap, components: ComponentMap, rationale: RationaleMap): void {
+export function applyRationale(tokens: TokenMap, components: ComponentMap, rationale: RationaleMap): string[] {
+  const warnings: string[] = []
   if (rationale.tokens) {
     for (const [dottedKey, value] of Object.entries(rationale.tokens)) {
       const dotIdx = dottedKey.indexOf(".")
@@ -54,11 +59,29 @@ export function applyRationale(tokens: TokenMap, components: ComponentMap, ratio
     }
   }
   if (rationale.components) {
-    for (const [name, value] of Object.entries(rationale.components)) {
-      const component = components[name]
-      if (component) component.rationale = value
+    const byName: Record<string, string[]> = {}
+    for (const [id, component] of Object.entries(components)) {
+      const name = component.displayName ?? component.name
+      if (!byName[name]) byName[name] = []
+      byName[name].push(id)
+    }
+    for (const [key, value] of Object.entries(rationale.components)) {
+      if (components[key]) {
+        components[key].rationale = value
+        continue
+      }
+      const ids = byName[key] ?? []
+      if (ids.length === 1) {
+        components[ids[0]].rationale = value
+      } else if (ids.length > 1) {
+        warnings.push(
+          `rationale key '${key}' matches ${ids.length} components (${ids.join(", ")}) — ` +
+            `not applied. Qualify it with a component id so each gets its own rationale.`
+        )
+      }
     }
   }
+  return warnings
 }
 
 function resolveSidecarPath(config: PrimitivConfig, configDir: string): string | null {

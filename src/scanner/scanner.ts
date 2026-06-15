@@ -3,7 +3,7 @@ import * as path from "node:path"
 import { parse } from "@babel/parser"
 import type * as t from "@babel/types"
 import { glob } from "glob"
-import type { CodebaseSource, Collision, ComponentKind, ComponentMap, TokenMap } from "../types"
+import type { CodebaseSource, ComponentKind, ComponentMap, TokenMap } from "../types"
 
 export class CodebaseScanner {
   constructor(private config: CodebaseSource) {}
@@ -11,13 +11,12 @@ export class CodebaseScanner {
   async scan(): Promise<{
     tokens: TokenMap
     components: ComponentMap
-    collisions: Collision[]
     internalCssVars: number
   }> {
     const files = await this.getFiles()
     const { tokens, internalCssVars } = await this.extractTokens(files)
-    const { components, collisions } = await this.extractComponents(files)
-    return { tokens, components, collisions, internalCssVars }
+    const components = await this.extractComponents(files)
+    return { tokens, components, internalCssVars }
   }
 
   private async getFiles(): Promise<string[]> {
@@ -214,24 +213,18 @@ export class CodebaseScanner {
     return "other"
   }
 
-  private async extractComponents(files: string[]): Promise<{ components: ComponentMap; collisions: Collision[] }> {
+  private async extractComponents(files: string[]): Promise<ComponentMap> {
     const components: ComponentMap = {}
-    const collided: Record<string, string[]> = {}
     const componentFiles = files.filter((f) => f.endsWith(".tsx") || f.endsWith(".jsx"))
 
     for (const file of componentFiles) {
       const content = fs.readFileSync(path.resolve(this.config.root, file), "utf-8")
       for (const found of componentsInFile(content, file)) {
-        const existing = components[found.name]
-        if (existing) {
-          // Same-name collision: keep the first, record the rest so the loss isn't silent.
-          // (Coexistence via path-qualified identity is the Option-C work — see COMPONENT_IDENTITY_PLAN.md.)
-          if (!collided[found.name]) collided[found.name] = [existing.source.file ?? "?"]
-          collided[found.name].push(file)
-          continue
-        }
-        components[found.name] = {
+        // Path-qualified id: same-name components in different files coexist instead of
+        // first-wins. Same-file siblings get distinct ids via the #Name qualifier.
+        components[componentId(file, found.name)] = {
           name: found.name,
+          displayName: found.name,
           kind: found.kind,
           source: { adapter: "codebase", file, line: found.line },
           props: this.extractProps(content)
@@ -239,8 +232,7 @@ export class CodebaseScanner {
       }
     }
 
-    const collisions: Collision[] = Object.entries(collided).map(([name, fileList]) => ({ name, files: fileList }))
-    return { components, collisions }
+    return components
   }
 
   private extractProps(content: string): Record<string, { type: string; required: boolean }> {
@@ -268,6 +260,26 @@ interface FoundComponent {
   name: string
   line: number
   kind: ComponentKind
+}
+
+// Path-qualified component id: the file's path relative to the scan root, sans extension,
+// with `#Name` appended only when the component's name doesn't match its filename — so
+// `Card` in `components/ui/Card.tsx` keeps the clean id `components/ui/Card` while compound
+// siblings in the same file get `components/ui/Card#CardHeader`. The match is normalized
+// (case/separator-insensitive: `card-header.tsx` ↔ `CardHeader`) and `index.*` files match
+// their folder name. Qualification depends only on the component's own name vs its file,
+// never on what else lives there, so adding a sibling can't re-key an existing component.
+function componentId(file: string, name: string): string {
+  const posixFile = file.split(path.sep).join("/")
+  const id = posixFile.replace(/\.[^/.]+$/, "")
+  const segments = id.split("/")
+  const base = segments[segments.length - 1]
+  const effectiveBase = /^index$/i.test(base) && segments.length >= 2 ? segments[segments.length - 2] : base
+  return normalizeForIdMatch(name) === normalizeForIdMatch(effectiveBase) ? id : `${id}#${name}`
+}
+
+function normalizeForIdMatch(s: string): string {
+  return s.replace(/[^a-z0-9]/gi, "").toLowerCase()
 }
 
 // Parse a TS/JSX file and return the components it DEFINES and EXPORTS (definition-site only).
