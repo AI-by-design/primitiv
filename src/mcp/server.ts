@@ -2,6 +2,7 @@ import * as fs from "node:fs"
 import * as path from "node:path"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js"
 import { z } from "zod"
 import { normalizeRuleCategory, RULE_CATEGORIES } from "../inferrer"
 import type { PrimitivContract, Rationale } from "../types"
@@ -10,20 +11,27 @@ export class PrimitivMCPServer {
   private server: McpServer
   private contract: PrimitivContract | null = null
   private watcher: fs.FSWatcher | null = null
+  private derivedNameIndex: Record<string, string[]> | null = null
 
   constructor(private contractPath: string) {
     this.server = new McpServer({
       name: "primitiv",
-      version: "0.2.0"
+      version: "0.3.0"
     })
     this.loadContract()
     this.registerTools()
     this.watchContract()
   }
 
-  async start(): Promise<void> {
-    const transport = new StdioServerTransport()
+  // Transport is injectable so tests can drive the real tool surface over an in-memory
+  // pair; production callers take the stdio default.
+  async start(transport: Transport = new StdioServerTransport()): Promise<void> {
     await this.server.connect(transport)
+  }
+
+  async stop(): Promise<void> {
+    this.watcher?.close()
+    await this.server.close()
   }
 
   private loadContract(): void {
@@ -31,11 +39,29 @@ export class PrimitivMCPServer {
       try {
         const raw = fs.readFileSync(this.contractPath, "utf-8")
         this.contract = JSON.parse(raw)
+        this.derivedNameIndex = null
         this.warnIfMismatched()
       } catch {
         process.stderr.write(`primitiv: failed to parse contract at ${this.contractPath}\n`)
       }
     }
+  }
+
+  // displayName → ids. Contracts ≥0.3 carry the index; for older ones (bare-name keys,
+  // no displayName) it's derived once per load so name lookups keep working.
+  private nameIndex(): Record<string, string[]> {
+    if (!this.contract) return {}
+    if (this.contract.componentNameIndex) return this.contract.componentNameIndex
+    if (!this.derivedNameIndex) {
+      const index: Record<string, string[]> = {}
+      for (const [id, c] of Object.entries(this.contract.components)) {
+        const name = c.displayName ?? c.name
+        if (!index[name]) index[name] = []
+        index[name].push(id)
+      }
+      this.derivedNameIndex = index
+    }
+    return this.derivedNameIndex
   }
 
   private warnIfMismatched(): void {
@@ -214,7 +240,7 @@ export class PrimitivMCPServer {
             contractAgeHours,
             sources: this.contract.sources,
             tokenCounts,
-            componentNames: Object.keys(this.contract.components),
+            componentNames: [...new Set(Object.values(this.contract.components).map((c) => c.displayName ?? c.name))].sort(),
             componentCount: Object.keys(this.contract.components).length,
             conflictCount: this.contract.conflicts.length,
             pendingConflicts: this.contract.conflicts.filter((c) => c.resolution === "pending").length,
@@ -255,10 +281,11 @@ export class PrimitivMCPServer {
         }
         if (category === "all" || category === "components") {
           result.components = Object.fromEntries(
-            Object.entries(this.contract.components).map(([k, c]) => [
-              k,
+            Object.entries(this.contract.components).map(([id, c]) => [
+              id,
               {
-                name: c.name,
+                id,
+                displayName: c.displayName ?? c.name,
                 ...(c.kind ? { kind: c.kind } : {}),
                 source: c.source,
                 propCount: Object.keys(c.props ?? {}).length,
@@ -309,19 +336,69 @@ export class PrimitivMCPServer {
       "get_component",
       {
         description:
-          "Look up a specific component by name. Read-only, no side effects. Returns JSON with source provenance, props, and variants, or an error listing available components if not found. Use this when you need implementation details for a known component to reuse it rather than recreate it. For a list of all component names, use get_design_context with category 'components' instead.",
+          "Look up a component by name or id. Read-only, no side effects. Pass context (your current working file or directory) so same-name components resolve by path scope. Returns the component JSON (with its id) when the lookup resolves to exactly one component, or an error listing available names if not found. When several components share the name and neither governance nor scope decides, returns { ambiguous, matches, instruction } — follow the instruction: match each candidate's rationale.when against the user's intent, and if that doesn't decide, ask the user; never pick arbitrarily. Use this when you need implementation details for a known component to reuse it rather than recreate it. For a list of all components, use get_design_context with category 'components' instead.",
         inputSchema: {
-          name: z.string()
+          name: z.string(),
+          // Optional by design: a name-only lookup must keep working (and fall through to
+          // the ambiguous payload on multi-match), never fail validation.
+          context: z.string().optional()
         }
       },
       async (args) => {
         if (!this.contract) return this.noContract()
-        const component = this.contract.components[args.name]
-        if (!component) {
-          const available = Object.keys(this.contract.components).join(", ")
+        const components = this.contract.components
+
+        // Direct hit — `name` may already be a qualified id (`components/ui/Card`, `figma:Card`).
+        if (components[args.name]) return this.json({ id: args.name, ...components[args.name] })
+
+        const ids = this.nameIndex()[args.name] ?? []
+        if (ids.length === 0) {
+          const available = [...new Set(Object.values(components).map((c) => c.displayName ?? c.name))]
+            .sort()
+            .join(", ")
           return this.err(`Component '${args.name}' not found. Available: ${available}`)
         }
-        return this.json(component)
+        if (ids.length === 1) return this.json({ id: ids[0], ...components[ids[0]] })
+
+        // Resolution order: governance → scope → hand the decision to the agent's ladder
+        // (rationale.when vs intent, then ask the user). The contract decides what it can;
+        // the agent never free-chooses.
+        const governed = this.contract.conflicts.find(
+          (c) => c.type === "component" && c.name === args.name && c.resolved !== undefined && ids.includes(c.resolved)
+        )
+        if (governed?.resolved !== undefined) {
+          const id = governed.resolved
+          return this.json({ id, resolvedBy: "governance.sourceOfTruth", ...components[id] })
+        }
+
+        if (args.context) {
+          const scoped = resolveByScope(
+            ids.map((id) => ({ id, dir: components[id].scope ?? idDirectory(id) })),
+            args.context
+          )
+          if (scoped !== null) return this.json({ id: scoped, resolvedBy: "scope", ...components[scoped] })
+        }
+
+        // Ambiguous is a governed payload, not an error — the instruction ships in the
+        // response so the resolution rules hold even for an agent that never read the docs.
+        return this.json({
+          ambiguous: true,
+          name: args.name,
+          matches: ids.map((id) => {
+            const c = components[id]
+            return {
+              id,
+              displayName: c.displayName ?? c.name,
+              ...(c.kind ? { kind: c.kind } : {}),
+              ...(c.source.file ? { file: c.source.file } : {}),
+              adapter: c.source.adapter,
+              ...(c.rationale ? { rationale: c.rationale } : {})
+            }
+          }),
+          instruction:
+            "Resolve by scope against your working path, then by rationale.when vs the user's intent. " +
+            "If neither decides, ask the user which component is intended — do not choose arbitrarily."
+        })
       }
     )
 
@@ -429,4 +506,48 @@ export class PrimitivMCPServer {
       }
     )
   }
+}
+
+// Pick the candidate whose directory (or explicit scope) most specifically contains the
+// agent's working path. Component ids are scan-root-relative while the context path may be
+// project-relative or absolute, so containment is segment-based: a candidate matches when
+// its directory segments appear contiguously in the context's segments. The deepest unique
+// match wins; a tie resolves nothing and falls through to the agent's ladder.
+function resolveByScope(candidates: Array<{ id: string; dir: string }>, context: string): string | null {
+  const contextSegs = pathSegments(context)
+  if (contextSegs.length === 0) return null
+  let best: string[] = []
+  let bestDepth = 0
+  for (const { id, dir } of candidates) {
+    const dirSegs = pathSegments(dir)
+    if (dirSegs.length === 0 || !containsSegments(contextSegs, dirSegs)) continue
+    if (dirSegs.length > bestDepth) {
+      best = [id]
+      bestDepth = dirSegs.length
+    } else if (dirSegs.length === bestDepth) {
+      best.push(id)
+    }
+  }
+  return best.length === 1 ? best[0] : null
+}
+
+// `components/ui/Card#CardHeader` → `components/ui`; `figma:Card` → `` (no scope).
+function idDirectory(id: string): string {
+  const noFragment = id.split("#")[0]
+  const slash = noFragment.lastIndexOf("/")
+  return slash === -1 ? "" : noFragment.slice(0, slash)
+}
+
+function pathSegments(p: string): string[] {
+  return p.split(/[\\/]+/).filter((s) => s !== "" && s !== "." && s !== "..")
+}
+
+function containsSegments(haystack: string[], needle: string[]): boolean {
+  outer: for (let i = 0; i + needle.length <= haystack.length; i++) {
+    for (let j = 0; j < needle.length; j++) {
+      if (haystack[i + j] !== needle[j]) continue outer
+    }
+    return true
+  }
+  return false
 }

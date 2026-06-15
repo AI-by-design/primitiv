@@ -62,8 +62,11 @@ export class StorybookAdapter implements Source {
 
       const props = this.extractProps(data.importPath)
 
-      components[name] = {
+      // Source-prefixed id, mirroring the Figma adapter: importPath points at the story
+      // file (not the component), so a path id would lie about where the component lives.
+      components[`storybook:${name}`] = {
         name,
+        displayName: name,
         source: {
           adapter: "storybook",
           file: data.importPath,

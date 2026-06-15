@@ -121,8 +121,11 @@ export class FigmaAdapter implements Source {
       const name = comp.name
       if (!name) continue
 
-      components[name] = {
+      // Source-prefixed id: Figma components have no fs path, and the prefix guarantees the
+      // id can never collide with a codebase path id. Name lookups go through displayName.
+      components[`figma:${name}`] = {
         name,
+        displayName: name,
         source: {
           adapter: "figma",
           metadata: {

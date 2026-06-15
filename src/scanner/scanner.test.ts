@@ -186,7 +186,7 @@ export default config`
 })
 
 describe("component extraction (AST)", () => {
-  test("captures every component in a file, not just the first", async () => {
+  test("captures every component in a file under distinct ids (#Name qualifier for siblings)", async () => {
     writeFixture(
       "Card.tsx",
       `export function Card() { return <div /> }
@@ -194,9 +194,9 @@ export function CardHeader() { return <header /> }
 export const CardBody = () => <section />`
     )
     const { components } = await new CodebaseScanner(source()).scan()
-    expect(Object.keys(components)).toContain("Card")
-    expect(Object.keys(components)).toContain("CardHeader")
-    expect(Object.keys(components)).toContain("CardBody")
+    expect(components.Card?.displayName).toBe("Card")
+    expect(components["Card#CardHeader"]?.displayName).toBe("CardHeader")
+    expect(components["Card#CardBody"]?.displayName).toBe("CardBody")
   })
 
   test("detects forwardRef/memo components exported via a local specifier", async () => {
@@ -208,16 +208,17 @@ const Badge = memo(() => <span />)
 export { Button, Badge }`
     )
     const { components } = await new CodebaseScanner(source()).scan()
-    expect(Object.keys(components)).toContain("Button")
-    expect(Object.keys(components)).toContain("Badge")
+    expect(components.Button?.displayName).toBe("Button")
+    expect(components["Button#Badge"]?.displayName).toBe("Badge")
   })
 
-  test("ignores re-exports from another module (no barrel double-count / false collision)", async () => {
+  test("ignores re-exports from another module (no barrel double-count)", async () => {
     writeFixture("ui/Button.tsx", `export function Button() { return <button /> }`)
     writeFixture("ui/index.tsx", `export { Button } from "./Button"`)
-    const { components, collisions } = await new CodebaseScanner(source()).scan()
-    expect(Object.keys(components).filter((n) => n === "Button")).toHaveLength(1)
-    expect(collisions.find((c) => c.name === "Button")).toBeUndefined()
+    const { components } = await new CodebaseScanner(source()).scan()
+    const buttons = Object.values(components).filter((c) => c.displayName === "Button")
+    expect(buttons).toHaveLength(1)
+    expect(components["ui/Button"]).toBeDefined()
   })
 
   test("excludes non-components (hooks, constants, plain objects)", async () => {
@@ -229,7 +230,7 @@ export const config = { a: 1 }
 export function Widget() { return <div /> }`
     )
     const { components } = await new CodebaseScanner(source()).scan()
-    expect(Object.keys(components)).toEqual(["Widget"])
+    expect(Object.keys(components)).toEqual(["stuff#Widget"])
   })
 
   test("classifies kind (icon / provider / component)", async () => {
@@ -242,13 +243,40 @@ export function Widget() { return <div /> }`
     expect(components.Button?.kind).toBe("component")
   })
 
-  test("surfaces same-name collisions instead of silently dropping them", async () => {
+  test("same-name components in different files coexist under path-qualified ids", async () => {
     writeFixture("list/Item.tsx", `export function Item() { return <li /> }`)
     writeFixture("menu/Item.tsx", `export function Item() { return <li /> }`)
-    const { components, collisions } = await new CodebaseScanner(source()).scan()
-    expect(Object.keys(components).filter((n) => n === "Item")).toHaveLength(1)
-    const itemCollision = collisions.find((c) => c.name === "Item")
-    expect(itemCollision).toBeDefined()
-    expect(itemCollision?.files).toHaveLength(2)
+    const { components } = await new CodebaseScanner(source()).scan()
+    expect(components["list/Item"]?.displayName).toBe("Item")
+    expect(components["menu/Item"]?.displayName).toBe("Item")
+    expect(components["list/Item"]?.source.file).toBe("list/Item.tsx")
+    expect(components["menu/Item"]?.source.file).toBe("menu/Item.tsx")
+  })
+})
+
+describe("component identity (path-qualified ids)", () => {
+  test("id is the relative path sans extension when the name matches the filename", async () => {
+    writeFixture("components/ui/Card.tsx", `export function Card() { return <div /> }`)
+    const { components } = await new CodebaseScanner(source()).scan()
+    expect(components["components/ui/Card"]?.displayName).toBe("Card")
+  })
+
+  test("index.* files take their folder name as the effective filename", async () => {
+    writeFixture("components/Card/index.tsx", `export function Card() { return <div /> }`)
+    const { components } = await new CodebaseScanner(source()).scan()
+    expect(components["components/Card/index"]?.displayName).toBe("Card")
+  })
+
+  test("filename match is normalized — kebab-case file matches PascalCase component", async () => {
+    writeFixture("ui/card-header.tsx", `export function CardHeader() { return <header /> }`)
+    const { components } = await new CodebaseScanner(source()).scan()
+    expect(components["ui/card-header"]?.displayName).toBe("CardHeader")
+    expect(Object.keys(components).some((id) => id.includes("#"))).toBe(false)
+  })
+
+  test("a component whose name doesn't match its file gets the #Name qualifier", async () => {
+    writeFixture("ui/widgets.tsx", `export function Widget() { return <div /> }`)
+    const { components } = await new CodebaseScanner(source()).scan()
+    expect(components["ui/widgets#Widget"]?.displayName).toBe("Widget")
   })
 })
