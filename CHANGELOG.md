@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.12.0](https://github.com/AI-by-design/primitiv/compare/v1.11.0...v1.12.0) (2026-06-15)
+
+
+### Features
+
+* **contract:** path-qualified component identity + governed resolution ([45bfa27](https://github.com/AI-by-design/primitiv/commit/45bfa27e95d5d89645a4b992de9e891feb2c589b))
+* **contract:** path-qualified component identity + governed resolution ([16e1f19](https://github.com/AI-by-design/primitiv/commit/16e1f192ef6663c3e6b78d4c58772e6efb1425fa))
+
 ## [1.11.0](https://github.com/AI-by-design/primitiv/compare/v1.10.0...v1.11.0) (2026-06-09)
 
 
