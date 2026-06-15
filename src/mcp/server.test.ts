@@ -195,3 +195,13 @@ describe("get_component resolution", () => {
     expect(JSON.parse(text).id).toBe("Card")
   })
 })
+
+describe("get_design_context", () => {
+  test("summary surfaces the contract schema version", async () => {
+    const c = await connect(writeContract({ version: "0.3.0" }))
+    const result = await c.callTool({ name: "get_design_context", arguments: { category: "", tokenCategory: "" } })
+    const content = result.content as Array<{ type: string; text: string }>
+    const payload = JSON.parse(content[0].text)
+    expect(payload.contractVersion).toBe("0.3.0")
+  })
+})

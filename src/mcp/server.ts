@@ -235,6 +235,7 @@ export class PrimitivMCPServer {
           const warnings = this.getContractWarnings()
           return this.json({
             ...(warnings.length > 0 ? { warnings } : {}),
+            contractVersion: this.contract.version,
             sourceRoot: this.contract.sourceRoot ?? "(unknown — rebuild with latest primitiv)",
             generatedAt: this.contract.generatedAt,
             contractAgeHours,
