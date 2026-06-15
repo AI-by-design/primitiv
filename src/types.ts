@@ -77,6 +77,9 @@ export interface PrimitivContract {
   configPath: string
   tokens: TokenMap
   components: ComponentMap
+  // displayName → component ids. The lookup bridge from the bare names agents know
+  // ("Card") to the qualified keys in `components`. Optional so pre-0.3 contracts load.
+  componentNameIndex?: Record<string, string[]>
   conflicts: Conflict[]
   inferredRules?: InferredRules
   // Optional so older contract files (pre-1.6) load without crashing.
@@ -100,17 +103,30 @@ export interface Token {
   rationale?: Rationale
 }
 
+// Keyed by component id, not bare name, so same-name components coexist instead of
+// overwriting each other. Codebase ids are path-qualified: the file's path relative to the
+// scan root, sans extension (`components/ui/Card`), with `#Name` appended only when the
+// component's name doesn't match its filename (`components/ui/Card#CardHeader` for a
+// compound sibling; normalized match, so `card-header.tsx` ↔ `CardHeader` and `index.*` ↔
+// folder name). Figma/Storybook components have no fs path; their ids are source-prefixed
+// (`figma:Card`, `storybook:Card`) so they can never collide with path ids.
 export interface ComponentMap {
-  [name: string]: Component
+  [id: string]: Component
 }
 
 export type ComponentKind = "component" | "screen" | "provider" | "icon" | "other"
 
 export interface Component {
   name: string
+  // The bare export name (`Card`) — what humans and agents call it. The map key is the
+  // qualified id; lookups by name go through the contract's componentNameIndex.
+  displayName?: string
   // What the AST scanner judged this export to be. Reusable UI = "component";
   // screens/providers/icons are tagged (not dropped) so consumers can filter noise.
   kind?: ComponentKind
+  // Optional explicit override for path-scope resolution when the file's own path
+  // isn't the right scope (e.g. a shared component that should win in one app area).
+  scope?: string
   source: SourceProvenance
   variants?: string[]
   props?: Record<string, PropDefinition>
@@ -122,14 +138,6 @@ export interface PropDefinition {
   type: string
   required: boolean
   default?: string
-}
-
-// A same-name component collision found during a codebase scan: two or more files
-// export a component with the same name. Surfaced (not silently dropped) by the
-// scanner; the first occurrence wins in the contract until path-qualified identity lands.
-export interface Collision {
-  name: string
-  files: string[]
 }
 
 export interface Conflict {

@@ -153,6 +153,15 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
     messages.push(`✓ Contract is fresh (age ${formatAge(ageHours)}), conflicts resolved, no token misuses.`)
   }
 
+  // Same-name coexistence is intentional (path-qualified identity) — warn-but-pass, never
+  // an exit-code change. Only cross-source conflicts fail CI.
+  const coexisting = Object.values(contract.componentNameIndex ?? {}).filter((ids) => ids.length > 1).length
+  if (coexisting > 0) {
+    messages.push(
+      `! ${coexisting} component name${coexisting === 1 ? "" : "s"} with multiple implementations — intentional coexistence, resolved at lookup by scope/rationale. Does not fail CI.`
+    )
+  }
+
   const { status, exitCode } = decideStatus({
     isStale: drift.isStale,
     hasUnresolvedConflicts,
@@ -221,15 +230,34 @@ function diffContracts(committed: PrimitivContract, fresh: PrimitivContract): st
     }
   }
 
-  const allComponents = new Set([...Object.keys(committed.components), ...Object.keys(fresh.components)])
-  for (const name of allComponents) {
-    const c = committed.components[name]
-    const f = fresh.components[name]
-    if (!c) {
-      changes.push(`component added: ${name}`)
-    } else if (!f) {
-      changes.push(`component removed: ${name}`)
+  const removed = Object.keys(committed.components).filter((key) => !fresh.components[key])
+  const added = Object.keys(fresh.components).filter((key) => !committed.components[key])
+
+  // Re-key recognizer: the 0.2 → 0.3 migration renames every component key from bare name
+  // to qualified id in one build. A removed/added pair sharing display name, adapter, and
+  // file is the same component under a new key — reported as a re-key, not remove+add, so
+  // the one-time migration diff reads as what it is instead of a wall of churn.
+  const consumed = new Set<string>()
+  for (const oldKey of removed) {
+    const c = committed.components[oldKey]
+    const matches = added.filter((newKey) => {
+      if (consumed.has(newKey)) return false
+      const f = fresh.components[newKey]
+      return (
+        (f.displayName ?? f.name) === (c.displayName ?? c.name) &&
+        f.source.adapter === c.source.adapter &&
+        (f.source.file ?? "") === (c.source.file ?? "")
+      )
+    })
+    if (matches.length === 1) {
+      consumed.add(matches[0])
+      changes.push(`component re-keyed: ${oldKey} → ${matches[0]}`)
+    } else {
+      changes.push(`component removed: ${oldKey}`)
     }
+  }
+  for (const newKey of added) {
+    if (!consumed.has(newKey)) changes.push(`component added: ${newKey}`)
   }
 
   return changes

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
+import { buildContract } from "../index"
 import type { Conflict, PrimitivContract } from "../types"
 import { verify } from "./verify"
 
@@ -263,5 +264,51 @@ describe("verify --fast (legacy mtime check)", () => {
     const result = await verify(undefined, { cwd: tempDir, fast: true })
     expect(result.status).toBe("clean")
     expect(result.exitCode).toBe(0)
+  })
+})
+
+describe("verify — component identity migration (0.2 → 0.3)", () => {
+  function writeTsxConfig(root: string) {
+    const body = `module.exports = {
+  sources: {
+    codebase: { root: ".", patterns: ["**/*.tsx"], ignore: ["node_modules/**"] }
+  },
+  governance: { sourceOfTruth: "codebase", onConflict: "warn" },
+  output: { path: "./primitiv.contract.json" }
+}
+`
+    fs.writeFileSync(path.join(root, "primitiv.config.js"), body)
+  }
+
+  test("re-key recognizer reports bare-name → path-id as a re-key, not remove+add", async () => {
+    fs.mkdirSync(path.join(tempDir, "ui"))
+    fs.writeFileSync(path.join(tempDir, "ui/Button.tsx"), `export function Button() { return <button /> }`)
+    writeTsxConfig(tempDir)
+    // A pre-0.3 committed contract: bare-name key, no displayName, no name index.
+    writeContract(tempDir, {
+      version: "0.2.0",
+      components: { Button: { name: "Button", source: { adapter: "codebase", file: "ui/Button.tsx" } } }
+    })
+
+    const result = await verify(undefined, { cwd: tempDir })
+    expect(result.drift.changes).toContain("component re-keyed: Button → ui/Button")
+    expect(result.drift.changes.some((c) => c.startsWith("component removed"))).toBe(false)
+    expect(result.drift.changes.some((c) => c.startsWith("component added"))).toBe(false)
+  })
+
+  test("same-name coexistence warns but passes — exit stays 0", async () => {
+    fs.mkdirSync(path.join(tempDir, "list"))
+    fs.mkdirSync(path.join(tempDir, "menu"))
+    fs.writeFileSync(path.join(tempDir, "list/Item.tsx"), `export function Item() { return <li /> }`)
+    fs.writeFileSync(path.join(tempDir, "menu/Item.tsx"), `export function Item() { return <li /> }`)
+    writeTsxConfig(tempDir)
+    // Commit a contract that matches a fresh rebuild exactly, so coexistence is the only signal.
+    const built = await buildContract(undefined, { cwd: tempDir, silent: true })
+    fs.writeFileSync(path.join(tempDir, "primitiv.contract.json"), JSON.stringify(built, null, 2))
+
+    const result = await verify(undefined, { cwd: tempDir })
+    expect(result.status).toBe("clean")
+    expect(result.exitCode).toBe(0)
+    expect(result.messages.some((m) => m.includes("intentional coexistence"))).toBe(true)
   })
 })

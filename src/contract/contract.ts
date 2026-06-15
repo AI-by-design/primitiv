@@ -14,17 +14,19 @@ export class ContractBuilder {
   ): PrimitivContract {
     const conflicts: Conflict[] = []
     const mergedTokens = this.mergeTokens(sources, conflicts)
-    const mergedComponents = this.mergeComponents(sources, conflicts)
-    const inferredRules = inferRules(mergedTokens, mergedComponents)
+    const { components, nameIndex } = this.mergeComponents(sources, conflicts)
+    const inferredRules = inferRules(mergedTokens, components)
 
     const contract: PrimitivContract = {
-      version: "0.2.0",
+      // 0.3.0: component keys went bare-name → qualified id (breaking shape change).
+      version: "0.3.0",
       generatedAt: new Date().toISOString(),
       sources: sources.map((s) => s.name),
       sourceRoot: "",
       configPath: "",
       tokens: mergedTokens,
-      components: mergedComponents,
+      components,
+      componentNameIndex: nameIndex,
       conflicts,
       inferredRules
     }
@@ -100,36 +102,59 @@ export class ContractBuilder {
   private mergeComponents(
     sources: Array<{ name: string; tokens: TokenMap; components: ComponentMap }>,
     conflicts: Conflict[]
-  ): ComponentMap {
+  ): { components: ComponentMap; nameIndex: Record<string, string[]> } {
     const merged: ComponentMap = {}
 
     for (const source of sources) {
-      for (const [name, component] of Object.entries(source.components)) {
-        if (merged[name] && merged[name].source.adapter !== component.source.adapter) {
-          const conflictSources = [
-            { source: merged[name].source, value: merged[name].source.file || merged[name].source.adapter },
-            { source: component.source, value: component.source.file || component.source.adapter }
-          ]
-          const fix = this.buildFixMessage("component", name, conflictSources)
-          conflicts.push({
-            type: "component",
-            name,
-            sources: conflictSources,
-            resolution: "pending",
-            suggestedFix: fix.suggestedFix,
-            actionable: fix.actionable
-          })
-
-          if (this.config.governance.sourceOfTruth === source.name) {
-            merged[name] = component
-          }
-        } else {
-          merged[name] = component
-        }
+      for (const [id, component] of Object.entries(source.components)) {
+        // Ids are unique by construction (path-qualified for codebase, source-prefixed for
+        // figma/storybook), so same-name components coexist instead of overwriting each
+        // other. A taken key is a true duplicate — keep the first, mirroring the token path.
+        if (!merged[id]) merged[id] = component
       }
     }
 
-    return merged
+    // The lookup bridge from the bare names agents know to the qualified ids. Sorted for
+    // deterministic contract output across rebuilds.
+    const nameIndex: Record<string, string[]> = {}
+    for (const [id, component] of Object.entries(merged)) {
+      const name = component.displayName ?? component.name
+      if (!nameIndex[name]) nameIndex[name] = []
+      nameIndex[name].push(id)
+    }
+    for (const ids of Object.values(nameIndex)) ids.sort()
+
+    // Cross-source conflict detection moved from key-equality to displayName grouping —
+    // keys stopped colliding across sources once they became qualified ids. Same-name
+    // within one source is coexistence (surfaced via the index and resolved at lookup
+    // time by scope/rationale), never a conflict; hard conflicts stay reserved for
+    // cross-source disagreements.
+    for (const [name, ids] of Object.entries(nameIndex)) {
+      if (ids.length < 2) continue
+      const adapters = new Set(ids.map((id) => merged[id].source.adapter))
+      if (adapters.size < 2) continue
+
+      const conflictSources = ids.map((id) => ({
+        source: merged[id].source,
+        value: merged[id].source.file || merged[id].source.adapter
+      }))
+      const fix = this.buildFixMessage("component", name, conflictSources)
+      const sotIds = ids.filter((id) => merged[id].source.adapter === this.config.governance.sourceOfTruth)
+      conflicts.push({
+        type: "component",
+        name,
+        sources: conflictSources,
+        // When the source of truth owns exactly one contender, record the governed winner
+        // so get_component returns it instead of escalating. Every contender stays in the
+        // component map either way — provenance is never dropped.
+        ...(sotIds.length === 1 ? { resolved: sotIds[0] } : {}),
+        resolution: "pending",
+        suggestedFix: fix.suggestedFix,
+        actionable: fix.actionable
+      })
+    }
+
+    return { components: merged, nameIndex }
   }
 
   private buildFixMessage(

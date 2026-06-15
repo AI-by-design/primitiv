@@ -17,12 +17,13 @@ Contract validation, token rules, and rationale handling are defined in the Prim
 ## 2. Confirm the spec
 With the user: name, props, states, variants, composition, and project conventions (framework, server vs client, file location). Don't invent conventions — call `get_inferred_rules` and match the codebase's own naming and prop-shape patterns.
 
-## 3. Reuse before you build
-Never recreate a component the contract already has. Components carry a `kind` (`component` | `screen` | `provider` | `icon` | `other`) — only `component` and `icon` are reusable UI; treat the rest as tagged noise, not reuse targets. Then:
-1. Look it up — `get_component { name }`.
-2. Found → use it; load its full record (props, variants, rationale) and conform to its API, don't redesign it.
-3. Not found but composable → assemble from existing contract primitives, not from scratch.
-4. Genuinely new → tell the user it's net-new, then build to the conventions from step 2.
+## 3. Reuse before you build (resolution ladder)
+Never recreate a component the contract already has. Components carry a `kind` (`component` | `screen` | `provider` | `icon` | `other`) — only `component` and `icon` are reusable UI; treat the rest as tagged noise, not reuse targets. Stop at the first rung that resolves:
+1. Look it up — `get_component { name, context: <your working file or directory> }`.
+2. One match → use it; load its full record (props, variants, states, rationale) and conform to its API, don't redesign it.
+3. Ambiguous → the response carries an `instruction`; follow it — resolve by **scope** (working path) → **rationale.when** vs the user's intent → if neither decides, **ask the user**. Never pick arbitrarily.
+4. No match but composable → assemble from existing contract primitives, not from scratch.
+5. Genuinely new → tell the user it's net-new, then build to the conventions from step 2.
 
 ## 4. Build (token ladder)
 Resolve every visual value through the contract, in order:
