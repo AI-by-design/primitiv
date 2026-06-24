@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.1.0](https://github.com/AI-by-design/primitiv/compare/v2.0.0...v2.1.0) (2026-06-24)
+
+
+### Features
+
+* **contract:** single source of truth for token categories ([ebeeabe](https://github.com/AI-by-design/primitiv/commit/ebeeabe57eb5ff24e5a0f71240db84d735508279))
+* **contract:** single source of truth for token categories ([7dbc29f](https://github.com/AI-by-design/primitiv/commit/7dbc29f3f1d54cc9a64966027295d41cb310ff87))
+
 ## [2.0.0](https://github.com/AI-by-design/primitiv/compare/v1.12.0...v2.0.0) (2026-06-15)
 
 
