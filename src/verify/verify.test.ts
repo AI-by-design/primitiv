@@ -146,7 +146,7 @@ describe("verify", () => {
   })
 })
 
-describe("verify — token misuse violations", () => {
+describe("verify — hardcoded token values", () => {
   function writeConfigWithJSX(root: string) {
     const body = `module.exports = {
   sources: {

@@ -485,7 +485,9 @@ export class PrimitivMCPServer {
       "get_violations",
       {
         description:
-          "Get token-misuse violations: hardcoded literals in source code that bypass the design contract. Read-only, no side effects. Returns JSON with violation count, suggestion-coverage stats, and a list of violations with file:line:column, the captured literal, the surrounding utility (e.g. 'bg-[#ff0000]'), and an optional smart-match suggestion when a contract token has the same value. Pass category to filter: 'all' | 'colors' | 'spacing' | 'typography' | 'borderRadius' | 'shadows'. Call this BEFORE generating UI with literal values — prefer the suggested token over a hardcoded literal. For available tokens to use instead, use get_design_context or get_token.",
+          "Get hardcoded token values: literals in source code typed inline instead of referencing a design token, bypassing the contract. Read-only, no side effects. Returns JSON with a count, suggestion-coverage stats, and a list with file:line:column, the captured literal, the surrounding utility (e.g. 'bg-[#ff0000]'), and an optional smart-match suggestion when a contract token has the same value. " +
+          `Pass category to filter: 'all' | ${LINT_CATEGORIES.map((c) => `'${c}'`).join(" | ")} (hardcoded values are only detected for these). ` +
+          "Call this BEFORE generating UI with literal values — prefer the suggested token over a hardcoded literal. For available tokens to use instead, use get_design_context or get_token.",
         inputSchema: {
           category: z.string()
         }

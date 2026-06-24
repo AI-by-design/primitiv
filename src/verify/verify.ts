@@ -123,8 +123,8 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
 
   if (hasViolations) {
     const severity = options.strict || !hasUnresolvedConflicts ? "✗" : "!"
-    const noun = violations.length === 1 ? "misuse" : "misuses"
-    messages.push(`${severity} ${violations.length} token ${noun} detected:`)
+    const noun = violations.length === 1 ? "value" : "values"
+    messages.push(`${severity} ${violations.length} hardcoded token ${noun} detected:`)
     for (const v of violations.slice(0, MAX_REPORTED_VIOLATIONS)) {
       const suggestion = v.suggestion ? ` → use --${v.suggestion.token}` : ` → no matching token`
       messages.push(`  - ${v.source.file}:${v.source.line}  ${v.context}${suggestion}`)
@@ -150,7 +150,7 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
   }
 
   if (!drift.isStale && !hasUnresolvedConflicts && !hasViolations) {
-    messages.push(`✓ Contract is fresh (age ${formatAge(ageHours)}), conflicts resolved, no token misuses.`)
+    messages.push(`✓ Contract is fresh (age ${formatAge(ageHours)}), conflicts resolved, no hardcoded token values.`)
   }
 
   // Same-name coexistence is intentional (path-qualified identity) — warn-but-pass, never
