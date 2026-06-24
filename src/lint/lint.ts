@@ -1,7 +1,7 @@
 import * as fs from "node:fs"
 import * as path from "node:path"
 import { glob } from "glob"
-import type { CodebaseSource, PrimitivConfig, PrimitivContract, Violation } from "../types"
+import type { CodebaseSource, LintCategory, PrimitivConfig, PrimitivContract, Violation } from "../types"
 
 // Tailwind utility prefixes that take a color arbitrary value, e.g. `bg-[#ff0000]`.
 const COLOR_PREFIX_RE =
@@ -97,7 +97,7 @@ function collectMatches(
   content: string,
   lines: string[],
   re: RegExp,
-  category: "colors" | "spacing",
+  category: LintCategory,
   file: string,
   tokenIndex: Map<string, TokenIndexEntry>,
   out: Violation[]

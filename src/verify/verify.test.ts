@@ -3,6 +3,7 @@ import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { buildContract } from "../index"
+import { emptyTokenMap } from "../types"
 import type { Conflict, PrimitivContract } from "../types"
 import { verify } from "./verify"
 
@@ -35,7 +36,7 @@ function writeContract(root: string, overrides: Partial<PrimitivContract> = {}) 
     sources: ["codebase"],
     sourceRoot: root,
     configPath: path.join(root, "primitiv.config.js"),
-    tokens: { colors: {}, spacing: {}, typography: {}, borderRadius: {}, shadows: {} },
+    tokens: emptyTokenMap(),
     components: {},
     conflicts: [],
     ...overrides
@@ -145,7 +146,7 @@ describe("verify", () => {
   })
 })
 
-describe("verify — token misuse violations", () => {
+describe("verify — hardcoded token values", () => {
   function writeConfigWithJSX(root: string) {
     const body = `module.exports = {
   sources: {
