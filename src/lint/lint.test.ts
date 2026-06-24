@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
+import { emptyTokenMap } from "../types"
 import type { PrimitivConfig, PrimitivContract, Token } from "../types"
 import { lintTokenMisuse } from "./lint"
 
@@ -59,7 +60,7 @@ function buildContract(opts: ContractOpts = {}): PrimitivContract {
     sources: ["codebase"],
     sourceRoot: tempDir,
     configPath: path.join(tempDir, "primitiv.config.js"),
-    tokens: { colors, spacing, typography: {}, borderRadius: {}, shadows: {} },
+    tokens: { ...emptyTokenMap(), colors, spacing },
     components: {},
     conflicts: []
   }

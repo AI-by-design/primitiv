@@ -3,7 +3,8 @@ import * as path from "node:path"
 import { parse } from "@babel/parser"
 import type * as t from "@babel/types"
 import { glob } from "glob"
-import type { CodebaseSource, ComponentKind, ComponentMap, TokenMap } from "../types"
+import { emptyTokenMap } from "../types"
+import type { CodebaseSource, ComponentKind, ComponentMap, TokenCategory, TokenMap } from "../types"
 
 export class CodebaseScanner {
   constructor(private config: CodebaseSource) {}
@@ -33,13 +34,7 @@ export class CodebaseScanner {
   }
 
   private async extractTokens(files: string[]): Promise<{ tokens: TokenMap; internalCssVars: number }> {
-    const tokens: TokenMap = {
-      colors: {},
-      spacing: {},
-      typography: {},
-      borderRadius: {},
-      shadows: {}
-    }
+    const tokens: TokenMap = emptyTokenMap()
 
     // Reference registry: base scales (e.g. Polaris `export const size = { '100': '4px' }`)
     // get collected so alias tokens that reference them (`{ value: size[100] }`) resolve to a
@@ -107,7 +102,13 @@ export class CodebaseScanner {
   // unknown — the same shape-not-name discipline the component detector uses, so an unrecognized
   // group key doesn't silently drop its tokens. Leaf values are gated by `isDesignValue` so
   // Tailwind className strings (`createTheme({ root: { base: "flex h-fit …" } })`) never leak in.
-  private extractTSTokens(program: t.Program, file: string, tokens: TokenMap, registry: TokenRegistry, pending: PendingRef[]): void {
+  private extractTSTokens(
+    program: t.Program,
+    file: string,
+    tokens: TokenMap,
+    registry: TokenRegistry,
+    pending: PendingRef[]
+  ): void {
     for (const [exportName, objectExpr] of exportedObjectLiterals(program)) {
       registry.collect(exportName, objectExpr)
       walkTokenObject({
@@ -127,7 +128,14 @@ export class CodebaseScanner {
     }
   }
 
-  private addToken(opts: { tokens: TokenMap; name: string; value: string; groupKey: string; file: string; line: number }): void {
+  private addToken(opts: {
+    tokens: TokenMap
+    name: string
+    value: string
+    groupKey: string
+    file: string
+    line: number
+  }): void {
     const { tokens, name, value, groupKey, file, line } = opts
     const category = categorizeByGroup(groupKey) ?? this.categorizeToken(name, value)
     if (!tokens[category]) tokens[category] = {}
@@ -136,7 +144,7 @@ export class CodebaseScanner {
     tokens[category][name] = { name, value, source: { adapter: "codebase", file, line } }
   }
 
-  private categorizeToken(rawName: string, value: string): string {
+  private categorizeToken(rawName: string, value: string): TokenCategory | "other" {
     const name = rawName.toLowerCase()
     // A color value is a strong signal — it wins regardless of the name.
     if (
@@ -656,7 +664,7 @@ function referenceTarget(node: t.Node): TokenRef | undefined {
 // radius + width; `size` mixes spacing + dimension) so the full-name/value path decides — the
 // same shape-not-name discipline the component detector uses, so a group we didn't enumerate
 // still gets categorized by value instead of silently dropped.
-function categorizeByGroup(groupKey: string): string | null {
+function categorizeByGroup(groupKey: string): TokenCategory | null {
   const g = groupKey.toLowerCase()
   if (/(boxshadow|shadow|elevation)/.test(g)) return "shadows"
   if (/(zindex|zindices)/.test(g)) return "zIndex"

@@ -1,5 +1,6 @@
 import * as fs from "node:fs"
 import { inferRules } from "../inferrer"
+import { emptyTokenMap } from "../types"
 import type { ComponentMap, Conflict, PrimitivConfig, PrimitivContract, TokenMap } from "../types"
 
 export class ContractBuilder {
@@ -42,13 +43,7 @@ export class ContractBuilder {
     sources: Array<{ name: string; tokens: TokenMap; components: ComponentMap }>,
     conflicts: Conflict[]
   ): TokenMap {
-    const merged: TokenMap = {
-      colors: {},
-      spacing: {},
-      typography: {},
-      borderRadius: {},
-      shadows: {}
-    }
+    const merged: TokenMap = emptyTokenMap()
 
     const seen: Record<string, Record<string, { adapter: string; value: string }>> = {}
 

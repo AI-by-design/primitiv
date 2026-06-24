@@ -1,4 +1,5 @@
-import type { ComponentMap, FigmaSource, Source, TokenMap } from "../../types"
+import { emptyTokenMap } from "../../types"
+import type { ComponentMap, FigmaSource, Source, TokenCategory, TokenMap } from "../../types"
 
 type FigmaRawValue =
   | number
@@ -64,13 +65,7 @@ export class FigmaAdapter implements Source {
   }
 
   private async extractTokens(): Promise<TokenMap> {
-    const tokens: TokenMap = {
-      colors: {},
-      spacing: {},
-      typography: {},
-      borderRadius: {},
-      shadows: {}
-    }
+    const tokens: TokenMap = emptyTokenMap()
 
     const data = await this.fetchFigma<FigmaVariablesResponse>(`/files/${this.config.fileId}/variables/local`)
     const variables = data.meta?.variables || {}
@@ -167,7 +162,7 @@ export class FigmaAdapter implements Source {
     return figmaName.replace(/\//g, "-").replace(/\s+/g, "-").toLowerCase()
   }
 
-  private categorize(resolvedType: string, name: string): string {
+  private categorize(resolvedType: string, name: string): TokenCategory {
     if (resolvedType === "COLOR") return "colors"
     if (resolvedType === "STRING") return "typography"
     // FLOAT — categorize by name

@@ -5,7 +5,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js"
 import { z } from "zod"
 import { normalizeRuleCategory, RULE_CATEGORIES } from "../inferrer"
-import type { PrimitivContract, Rationale } from "../types"
+import { LINT_CATEGORIES, TOKEN_CATEGORIES } from "../types"
+import type { LintCategory, PrimitivContract, Rationale, TokenCategory } from "../types"
 
 export class PrimitivMCPServer {
   private server: McpServer
@@ -184,7 +185,7 @@ export class PrimitivMCPServer {
   // Fold common/alias spellings to the canonical token-category key so a filter
   // never silently returns empty on e.g. "color"/"radius"/"z-index".
   private normalizeTokenCategory(category: string): string {
-    const aliases: Record<string, string> = {
+    const aliases: Record<string, TokenCategory> = {
       color: "colors",
       colour: "colors",
       colours: "colors",
@@ -215,7 +216,9 @@ export class PrimitivMCPServer {
       "get_design_context",
       {
         description:
-          "Get the resolved design system context before building UI. Read-only, no side effects. Default (no category) returns a JSON summary of token counts, component names, conflict counts, and contract metadata. Pass category: 'all' | 'tokens' | 'components' | 'conflicts' to get full detail. Pass tokenCategory to filter tokens: colors, spacing, sizes, typography, borderRadius, shadows, zIndex, breakpoints, motion (unknown/aliased categories return an actionable error, not a silent empty result). Use this as the first call to understand what exists. For lookups by name, use get_token or get_component instead.",
+          "Get the resolved design system context before building UI. Read-only, no side effects. Default (no category) returns a JSON summary of token counts, component names, conflict counts, and contract metadata. Pass category: 'all' | 'tokens' | 'components' | 'conflicts' to get full detail. Pass tokenCategory to filter tokens: " +
+          `${TOKEN_CATEGORIES.join(", ")} (unknown/aliased categories return an actionable error, not a silent empty result). ` +
+          "Use this as the first call to understand what exists. For lookups by name, use get_token or get_component instead.",
         inputSchema: {
           category: z.string(),
           tokenCategory: z.string()
@@ -241,7 +244,9 @@ export class PrimitivMCPServer {
             contractAgeHours,
             sources: this.contract.sources,
             tokenCounts,
-            componentNames: [...new Set(Object.values(this.contract.components).map((c) => c.displayName ?? c.name))].sort(),
+            componentNames: [
+              ...new Set(Object.values(this.contract.components).map((c) => c.displayName ?? c.name))
+            ].sort(),
             componentCount: Object.keys(this.contract.components).length,
             conflictCount: this.contract.conflicts.length,
             pendingConflicts: this.contract.conflicts.filter((c) => c.resolution === "pending").length,
@@ -310,7 +315,9 @@ export class PrimitivMCPServer {
       "get_token",
       {
         description:
-          "Look up a specific design token by name. Read-only, no side effects. Returns the token's name, value, and category, or an error if not found. Pass category to narrow search: colors, spacing, sizes, typography, borderRadius, shadows, zIndex, breakpoints, motion (aliases like 'color'/'radius'/'z-index' are normalized). Pass empty string to search all. Use this when you know the token name. For a broad overview of all tokens, use get_design_context with category 'tokens' instead.",
+          "Look up a specific design token by name. Read-only, no side effects. Returns the token's name, value, and category, or an error if not found. Pass category to narrow search: " +
+          `${TOKEN_CATEGORIES.join(", ")} (aliases like 'color'/'radius'/'z-index' are normalized). ` +
+          "Pass empty string to search all. Use this when you know the token name. For a broad overview of all tokens, use get_design_context with category 'tokens' instead.",
         inputSchema: {
           name: z.string(),
           category: z.string()
@@ -489,6 +496,13 @@ export class PrimitivMCPServer {
         if (all === undefined) {
           return this.err(
             "Contract has no violations field — likely built with an older Primitiv. Run `primitiv build` to refresh."
+          )
+        }
+        // Surface an unknown category instead of silently returning [] (rule 10) — and only the
+        // categories the linter actually emits are valid, never the full token vocabulary.
+        if (args.category && args.category !== "all" && !LINT_CATEGORIES.includes(args.category as LintCategory)) {
+          return this.err(
+            `Unknown violation category '${args.category}'. Available: 'all', ${LINT_CATEGORIES.map((c) => `'${c}'`).join(", ")}. Token misuse is only detected for these.`
           )
         }
         const filtered =

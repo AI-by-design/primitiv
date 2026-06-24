@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import type { Component, ComponentMap, PrimitivConfig, TokenMap } from "../types"
+import { emptyTokenMap, TOKEN_CATEGORIES } from "../types"
+import type { Component, ComponentMap, PrimitivConfig } from "../types"
 import { ContractBuilder } from "./contract"
 
 function config(sourceOfTruth: PrimitivConfig["governance"]["sourceOfTruth"] = "codebase"): PrimitivConfig {
@@ -10,17 +11,13 @@ function config(sourceOfTruth: PrimitivConfig["governance"]["sourceOfTruth"] = "
   }
 }
 
-function emptyTokens(): TokenMap {
-  return { colors: {}, spacing: {}, typography: {}, borderRadius: {}, shadows: {} }
-}
-
 function codebaseComponent(name: string, file: string): Component {
   return { name, displayName: name, source: { adapter: "codebase", file } }
 }
 
 function buildWith(componentsBySource: Array<{ name: string; components: ComponentMap }>) {
   return new ContractBuilder(config()).build(
-    componentsBySource.map((s) => ({ name: s.name, tokens: emptyTokens(), components: s.components }))
+    componentsBySource.map((s) => ({ name: s.name, tokens: emptyTokenMap(), components: s.components }))
   )
 }
 
@@ -100,5 +97,28 @@ describe("component merge (path-qualified identity)", () => {
     const conflict = contract.conflicts.find((c) => c.type === "component" && c.name === "Card")
     expect(conflict).toBeDefined()
     expect(conflict?.resolved).toBeUndefined()
+  })
+})
+
+describe("token categories (single-source vocabulary)", () => {
+  test("a built contract carries exactly the canonical token-category set", () => {
+    const contract = buildWith([])
+    // The decision: all categories always present (some empty), seeded from one source of truth —
+    // not the historical 5-key partial map. "other" only appears when a token lands there.
+    expect(Object.keys(contract.tokens).sort()).toEqual([...TOKEN_CATEGORIES].sort())
+  })
+
+  test("a token in a post-5 category (zIndex) lands in its own bucket, not dropped or merged", () => {
+    const contract = new ContractBuilder(config()).build([
+      {
+        name: "codebase",
+        tokens: {
+          ...emptyTokenMap(),
+          zIndex: { "z-modal": { name: "z-modal", value: "1000", source: { adapter: "codebase" } } }
+        },
+        components: {}
+      }
+    ])
+    expect(contract.tokens.zIndex?.["z-modal"]?.value).toBe("1000")
   })
 })
