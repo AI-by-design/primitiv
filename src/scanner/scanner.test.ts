@@ -254,6 +254,65 @@ export function Widget() { return <div /> }`
   })
 })
 
+describe("component props (per-component scoping)", () => {
+  test("each component in a multi-component file gets its OWN props, not the first's", async () => {
+    writeFixture(
+      "Card.tsx",
+      `interface CardProps { title: string; elevation?: number }
+export function Card(props: CardProps) {
+  return <div />
+}
+
+interface CardHeaderProps { sticky?: boolean }
+export function CardHeader(props: CardHeaderProps) {
+  return <header />
+}`
+    )
+    const { components } = await new CodebaseScanner(source()).scan()
+    expect(components.Card?.props).toEqual({
+      title: { type: "string", required: true },
+      elevation: { type: "number", required: false }
+    })
+    // The bug: CardHeader used to inherit the first *Props block (CardProps). It must
+    // carry only its own prop.
+    expect(components["Card#CardHeader"]?.props).toEqual({
+      sticky: { type: "boolean", required: false }
+    })
+  })
+
+  test("an inline object prop type resolves", async () => {
+    writeFixture("Tag.tsx", `export const Tag = (props: { label: string; round?: boolean }) => <span />`)
+    const { components } = await new CodebaseScanner(source()).scan()
+    expect(components.Tag?.props).toEqual({
+      label: { type: "string", required: true },
+      round: { type: "boolean", required: false }
+    })
+  })
+
+  test("forwardRef<_, Props> resolves the props generic", async () => {
+    writeFixture(
+      "Button.tsx",
+      `import { forwardRef } from "react"
+interface ButtonProps { variant: string }
+export const Button = forwardRef<HTMLButtonElement, ButtonProps>((props, ref) => <button ref={ref} />)`
+    )
+    const { components } = await new CodebaseScanner(source()).scan()
+    expect(components.Button?.props).toEqual({ variant: { type: "string", required: true } })
+  })
+
+  test("a props type imported from another module degrades to empty (honest, not wrong)", async () => {
+    writeFixture(
+      "Widget.tsx",
+      `import type { WidgetProps } from "./props"
+export function Widget(props: WidgetProps) {
+  return <div />
+}`
+    )
+    const { components } = await new CodebaseScanner(source()).scan()
+    expect(components.Widget?.props).toEqual({})
+  })
+})
+
 describe("component identity (path-qualified ids)", () => {
   test("id is the relative path sans extension when the name matches the filename", async () => {
     writeFixture("components/ui/Card.tsx", `export function Card() { return <div /> }`)
