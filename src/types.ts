@@ -1,3 +1,5 @@
+import { z } from "zod"
+
 // Core types for Primitiv
 
 export interface PrimitivConfig {
@@ -219,4 +221,47 @@ export interface Violation {
     category: string
     value: string
   }
+}
+
+// ─── Boundary validation (Rule 12) ───────────────────────────────────────────
+// Two lean schemas guarding Primitiv's two untrusted inputs: the user-authored
+// config (loaded via require) and the contract JSON (read by the MCP server and
+// by verify). Deliberately shallow — they check the top-level shape consumers
+// actually dereference, not every leaf token/component/prop. `looseObject` keeps
+// unknown and future fields instead of stripping them (backward-compat: pre-1.6
+// contracts, fields added later). Deep value validation would walk thousands of
+// tokens on every hot-reload for zero crash-safety gain, and would couple the
+// contract schema to the token/prop shapes it has no reason to know about — so
+// `tokens`/`components` are validated only as objects, their values left opaque.
+
+export const primitivConfigSchema = z.looseObject({
+  sources: z.looseObject({
+    codebase: z.looseObject({ root: z.string(), patterns: z.array(z.string()), ignore: z.array(z.string()) }).optional(),
+    figma: z.looseObject({ token: z.string(), fileId: z.string() }).optional(),
+    storybook: z.looseObject({ url: z.string() }).optional()
+  }),
+  governance: z.looseObject({
+    sourceOfTruth: z.enum(["codebase", "figma", "storybook", "manual"]),
+    onConflict: z.enum(["error", "warn", "auto-resolve"])
+  }),
+  output: z.looseObject({ path: z.string() })
+})
+
+export const primitivContractSchema = z.looseObject({
+  version: z.string(),
+  generatedAt: z.string(),
+  sources: z.array(z.string()),
+  tokens: z.record(z.string(), z.unknown()),
+  components: z.record(z.string(), z.unknown()),
+  conflicts: z.array(z.unknown())
+})
+
+// Compact, human-readable reason a config/contract failed validation — the
+// actionable tail of every boundary error/warning. Caps at three issues so the
+// message stays a single readable line.
+export function summarizeValidationIssues(error: z.ZodError): string {
+  return error.issues
+    .slice(0, 3)
+    .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
+    .join("; ")
 }

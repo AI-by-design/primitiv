@@ -313,3 +313,23 @@ describe("verify — component identity migration (0.2 → 0.3)", () => {
     expect(result.messages.some((m) => m.includes("intentional coexistence"))).toBe(true)
   })
 })
+
+describe("verify — invalid contract", () => {
+  test("returns invalid-contract (exit 3) when the contract isn't valid JSON", async () => {
+    writeConfig(tempDir)
+    fs.writeFileSync(path.join(tempDir, "primitiv.contract.json"), "{ not json")
+    const result = await verify(undefined, { cwd: tempDir })
+    expect(result.status).toBe("invalid-contract")
+    expect(result.exitCode).toBe(3)
+    expect(result.messages.join("\n")).toContain("primitiv build")
+  })
+
+  test("returns invalid-contract when the contract is valid JSON but missing required fields", async () => {
+    writeConfig(tempDir)
+    // No conflicts/tokens/components — verify would crash dereferencing `.conflicts.filter()`.
+    fs.writeFileSync(path.join(tempDir, "primitiv.contract.json"), JSON.stringify({ version: "1.0.0" }))
+    const result = await verify(undefined, { cwd: tempDir })
+    expect(result.status).toBe("invalid-contract")
+    expect(result.exitCode).toBe(3)
+  })
+})

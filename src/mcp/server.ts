@@ -5,7 +5,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js"
 import { z } from "zod"
 import { normalizeRuleCategory, RULE_CATEGORIES } from "../inferrer"
-import { LINT_CATEGORIES, TOKEN_CATEGORIES } from "../types"
+import { LINT_CATEGORIES, primitivContractSchema, summarizeValidationIssues, TOKEN_CATEGORIES } from "../types"
 import type { LintCategory, PrimitivContract, Rationale, TokenCategory } from "../types"
 
 export class PrimitivMCPServer {
@@ -36,15 +36,27 @@ export class PrimitivMCPServer {
   }
 
   private loadContract(): void {
-    if (fs.existsSync(this.contractPath)) {
-      try {
-        const raw = fs.readFileSync(this.contractPath, "utf-8")
-        this.contract = JSON.parse(raw)
-        this.derivedNameIndex = null
-        this.warnIfMismatched()
-      } catch {
-        process.stderr.write(`primitiv: failed to parse contract at ${this.contractPath}\n`)
+    if (!fs.existsSync(this.contractPath)) return
+    try {
+      const raw = fs.readFileSync(this.contractPath, "utf-8")
+      const parsed: unknown = JSON.parse(raw)
+      const result = primitivContractSchema.safeParse(parsed)
+      if (!result.success) {
+        // Structurally invalid (e.g. truncated mid-rebuild). Keep any previously
+        // loaded good contract rather than dropping it — a transient bad write
+        // shouldn't take a running server's data offline.
+        process.stderr.write(
+          `primitiv: ignoring malformed contract at ${this.contractPath} (${summarizeValidationIssues(result.error)}). Run \`primitiv build\` to regenerate.\n`
+        )
+        return
       }
+      this.contract = parsed as PrimitivContract
+      this.derivedNameIndex = null
+      this.warnIfMismatched()
+    } catch {
+      process.stderr.write(
+        `primitiv: failed to parse contract at ${this.contractPath} (invalid JSON). Run \`primitiv build\` to regenerate.\n`
+      )
     }
   }
 

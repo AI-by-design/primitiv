@@ -56,7 +56,7 @@ Exit codes for verify:
   0  clean — contract matches a fresh rebuild, conflicts resolved, no token misuses
   1  stale or token misuse detected (warning level)
   2  unresolved conflicts (or stale / token misuses in --strict)
-  3  no config or contract found
+  3  no config or contract found, or the contract is malformed
 
 Quick start:
   1. Run \`primitiv init\` in your project root
