@@ -4,8 +4,8 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
-import { emptyTokenMap } from "../types"
 import type { PrimitivContract } from "../types"
+import { emptyTokenMap } from "../types"
 import { PrimitivMCPServer } from "./server"
 
 let tempDir: string
