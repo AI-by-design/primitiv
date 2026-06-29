@@ -3,8 +3,8 @@ import * as path from "node:path"
 import { parse } from "@babel/parser"
 import type * as t from "@babel/types"
 import { glob } from "glob"
-import { emptyTokenMap } from "../types"
 import type { CodebaseSource, ComponentKind, ComponentMap, TokenCategory, TokenMap } from "../types"
+import { emptyTokenMap } from "../types"
 
 export class CodebaseScanner {
   constructor(private config: CodebaseSource) {}

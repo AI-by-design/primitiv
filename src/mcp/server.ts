@@ -5,8 +5,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js"
 import { z } from "zod"
 import { normalizeRuleCategory, RULE_CATEGORIES } from "../inferrer"
-import { LINT_CATEGORIES, TOKEN_CATEGORIES } from "../types"
 import type { LintCategory, PrimitivContract, Rationale, TokenCategory } from "../types"
+import { LINT_CATEGORIES, TOKEN_CATEGORIES } from "../types"
 
 export class PrimitivMCPServer {
   private server: McpServer

@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
-import { emptyTokenMap } from "../types"
 import type { PrimitivConfig, PrimitivContract, Token } from "../types"
+import { emptyTokenMap } from "../types"
 import { lintTokenMisuse } from "./lint"
 
 let tempDir: string
