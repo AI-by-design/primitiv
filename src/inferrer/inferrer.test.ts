@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { emptyTokenMap } from "../types"
 import type { Component, ComponentMap, PropDefinition, TokenMap } from "../types"
+import { emptyTokenMap } from "../types"
 import { inferRules, normalizeRuleCategory } from "./inferrer"
 
 function comp(name: string, props: Record<string, PropDefinition>): Component {

@@ -1,7 +1,7 @@
 import * as fs from "node:fs"
 import * as path from "node:path"
-import { emptyTokenMap } from "../../types"
 import type { ComponentMap, PropDefinition, Source, StorybookSource, TokenMap } from "../../types"
+import { emptyTokenMap } from "../../types"
 import { parseArgTypes } from "./argTypes"
 
 interface StorybookEntry {
