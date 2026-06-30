@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { emptyTokenMap, TOKEN_CATEGORIES } from "../types"
 import type { Component, ComponentMap, PrimitivConfig } from "../types"
+import { emptyTokenMap, TOKEN_CATEGORIES } from "../types"
 import { ContractBuilder } from "./contract"
 
 function config(sourceOfTruth: PrimitivConfig["governance"]["sourceOfTruth"] = "codebase"): PrimitivConfig {

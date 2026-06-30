@@ -1,7 +1,7 @@
 import * as fs from "node:fs"
 import { inferRules } from "../inferrer"
-import { emptyTokenMap } from "../types"
 import type { ComponentMap, Conflict, PrimitivConfig, PrimitivContract, TokenMap } from "../types"
+import { emptyTokenMap } from "../types"
 
 export class ContractBuilder {
   constructor(private config: PrimitivConfig) {}

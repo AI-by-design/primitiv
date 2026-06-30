@@ -4,8 +4,8 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
-import { emptyTokenMap } from "../types"
 import type { PrimitivContract } from "../types"
+import { emptyTokenMap } from "../types"
 import { PrimitivMCPServer } from "./server"
 
 let tempDir: string
@@ -236,5 +236,30 @@ describe("get_violations", () => {
     const c = await connect(writeContract({ violations: [] }))
     const result = await c.callTool({ name: "get_violations", arguments: { category: "colors" } })
     expect(result.isError).toBeFalsy()
+  })
+})
+
+describe("contract boundary validation", () => {
+  test("a structurally malformed contract degrades to the setup error instead of crashing", async () => {
+    const contractPath = path.join(tempDir, "primitiv.contract.json")
+    // Valid JSON, but missing the fields the tools dereference (conflicts/tokens/components).
+    // Pre-fix this passed the truthy null-guard and crashed at `.conflicts.filter()`.
+    fs.writeFileSync(contractPath, JSON.stringify({ version: "9.9.9", note: "truncated" }))
+    const c = await connect(contractPath)
+    const result = await c.callTool({
+      name: "get_design_context",
+      arguments: { category: "summary", tokenCategory: "" }
+    })
+    expect(result.isError).toBe(true)
+    const content = result.content as Array<{ type: string; text: string }>
+    expect(content[0].text).toContain("contract_missing")
+  })
+
+  test("an unparseable contract file degrades instead of crashing", async () => {
+    const contractPath = path.join(tempDir, "primitiv.contract.json")
+    fs.writeFileSync(contractPath, "{ not valid json")
+    const c = await connect(contractPath)
+    const result = await c.callTool({ name: "get_token", arguments: { name: "x", category: "" } })
+    expect(result.isError).toBe(true)
   })
 })

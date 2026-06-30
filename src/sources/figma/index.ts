@@ -1,5 +1,5 @@
-import { emptyTokenMap } from "../../types"
 import type { ComponentMap, FigmaSource, Source, TokenCategory, TokenMap } from "../../types"
+import { emptyTokenMap } from "../../types"
 
 type FigmaRawValue =
   | number

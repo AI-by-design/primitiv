@@ -1,4 +1,4 @@
-import type { ComponentMap, InferredRule, InferredRules, TokenMap } from "../types"
+import type { Component, ComponentMap, InferredRule, InferredRules, TokenMap } from "../types"
 
 // Canonical rule categories — match the token-map vocabulary so every MCP tool
 // filters on one spelling (see CATEGORY_VOCAB_PLAN.md).
@@ -309,9 +309,7 @@ function inferNamingRules(tokens: Array<{ name: string; value: string; category:
 
 // ─── Component patterns ──────────────────────────────────────────────────────
 
-function inferComponentRules(
-  components: Array<{ name: string; props?: Record<string, { type: string; required: boolean }> }>
-): InferredRule[] {
+function inferComponentRules(components: Component[]): InferredRule[] {
   const rules: InferredRule[] = []
   if (components.length < 3) return rules
 

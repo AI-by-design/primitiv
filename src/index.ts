@@ -8,6 +8,7 @@ import { CodebaseScanner } from "./scanner"
 import { FigmaAdapter } from "./sources/figma"
 import { StorybookAdapter } from "./sources/storybook"
 import type { PrimitivConfig, PrimitivContract } from "./types"
+import { primitivConfigSchema, summarizeValidationIssues } from "./types"
 
 // Load config — returns config with output.path resolved to an absolute path
 export function loadConfig(configPath?: string, cwd: string = process.cwd()): PrimitivConfig {
@@ -19,7 +20,16 @@ export function loadConfig(configPath?: string, cwd: string = process.cwd()): Pr
 
   // Cache-bust so callers (like verify's rebuild path) pick up config changes without restarting the process.
   delete require.cache[require.resolve(resolved)]
-  const config: PrimitivConfig = require(resolved)
+  const raw: unknown = require(resolved)
+  const parsed = primitivConfigSchema.safeParse(raw)
+  if (!parsed.success) {
+    throw new Error(
+      `Invalid config at ${resolved}: ${summarizeValidationIssues(parsed.error)}. ` +
+        `Fix the file or run \`primitiv init\` to regenerate it.`
+    )
+  }
+  // Validated at the boundary (rule 12) — trust the shape from here on.
+  const config = raw as PrimitivConfig
   const configDir = path.dirname(resolved)
   config.output.path = path.resolve(configDir, config.output.path)
   if (config.sources.codebase) {

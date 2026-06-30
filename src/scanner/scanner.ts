@@ -3,8 +3,8 @@ import * as path from "node:path"
 import { parse } from "@babel/parser"
 import type * as t from "@babel/types"
 import { glob } from "glob"
+import type { CodebaseSource, ComponentKind, ComponentMap, PropDefinition, TokenCategory, TokenMap } from "../types"
 import { emptyTokenMap } from "../types"
-import type { CodebaseSource, ComponentKind, ComponentMap, TokenCategory, TokenMap } from "../types"
 
 export class CodebaseScanner {
   constructor(private config: CodebaseSource) {}
@@ -235,32 +235,12 @@ export class CodebaseScanner {
           displayName: found.name,
           kind: found.kind,
           source: { adapter: "codebase", file, line: found.line },
-          props: this.extractProps(content)
+          props: found.props
         }
       }
     }
 
     return components
-  }
-
-  private extractProps(content: string): Record<string, { type: string; required: boolean }> {
-    const props: Record<string, { type: string; required: boolean }> = {}
-
-    const propsMatch = content.match(/(?:interface|type)\s+\w*[Pp]rops\s*(?:=\s*)?{([^}]+)}/s)
-    if (!propsMatch) return props
-
-    const propsContent = propsMatch[1]
-    const propRegex = /(\w+)(\?)?\s*:\s*([^;\n]+)/g
-
-    for (const match of propsContent.matchAll(propRegex)) {
-      const [, name, optional, type] = match
-      props[name] = {
-        type: type.trim(),
-        required: !optional
-      }
-    }
-
-    return props
   }
 }
 
@@ -268,6 +248,7 @@ interface FoundComponent {
   name: string
   line: number
   kind: ComponentKind
+  props: Record<string, PropDefinition>
 }
 
 // Path-qualified component id: the file's path relative to the scan root, sans extension,
@@ -298,9 +279,18 @@ function componentsInFile(content: string, file: string): FoundComponent[] {
   const program = parseProgram(content)
   if (!program) return []
 
-  const localInit = new Map<string, { node: t.Node; line: number }>()
+  const localInit = new Map<string, { node: t.Node; line: number; idType?: t.TSType }>()
   const exported = new Set<string>()
   const found: FoundComponent[] = []
+
+  const add = (name: string, node: t.Node, line: number, idType?: t.TSType): void => {
+    found.push({
+      name,
+      line,
+      kind: classifyComponent(name, file),
+      props: resolveProps({ program, content, node, idType })
+    })
+  }
 
   const remember = (decl: t.Declaration): string[] => {
     const names: string[] = []
@@ -310,7 +300,10 @@ function componentsInFile(content: string, file: string): FoundComponent[] {
     } else if (decl.type === "VariableDeclaration") {
       for (const d of decl.declarations) {
         if (d.id.type === "Identifier" && d.init) {
-          localInit.set(d.id.name, { node: d.init, line: lineOf(d) })
+          // Capture the declarator's own type annotation (`const C: React.FC<Props> = …`) so the
+          // props generic survives even though the init node carries no parameter type.
+          const ann = d.id.typeAnnotation?.type === "TSTypeAnnotation" ? d.id.typeAnnotation.typeAnnotation : undefined
+          localInit.set(d.id.name, { node: d.init, line: lineOf(d), idType: ann })
           names.push(d.id.name)
         }
       }
@@ -337,11 +330,10 @@ function componentsInFile(content: string, file: string): FoundComponent[] {
     } else if (stmt.type === "ExportDefaultDeclaration") {
       const d = stmt.declaration
       if ((d.type === "FunctionDeclaration" || d.type === "ClassDeclaration") && d.id) {
-        if (isComponentNode(d))
-          found.push({ name: d.id.name, line: lineOf(d), kind: classifyComponent(d.id.name, file) })
+        if (isComponentNode(d)) add(d.id.name, d, lineOf(d))
       } else if (isComponentNode(d)) {
         const name = path.basename(file, path.extname(file))
-        if (/^[A-Z]/.test(name)) found.push({ name, line: lineOf(d), kind: classifyComponent(name, file) })
+        if (/^[A-Z]/.test(name)) add(name, d, lineOf(d))
       }
     }
   }
@@ -349,12 +341,147 @@ function componentsInFile(content: string, file: string): FoundComponent[] {
   for (const name of exported) {
     if (!/^[A-Z]/.test(name) || found.some((f) => f.name === name)) continue
     const decl = localInit.get(name)
-    if (decl && isComponentNode(decl.node)) {
-      found.push({ name, line: decl.line, kind: classifyComponent(name, file) })
-    }
+    if (decl && isComponentNode(decl.node)) add(name, decl.node, decl.line, decl.idType)
   }
 
   return found
+}
+
+// Resolve a component's props from the AST: its first-parameter type annotation (or the
+// `forwardRef<_, P>` / `FC<P>` generic), looked up to that type's interface/type-alias members
+// in the SAME file. Per-component by construction — each call reads that component's own node,
+// never a shared first match. Cross-file imported prop types and unmodelled shapes (intersections,
+// Pick/Omit, qualified refs) degrade to {} — an honest "unresolved" beats reporting wrong props.
+function resolveProps(opts: {
+  program: t.Program
+  content: string
+  node: t.Node
+  idType?: t.TSType
+}): Record<string, PropDefinition> {
+  const typeNode = propsTypeNode(opts.node, opts.idType)
+  if (!typeNode) return {}
+  const members = typeMembers(typeNode, opts.program)
+  return members ? membersToProps(members, opts.content) : {}
+}
+
+// The TSType describing a component's props, by component shape.
+function propsTypeNode(node: t.Node, idType?: t.TSType): t.TSType | null {
+  // `const C: React.FC<Props> = …` — props is the component-type generic on the variable.
+  if (idType) {
+    const fromId = propsFromComponentType(idType)
+    if (fromId) return fromId
+  }
+  if (
+    node.type === "FunctionDeclaration" ||
+    node.type === "FunctionExpression" ||
+    node.type === "ArrowFunctionExpression"
+  ) {
+    return firstParamType(node.params)
+  }
+  if (node.type === "ClassDeclaration") {
+    // `class C extends React.Component<Props>` — props is the superclass generic.
+    return typeArgParams(node, "super")?.[0] ?? null
+  }
+  if (node.type === "CallExpression") {
+    // `forwardRef<Ref, Props>(…)` → 2nd type arg; `memo<Props>(…)` → 1st. Otherwise read the
+    // wrapped render function's first parameter (`forwardRef((p: Props, ref) => …)`).
+    const params = typeArgParams(node, "type")
+    if (params && params.length > 0) {
+      return params[params.length === 1 ? 0 : 1]
+    }
+    for (const arg of node.arguments) {
+      if (arg.type === "ArrowFunctionExpression" || arg.type === "FunctionExpression") return firstParamType(arg.params)
+    }
+  }
+  return null
+}
+
+// The props generic of a React component type annotation: `FC<P>` / `FunctionComponent<P>`
+// (bare or `React.`-qualified). Returns the `P` node, or null for anything else.
+function propsFromComponentType(idType: t.TSType): t.TSType | null {
+  if (idType.type !== "TSTypeReference") return null
+  const name =
+    idType.typeName.type === "Identifier"
+      ? idType.typeName.name
+      : idType.typeName.type === "TSQualifiedName"
+        ? idType.typeName.right.name
+        : null
+  if (name !== "FC" && name !== "FunctionComponent") return null
+  return typeArgParams(idType, "type")?.[0] ?? null
+}
+
+function firstParamType(params: t.Node[]): t.TSType | null {
+  const p = params[0]
+  if (!p) return null
+  const ann = "typeAnnotation" in p ? p.typeAnnotation : null
+  return ann && ann.type === "TSTypeAnnotation" ? ann.typeAnnotation : null
+}
+
+// Babel 8 renamed the type-argument containers babel 7 exposes as `typeParameters` /
+// `superTypeParameters` (on call, super, and type-reference positions) to `typeArguments` /
+// `superTypeArguments`. Read whichever name the installed major actually emits so the scanner
+// compiles and resolves component props on both 7 and 8. The container keeps its `params`
+// array under either name; the runtime guard also skips `Noop`/empty placeholders.
+function typeArgParams(node: t.Node, position: "type" | "super"): t.TSType[] | null {
+  const keys =
+    position === "super"
+      ? (["superTypeArguments", "superTypeParameters"] as const)
+      : (["typeArguments", "typeParameters"] as const)
+  const record = node as unknown as Record<string, unknown>
+  for (const key of keys) {
+    const container = record[key]
+    if (isTypeArgContainer(container)) return container.params
+  }
+  return null
+}
+
+function isTypeArgContainer(value: unknown): value is { params: t.TSType[] } {
+  return typeof value === "object" && value !== null && "params" in value && Array.isArray(value.params)
+}
+
+// Resolve a TSType to its property members: an inline `{ … }` directly, or a named reference
+// looked up to a same-file interface / type-alias. Unresolvable references (imported, computed)
+// return null so the caller degrades to {}.
+function typeMembers(typeNode: t.TSType, program: t.Program): t.TSTypeElement[] | null {
+  if (typeNode.type === "TSTypeLiteral") return typeNode.members
+  if (typeNode.type === "TSTypeReference" && typeNode.typeName.type === "Identifier") {
+    return findTypeDeclMembers(program, typeNode.typeName.name)
+  }
+  return null
+}
+
+function findTypeDeclMembers(program: t.Program, name: string): t.TSTypeElement[] | null {
+  for (const stmt of program.body) {
+    const decl = stmt.type === "ExportNamedDeclaration" && stmt.declaration ? stmt.declaration : stmt
+    if (decl.type === "TSInterfaceDeclaration" && decl.id.name === name) return decl.body.body
+    if (
+      decl.type === "TSTypeAliasDeclaration" &&
+      decl.id.name === name &&
+      decl.typeAnnotation.type === "TSTypeLiteral"
+    ) {
+      return decl.typeAnnotation.members
+    }
+  }
+  return null
+}
+
+function membersToProps(members: t.TSTypeElement[], content: string): Record<string, PropDefinition> {
+  const props: Record<string, PropDefinition> = {}
+  for (const m of members) {
+    if (m.type !== "TSPropertySignature") continue
+    const name = m.key.type === "Identifier" ? m.key.name : m.key.type === "StringLiteral" ? m.key.value : null
+    if (!name) continue
+    const type =
+      m.typeAnnotation?.type === "TSTypeAnnotation" ? nodeText(content, m.typeAnnotation.typeAnnotation) : "unknown"
+    props[name] = { type, required: !m.optional }
+  }
+  return props
+}
+
+function nodeText(content: string, node: t.Node): string {
+  return typeof node.start === "number" && typeof node.end === "number"
+    ? content.slice(node.start, node.end).trim()
+    : "unknown"
 }
 
 // A node is a component if it is (or wraps) a function/class that returns JSX, or a styled() factory.
