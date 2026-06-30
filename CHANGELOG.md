@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.1.1](https://github.com/AI-by-design/primitiv/compare/v2.1.0...v2.1.1) (2026-06-30)
+
+
+### Bug Fixes
+
+* **init:** harden init against bad input and unsafe codex wiring ([1ab6aa1](https://github.com/AI-by-design/primitiv/commit/1ab6aa18c40c6093d2486b142973c58a32f11cf1))
+* **scanner:** resolve component props per-component, not from the first Props block ([419ebce](https://github.com/AI-by-design/primitiv/commit/419ebcefd33dad5926a45cfda47b571ad89de3cc))
+* validate config and contract at trust boundaries with zod ([c3e773b](https://github.com/AI-by-design/primitiv/commit/c3e773b0da247d262ff36d6d7813f2db470d4f5b))
+
+## [2.1.0](https://github.com/AI-by-design/primitiv/compare/v2.0.0...v2.1.0) (2026-06-24)
+
+
+### Features
+
+* **contract:** single source of truth for token categories ([ebeeabe](https://github.com/AI-by-design/primitiv/commit/ebeeabe57eb5ff24e5a0f71240db84d735508279))
+* **contract:** single source of truth for token categories ([7dbc29f](https://github.com/AI-by-design/primitiv/commit/7dbc29f3f1d54cc9a64966027295d41cb310ff87))
+
 ## [2.0.0](https://github.com/AI-by-design/primitiv/compare/v1.12.0...v2.0.0) (2026-06-15)
 
 

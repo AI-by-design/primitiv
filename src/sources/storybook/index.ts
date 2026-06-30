@@ -1,6 +1,7 @@
 import * as fs from "node:fs"
 import * as path from "node:path"
 import type { ComponentMap, PropDefinition, Source, StorybookSource, TokenMap } from "../../types"
+import { emptyTokenMap } from "../../types"
 import { parseArgTypes } from "./argTypes"
 
 interface StorybookEntry {
@@ -22,7 +23,7 @@ export class StorybookAdapter implements Source {
   async scan(): Promise<{ tokens: TokenMap; components: ComponentMap }> {
     const components = await this.extractComponents()
     return {
-      tokens: { colors: {}, spacing: {}, typography: {}, borderRadius: {}, shadows: {} },
+      tokens: emptyTokenMap(),
       components
     }
   }

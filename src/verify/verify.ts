@@ -3,6 +3,7 @@ import * as path from "node:path"
 import { glob } from "glob"
 import { buildContract, loadConfig } from "../index"
 import type { Conflict, PrimitivConfig, PrimitivContract, Violation } from "../types"
+import { primitivContractSchema, summarizeValidationIssues } from "../types"
 
 export interface VerifyOptions {
   strict?: boolean
@@ -22,6 +23,7 @@ export type VerifyStatus =
   | "token-misuse-detected"
   | "missing-config"
   | "missing-contract"
+  | "invalid-contract"
 export type VerifyExitCode = 0 | 1 | 2 | 3
 
 export interface VerifyResult {
@@ -87,7 +89,18 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
     }
   }
 
-  const contract = JSON.parse(fs.readFileSync(contractPath, "utf-8")) as PrimitivContract
+  let parsedContract: unknown
+  try {
+    parsedContract = JSON.parse(fs.readFileSync(contractPath, "utf-8"))
+  } catch {
+    return invalidContract(contractPath, "it isn't valid JSON")
+  }
+  const validatedContract = primitivContractSchema.safeParse(parsedContract)
+  if (!validatedContract.success) {
+    return invalidContract(contractPath, summarizeValidationIssues(validatedContract.error))
+  }
+  // Validated at the boundary (rule 12) — trust the shape from here on.
+  const contract = parsedContract as PrimitivContract
   const generatedAt = new Date(contract.generatedAt)
   const ageHours = (Date.now() - generatedAt.getTime()) / (1000 * 60 * 60)
 
@@ -123,8 +136,8 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
 
   if (hasViolations) {
     const severity = options.strict || !hasUnresolvedConflicts ? "✗" : "!"
-    const noun = violations.length === 1 ? "misuse" : "misuses"
-    messages.push(`${severity} ${violations.length} token ${noun} detected:`)
+    const noun = violations.length === 1 ? "value" : "values"
+    messages.push(`${severity} ${violations.length} hardcoded token ${noun} detected:`)
     for (const v of violations.slice(0, MAX_REPORTED_VIOLATIONS)) {
       const suggestion = v.suggestion ? ` → use --${v.suggestion.token}` : ` → no matching token`
       messages.push(`  - ${v.source.file}:${v.source.line}  ${v.context}${suggestion}`)
@@ -150,7 +163,7 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
   }
 
   if (!drift.isStale && !hasUnresolvedConflicts && !hasViolations) {
-    messages.push(`✓ Contract is fresh (age ${formatAge(ageHours)}), conflicts resolved, no token misuses.`)
+    messages.push(`✓ Contract is fresh (age ${formatAge(ageHours)}), conflicts resolved, no hardcoded token values.`)
   }
 
   // Same-name coexistence is intentional (path-qualified identity) — warn-but-pass, never
@@ -186,6 +199,21 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
       total: violations.length,
       reported: violations.slice(0, MAX_REPORTED_VIOLATIONS)
     }
+  }
+}
+
+// A contract file that exists but can't be trusted — invalid JSON, or missing the
+// structure verify dereferences. Exit 3, the same file-level class as a missing
+// config/contract, with the reason and the fix.
+function invalidContract(contractPath: string, reason: string): VerifyResult {
+  return {
+    status: "invalid-contract",
+    exitCode: 3,
+    messages: [`Contract at ${contractPath} is malformed (${reason}). Run \`primitiv build\` to regenerate it.`],
+    contract: {},
+    conflicts: { total: 0, pending: 0 },
+    drift: { isStale: false, changes: [] },
+    violations: { total: 0, reported: [] }
   }
 }
 

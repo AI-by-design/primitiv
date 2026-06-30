@@ -5,7 +5,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js"
 import { z } from "zod"
 import { normalizeRuleCategory, RULE_CATEGORIES } from "../inferrer"
-import type { PrimitivContract, Rationale } from "../types"
+import type { LintCategory, PrimitivContract, Rationale, TokenCategory } from "../types"
+import { LINT_CATEGORIES, primitivContractSchema, summarizeValidationIssues, TOKEN_CATEGORIES } from "../types"
 
 export class PrimitivMCPServer {
   private server: McpServer
@@ -35,15 +36,27 @@ export class PrimitivMCPServer {
   }
 
   private loadContract(): void {
-    if (fs.existsSync(this.contractPath)) {
-      try {
-        const raw = fs.readFileSync(this.contractPath, "utf-8")
-        this.contract = JSON.parse(raw)
-        this.derivedNameIndex = null
-        this.warnIfMismatched()
-      } catch {
-        process.stderr.write(`primitiv: failed to parse contract at ${this.contractPath}\n`)
+    if (!fs.existsSync(this.contractPath)) return
+    try {
+      const raw = fs.readFileSync(this.contractPath, "utf-8")
+      const parsed: unknown = JSON.parse(raw)
+      const result = primitivContractSchema.safeParse(parsed)
+      if (!result.success) {
+        // Structurally invalid (e.g. truncated mid-rebuild). Keep any previously
+        // loaded good contract rather than dropping it — a transient bad write
+        // shouldn't take a running server's data offline.
+        process.stderr.write(
+          `primitiv: ignoring malformed contract at ${this.contractPath} (${summarizeValidationIssues(result.error)}). Run \`primitiv build\` to regenerate.\n`
+        )
+        return
       }
+      this.contract = parsed as PrimitivContract
+      this.derivedNameIndex = null
+      this.warnIfMismatched()
+    } catch {
+      process.stderr.write(
+        `primitiv: failed to parse contract at ${this.contractPath} (invalid JSON). Run \`primitiv build\` to regenerate.\n`
+      )
     }
   }
 
@@ -184,7 +197,7 @@ export class PrimitivMCPServer {
   // Fold common/alias spellings to the canonical token-category key so a filter
   // never silently returns empty on e.g. "color"/"radius"/"z-index".
   private normalizeTokenCategory(category: string): string {
-    const aliases: Record<string, string> = {
+    const aliases: Record<string, TokenCategory> = {
       color: "colors",
       colour: "colors",
       colours: "colors",
@@ -215,7 +228,9 @@ export class PrimitivMCPServer {
       "get_design_context",
       {
         description:
-          "Get the resolved design system context before building UI. Read-only, no side effects. Default (no category) returns a JSON summary of token counts, component names, conflict counts, and contract metadata. Pass category: 'all' | 'tokens' | 'components' | 'conflicts' to get full detail. Pass tokenCategory to filter tokens: colors, spacing, sizes, typography, borderRadius, shadows, zIndex, breakpoints, motion (unknown/aliased categories return an actionable error, not a silent empty result). Use this as the first call to understand what exists. For lookups by name, use get_token or get_component instead.",
+          "Get the resolved design system context before building UI. Read-only, no side effects. Default (no category) returns a JSON summary of token counts, component names, conflict counts, and contract metadata. Pass category: 'all' | 'tokens' | 'components' | 'conflicts' to get full detail. Pass tokenCategory to filter tokens: " +
+          `${TOKEN_CATEGORIES.join(", ")} (unknown/aliased categories return an actionable error, not a silent empty result). ` +
+          "Use this as the first call to understand what exists. For lookups by name, use get_token or get_component instead.",
         inputSchema: {
           category: z.string(),
           tokenCategory: z.string()
@@ -241,7 +256,9 @@ export class PrimitivMCPServer {
             contractAgeHours,
             sources: this.contract.sources,
             tokenCounts,
-            componentNames: [...new Set(Object.values(this.contract.components).map((c) => c.displayName ?? c.name))].sort(),
+            componentNames: [
+              ...new Set(Object.values(this.contract.components).map((c) => c.displayName ?? c.name))
+            ].sort(),
             componentCount: Object.keys(this.contract.components).length,
             conflictCount: this.contract.conflicts.length,
             pendingConflicts: this.contract.conflicts.filter((c) => c.resolution === "pending").length,
@@ -310,7 +327,9 @@ export class PrimitivMCPServer {
       "get_token",
       {
         description:
-          "Look up a specific design token by name. Read-only, no side effects. Returns the token's name, value, and category, or an error if not found. Pass category to narrow search: colors, spacing, sizes, typography, borderRadius, shadows, zIndex, breakpoints, motion (aliases like 'color'/'radius'/'z-index' are normalized). Pass empty string to search all. Use this when you know the token name. For a broad overview of all tokens, use get_design_context with category 'tokens' instead.",
+          "Look up a specific design token by name. Read-only, no side effects. Returns the token's name, value, and category, or an error if not found. Pass category to narrow search: " +
+          `${TOKEN_CATEGORIES.join(", ")} (aliases like 'color'/'radius'/'z-index' are normalized). ` +
+          "Pass empty string to search all. Use this when you know the token name. For a broad overview of all tokens, use get_design_context with category 'tokens' instead.",
         inputSchema: {
           name: z.string(),
           category: z.string()
@@ -478,7 +497,9 @@ export class PrimitivMCPServer {
       "get_violations",
       {
         description:
-          "Get token-misuse violations: hardcoded literals in source code that bypass the design contract. Read-only, no side effects. Returns JSON with violation count, suggestion-coverage stats, and a list of violations with file:line:column, the captured literal, the surrounding utility (e.g. 'bg-[#ff0000]'), and an optional smart-match suggestion when a contract token has the same value. Pass category to filter: 'all' | 'colors' | 'spacing' | 'typography' | 'borderRadius' | 'shadows'. Call this BEFORE generating UI with literal values — prefer the suggested token over a hardcoded literal. For available tokens to use instead, use get_design_context or get_token.",
+          "Get hardcoded token values: literals in source code typed inline instead of referencing a design token, bypassing the contract. Read-only, no side effects. Returns JSON with a count, suggestion-coverage stats, and a list with file:line:column, the captured literal, the surrounding utility (e.g. 'bg-[#ff0000]'), and an optional smart-match suggestion when a contract token has the same value. " +
+          `Pass category to filter: 'all' | ${LINT_CATEGORIES.map((c) => `'${c}'`).join(" | ")} (hardcoded values are only detected for these). ` +
+          "Call this BEFORE generating UI with literal values — prefer the suggested token over a hardcoded literal. For available tokens to use instead, use get_design_context or get_token.",
         inputSchema: {
           category: z.string()
         }
@@ -489,6 +510,13 @@ export class PrimitivMCPServer {
         if (all === undefined) {
           return this.err(
             "Contract has no violations field — likely built with an older Primitiv. Run `primitiv build` to refresh."
+          )
+        }
+        // Surface an unknown category instead of silently returning [] (rule 10) — and only the
+        // categories the linter actually emits are valid, never the full token vocabulary.
+        if (args.category && args.category !== "all" && !LINT_CATEGORIES.includes(args.category as LintCategory)) {
+          return this.err(
+            `Unknown violation category '${args.category}'. Available: 'all', ${LINT_CATEGORIES.map((c) => `'${c}'`).join(", ")}. Token misuse is only detected for these.`
           )
         }
         const filtered =

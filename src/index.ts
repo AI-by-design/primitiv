@@ -8,6 +8,7 @@ import { CodebaseScanner } from "./scanner"
 import { FigmaAdapter } from "./sources/figma"
 import { StorybookAdapter } from "./sources/storybook"
 import type { PrimitivConfig, PrimitivContract } from "./types"
+import { primitivConfigSchema, summarizeValidationIssues } from "./types"
 
 // Load config — returns config with output.path resolved to an absolute path
 export function loadConfig(configPath?: string, cwd: string = process.cwd()): PrimitivConfig {
@@ -19,7 +20,16 @@ export function loadConfig(configPath?: string, cwd: string = process.cwd()): Pr
 
   // Cache-bust so callers (like verify's rebuild path) pick up config changes without restarting the process.
   delete require.cache[require.resolve(resolved)]
-  const config: PrimitivConfig = require(resolved)
+  const raw: unknown = require(resolved)
+  const parsed = primitivConfigSchema.safeParse(raw)
+  if (!parsed.success) {
+    throw new Error(
+      `Invalid config at ${resolved}: ${summarizeValidationIssues(parsed.error)}. ` +
+        `Fix the file or run \`primitiv init\` to regenerate it.`
+    )
+  }
+  // Validated at the boundary (rule 12) — trust the shape from here on.
+  const config = raw as PrimitivConfig
   const configDir = path.dirname(resolved)
   config.output.path = path.resolve(configDir, config.output.path)
   if (config.sources.codebase) {
@@ -128,7 +138,10 @@ export async function buildContract(
   const violations = await lintTokenMisuse(config, contract)
   contract.violations = violations
   if (violations.length > 0) {
-    log(`\n🔎 Lint: ${violations.length} token misuse${violations.length === 1 ? "" : "s"} detected`)
+    log(
+      `\n🔎 ${violations.length} hardcoded token value${violations.length === 1 ? "" : "s"} — literals typed inline instead of a token.`
+    )
+    log(`   Full list (file:line + suggestion) in the contract's \`violations\` array, or via get_violations.`)
   }
 
   return contract
@@ -157,7 +170,7 @@ export async function build(configPath?: string): Promise<void> {
   )
   console.log(`   ${Object.keys(contract.components).length} components indexed`)
   console.log(`   ${contract.conflicts.filter((c) => c.resolution === "pending").length} pending conflicts`)
-  console.log(`   ${(contract.violations ?? []).length} token misuses`)
+  console.log(`   ${(contract.violations ?? []).length} hardcoded token values`)
 }
 
 // Serve command — start MCP server
@@ -181,7 +194,7 @@ function summarizeKinds(components: Record<string, { kind?: string }>): string {
   }
   const order = ["component", "screen", "provider", "icon", "other"]
   const parts = Object.entries(counts)
-    .sort((a, b) => (order.indexOf(a[0]) - order.indexOf(b[0])) || b[1] - a[1])
+    .sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]) || b[1] - a[1])
     .map(([kind, n]) => `${kind} ${n}`)
   return parts.length > 1 ? `kind: ${parts.join(" · ")}` : ""
 }

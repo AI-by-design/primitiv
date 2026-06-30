@@ -1,3 +1,5 @@
+import { z } from "zod"
+
 // Core types for Primitiv
 
 export interface PrimitivConfig {
@@ -95,6 +97,40 @@ export interface TokenMap {
   [key: string]: Record<string, Token>
 }
 
+// The canonical token-category vocabulary — the single source of truth for the category set.
+// Every category-assigning function is typed against this (so a misspelled or unaccounted-for
+// category is a compile error, not a silent miscategorization), and `emptyTokenMap()` seeds
+// from it (so the "starter" map never drifts from the real set). Adding a category is a one-line
+// change here. ("other" is the on-demand fallback bucket, created lazily when a token matches no
+// category — deliberately not seeded into the empty map.)
+export const TOKEN_CATEGORIES = [
+  "colors",
+  "spacing",
+  "sizes",
+  "typography",
+  "borderRadius",
+  "shadows",
+  "zIndex",
+  "breakpoints",
+  "motion"
+] as const
+
+export type TokenCategory = (typeof TOKEN_CATEGORIES)[number]
+
+// A fresh, empty token map carrying every canonical category. The one place a blank TokenMap is
+// produced — call this instead of hand-typing the category list, so the set lives in exactly one
+// spot. Every contract therefore lists all categories (some empty), a stable shape for consumers.
+export function emptyTokenMap(): TokenMap {
+  return Object.fromEntries(TOKEN_CATEGORIES.map((category) => [category, {}])) as TokenMap
+}
+
+// The lint surface is its own, narrower vocabulary: token-misuse detection only covers color and
+// spacing literals. Kept separate from TOKEN_CATEGORIES so neither pollutes the other — so
+// get_violations advertises exactly these and never the full token set.
+export const LINT_CATEGORIES = ["colors", "spacing"] as const
+
+export type LintCategory = (typeof LINT_CATEGORIES)[number]
+
 export interface Token {
   name: string
   value: string
@@ -170,7 +206,9 @@ export interface InferredRules {
 // bypasses the contract. Surfaced by `primitiv build` and `primitiv verify`.
 export interface Violation {
   type: "token-misuse"
-  category: "colors" | "spacing" | "typography" | "borderRadius" | "shadows"
+  // Only colors and spacing are linted today (see LINT_CATEGORIES); typed against that surface
+  // so the contract can't claim a violation category the linter never emits.
+  category: LintCategory
   // The raw literal as captured (e.g. "#ff0000", "7px").
   found: string
   // The surrounding utility (e.g. "bg-[#ff0000]") for context in the report.
@@ -183,4 +221,49 @@ export interface Violation {
     category: string
     value: string
   }
+}
+
+// ─── Boundary validation (Rule 12) ───────────────────────────────────────────
+// Two lean schemas guarding Primitiv's two untrusted inputs: the user-authored
+// config (loaded via require) and the contract JSON (read by the MCP server and
+// by verify). Deliberately shallow — they check the top-level shape consumers
+// actually dereference, not every leaf token/component/prop. `looseObject` keeps
+// unknown and future fields instead of stripping them (backward-compat: pre-1.6
+// contracts, fields added later). Deep value validation would walk thousands of
+// tokens on every hot-reload for zero crash-safety gain, and would couple the
+// contract schema to the token/prop shapes it has no reason to know about — so
+// `tokens`/`components` are validated only as objects, their values left opaque.
+
+export const primitivConfigSchema = z.looseObject({
+  sources: z.looseObject({
+    codebase: z
+      .looseObject({ root: z.string(), patterns: z.array(z.string()), ignore: z.array(z.string()) })
+      .optional(),
+    figma: z.looseObject({ token: z.string(), fileId: z.string() }).optional(),
+    storybook: z.looseObject({ url: z.string() }).optional()
+  }),
+  governance: z.looseObject({
+    sourceOfTruth: z.enum(["codebase", "figma", "storybook", "manual"]),
+    onConflict: z.enum(["error", "warn", "auto-resolve"])
+  }),
+  output: z.looseObject({ path: z.string() })
+})
+
+export const primitivContractSchema = z.looseObject({
+  version: z.string(),
+  generatedAt: z.string(),
+  sources: z.array(z.string()),
+  tokens: z.record(z.string(), z.unknown()),
+  components: z.record(z.string(), z.unknown()),
+  conflicts: z.array(z.unknown())
+})
+
+// Compact, human-readable reason a config/contract failed validation — the
+// actionable tail of every boundary error/warning. Caps at three issues so the
+// message stays a single readable line.
+export function summarizeValidationIssues(error: z.ZodError): string {
+  return error.issues
+    .slice(0, 3)
+    .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
+    .join("; ")
 }

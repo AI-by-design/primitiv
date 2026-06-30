@@ -345,3 +345,20 @@ describe("writeGitHubWorkflow", () => {
     expect(logs.join("\n")).toContain("https://github.com/AI-by-design/primitiv/settings/branches")
   })
 })
+
+describe("init — boundary fixes", () => {
+  test("generated config carries no broken ./src/types JSDoc path", async () => {
+    await init(tempDir)
+    const config = fs.readFileSync(path.join(tempDir, "primitiv.config.js"), "utf-8")
+    expect(config).not.toContain("./src/types")
+    expect(config).toContain("module.exports")
+  })
+
+  test("a malformed existing .mcp.json doesn't crash init and is left intact", async () => {
+    const mcpPath = path.join(tempDir, ".mcp.json")
+    fs.writeFileSync(mcpPath, "{ this is not valid json")
+    await expect(init(tempDir)).resolves.toBeUndefined()
+    // Non-destructive: the unparseable file is preserved, not overwritten.
+    expect(fs.readFileSync(mcpPath, "utf-8")).toBe("{ this is not valid json")
+  })
+})
