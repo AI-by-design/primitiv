@@ -7,8 +7,8 @@ import { applyRationale, loadRationale } from "./rationale"
 import { CodebaseScanner } from "./scanner"
 import { FigmaAdapter } from "./sources/figma"
 import { StorybookAdapter } from "./sources/storybook"
-import { primitivConfigSchema, summarizeValidationIssues } from "./types"
 import type { PrimitivConfig, PrimitivContract } from "./types"
+import { primitivConfigSchema, summarizeValidationIssues } from "./types"
 
 // Load config — returns config with output.path resolved to an absolute path
 export function loadConfig(configPath?: string, cwd: string = process.cwd()): PrimitivConfig {

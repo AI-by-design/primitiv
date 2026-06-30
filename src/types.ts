@@ -236,7 +236,9 @@ export interface Violation {
 
 export const primitivConfigSchema = z.looseObject({
   sources: z.looseObject({
-    codebase: z.looseObject({ root: z.string(), patterns: z.array(z.string()), ignore: z.array(z.string()) }).optional(),
+    codebase: z
+      .looseObject({ root: z.string(), patterns: z.array(z.string()), ignore: z.array(z.string()) })
+      .optional(),
     figma: z.looseObject({ token: z.string(), fileId: z.string() }).optional(),
     storybook: z.looseObject({ url: z.string() }).optional()
   }),

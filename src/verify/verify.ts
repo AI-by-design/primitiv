@@ -2,8 +2,8 @@ import * as fs from "node:fs"
 import * as path from "node:path"
 import { glob } from "glob"
 import { buildContract, loadConfig } from "../index"
-import { primitivContractSchema, summarizeValidationIssues } from "../types"
 import type { Conflict, PrimitivConfig, PrimitivContract, Violation } from "../types"
+import { primitivContractSchema, summarizeValidationIssues } from "../types"
 
 export interface VerifyOptions {
   strict?: boolean
