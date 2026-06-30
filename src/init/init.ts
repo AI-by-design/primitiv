@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process"
+import { execFileSync, execSync } from "node:child_process"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -51,8 +51,12 @@ export function detectRunner(root: string): Runner {
   return { command: "npx", argsPrefix: [], label: "npm" }
 }
 
+function formatRunnerArgv(runner: Runner, ...args: string[]): string[] {
+  return [runner.command, ...runner.argsPrefix, ...args]
+}
+
 function formatRunnerCommand(runner: Runner, ...args: string[]): string {
-  return [runner.command, ...runner.argsPrefix, ...args].join(" ")
+  return formatRunnerArgv(runner, ...args).join(" ")
 }
 
 export async function init(targetDir?: string): Promise<void> {
@@ -185,8 +189,11 @@ function generateConfig(project: DetectedProject, _root: string): string {
       ? `// Detected: ${project.framework}${project.hasTailwind ? " + Tailwind" : ""}${project.hasTypeScript ? " + TypeScript" : ""}\n`
       : ""
 
-  return `${frameworkNote}/** @type {import('./src/types').PrimitivConfig} */
-module.exports = {
+  // No `@type` JSDoc: the only resolvable path would be into Primitiv's own repo
+  // (`./src/types`), which never exists in the project this config is written to,
+  // and the published package doesn't re-export the config type. A broken import
+  // hint is worse than none — it just lights up the user's editor with an error.
+  return `${frameworkNote}module.exports = {
   sources: {
     codebase: {
       root: "${project.srcRoot}",
@@ -225,9 +232,21 @@ function writeMcpConfig(root: string, runner: Runner = detectRunner(root)): void
     targetFile = path.join(root, ".mcp.json")
   }
 
-  const existing = fs.existsSync(targetFile) ? JSON.parse(fs.readFileSync(targetFile, "utf-8")) : {}
+  let existing: Record<string, unknown> = {}
+  if (fs.existsSync(targetFile)) {
+    const parsed = readJSON(targetFile)
+    if (parsed === null) {
+      // Don't clobber a file we can't parse — it likely holds the user's other MCP
+      // servers. Warn with the fix and leave it untouched rather than crash init.
+      console.log(
+        `⚠️  Skipped MCP config: ${path.relative(root, targetFile)} isn't valid JSON. Fix it and re-run \`primitiv init\`.`
+      )
+      return
+    }
+    existing = parsed
+  }
 
-  const servers = existing.mcpServers || {}
+  const servers = (existing.mcpServers as Record<string, unknown>) ?? {}
   if (servers.primitiv) return
 
   servers.primitiv = {
@@ -489,9 +508,9 @@ function writeCodexConfig(root: string, runner: Runner = detectRunner(root)): vo
   }
 
   const configPath = path.join(root, "primitiv.config.js")
-  const runnerCmd = formatRunnerCommand(runner, "@ai-by-design/primitiv", "serve", configPath)
+  const runnerArgv = formatRunnerArgv(runner, "@ai-by-design/primitiv", "serve", configPath)
   try {
-    execSync(`codex mcp add primitiv -- ${runnerCmd}`, { stdio: "ignore" })
+    execFileSync("codex", ["mcp", "add", "primitiv", "--", ...runnerArgv], { stdio: "ignore" })
     console.log("✅ Added Primitiv to Codex (~/.codex/config.toml)")
   } catch {
     console.log("⚠️  `codex mcp add` failed. Add [mcp_servers.primitiv] to ~/.codex/config.toml manually.")
