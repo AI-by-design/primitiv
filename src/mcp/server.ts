@@ -232,8 +232,8 @@ export class PrimitivMCPServer {
           `${TOKEN_CATEGORIES.join(", ")} (unknown/aliased categories return an actionable error, not a silent empty result). ` +
           "Use this as the first call to understand what exists. For lookups by name, use get_token or get_component instead.",
         inputSchema: {
-          category: z.string(),
-          tokenCategory: z.string()
+          category: z.string().optional(),
+          tokenCategory: z.string().optional()
         }
       },
       async (args) => {
@@ -329,10 +329,10 @@ export class PrimitivMCPServer {
         description:
           "Look up a specific design token by name. Read-only, no side effects. Returns the token's name, value, and category, or an error if not found. Pass category to narrow search: " +
           `${TOKEN_CATEGORIES.join(", ")} (aliases like 'color'/'radius'/'z-index' are normalized). ` +
-          "Pass empty string to search all. Use this when you know the token name. For a broad overview of all tokens, use get_design_context with category 'tokens' instead.",
+          "Omit category to search all. Use this when you know the token name. For a broad overview of all tokens, use get_design_context with category 'tokens' instead.",
         inputSchema: {
           name: z.string(),
-          category: z.string()
+          category: z.string().optional()
         }
       },
       async (args) => {
@@ -426,10 +426,10 @@ export class PrimitivMCPServer {
       "get_conflicts",
       {
         description:
-          "Get conflicts between design sources. Read-only, no side effects. Returns JSON with conflict count, actionable count, and a list of conflicts with type, name, resolution status, and suggested fixes. Pass type: 'all' | 'token' | 'component'. Pass status: 'all' | 'pending' | 'resolved'. Use this to audit disagreements between sources (e.g. Figma vs codebase). For resolved design values, use get_token or get_component instead.",
+          "Get conflicts between design sources. Read-only, no side effects. Returns JSON with conflict count, actionable count, and a list of conflicts with type, name, resolution status, and suggested fixes. Pass type: 'all' | 'token' | 'component' (default 'all'). Pass status: 'all' | 'pending' | 'resolved' (default 'pending'). Use this to audit disagreements between sources (e.g. Figma vs codebase). For resolved design values, use get_token or get_component instead.",
         inputSchema: {
-          type: z.string(),
-          status: z.string()
+          type: z.string().optional(),
+          status: z.string().optional()
         }
       },
       async (args) => {
@@ -464,9 +464,9 @@ export class PrimitivMCPServer {
       "get_inferred_rules",
       {
         description:
-          "Get the design rules inferred from your codebase patterns. Read-only, no side effects. Returns JSON with a list of rules including category, pattern, and confidence, or an error if no rules have been generated yet. Pass category to filter: spacing, colors, typography, borderRadius, naming, components. Pass empty string to get all. Use this to understand implicit conventions the codebase follows. For explicit design token values, use get_token. For source conflicts, use get_conflicts.",
+          "Get the design rules inferred from your codebase patterns. Read-only, no side effects. Returns JSON with a list of rules including category, pattern, and confidence, or an error if no rules have been generated yet. Pass category to filter: spacing, colors, typography, borderRadius, naming, components. Omit category to get all. Use this to understand implicit conventions the codebase follows. For explicit design token values, use get_token. For source conflicts, use get_conflicts.",
         inputSchema: {
-          category: z.string()
+          category: z.string().optional()
         }
       },
       async (args) => {
@@ -485,7 +485,7 @@ export class PrimitivMCPServer {
         const category = normalizeRuleCategory(args.category)
         if (!RULE_CATEGORIES.includes(category)) {
           return this.err(
-            `Unknown rule category '${args.category}'. Valid categories: ${RULE_CATEGORIES.join(", ")}. Pass empty string to get all.`
+            `Unknown rule category '${args.category}'. Valid categories: ${RULE_CATEGORIES.join(", ")}. Omit category to get all.`
           )
         }
         const rules = inferredRules.rules.filter((r) => r.category === category)
@@ -501,7 +501,7 @@ export class PrimitivMCPServer {
           `Pass category to filter: 'all' | ${LINT_CATEGORIES.map((c) => `'${c}'`).join(" | ")} (hardcoded values are only detected for these). ` +
           "Call this BEFORE generating UI with literal values — prefer the suggested token over a hardcoded literal. For available tokens to use instead, use get_design_context or get_token.",
         inputSchema: {
-          category: z.string()
+          category: z.string().optional()
         }
       },
       async (args) => {

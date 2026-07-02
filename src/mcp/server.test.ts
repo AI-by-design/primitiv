@@ -239,6 +239,83 @@ describe("get_violations", () => {
   })
 })
 
+// Every filter arg is declared .optional() — a strict MCP client must be able to make the
+// no-arg calls the tool descriptions (and the init agent block) promise. Pre-fix these five
+// failed schema validation before the handler ran.
+describe("omittable args are declared optional", () => {
+  test("get_design_context with no args returns the summary", async () => {
+    const c = await connect(writeContract({ version: "0.3.0" }))
+    const result = await c.callTool({ name: "get_design_context", arguments: {} })
+    expect(result.isError).toBeFalsy()
+    const content = result.content as Array<{ type: string; text: string }>
+    expect(JSON.parse(content[0].text).contractVersion).toBe("0.3.0")
+  })
+
+  test("get_token with name only searches every category", async () => {
+    const c = await connect(
+      writeContract({
+        tokens: {
+          ...emptyTokenMap(),
+          colors: { primary: { name: "primary", value: "#663399", source: { adapter: "codebase" } } }
+        }
+      })
+    )
+    const result = await c.callTool({ name: "get_token", arguments: { name: "primary" } })
+    expect(result.isError).toBeFalsy()
+    const content = result.content as Array<{ type: string; text: string }>
+    const payload = JSON.parse(content[0].text)
+    expect(payload.value).toBe("#663399")
+    expect(payload.category).toBe("colors")
+  })
+
+  test("get_conflicts with no args defaults to all types, pending status", async () => {
+    const c = await connect(
+      writeContract({
+        conflicts: [
+          {
+            type: "token",
+            name: "colors.primary",
+            sources: [
+              { source: { adapter: "codebase", file: "tokens.css" }, value: "#663399" },
+              { source: { adapter: "figma" }, value: "#639" }
+            ],
+            resolution: "pending"
+          }
+        ]
+      })
+    )
+    const result = await c.callTool({ name: "get_conflicts", arguments: {} })
+    expect(result.isError).toBeFalsy()
+    const content = result.content as Array<{ type: string; text: string }>
+    expect(JSON.parse(content[0].text).count).toBe(1)
+  })
+
+  test("get_inferred_rules with no args returns every rule", async () => {
+    const c = await connect(
+      writeContract({
+        inferredRules: {
+          generatedAt: new Date().toISOString(),
+          rules: [
+            { id: "spacing-scale", category: "spacing", rule: "4px base scale", confidence: "high", evidence: [] }
+          ]
+        }
+      })
+    )
+    const result = await c.callTool({ name: "get_inferred_rules", arguments: {} })
+    expect(result.isError).toBeFalsy()
+    const content = result.content as Array<{ type: string; text: string }>
+    expect(JSON.parse(content[0].text).count).toBe(1)
+  })
+
+  test("get_violations with no args returns all violations", async () => {
+    const c = await connect(writeContract({ violations: [] }))
+    const result = await c.callTool({ name: "get_violations", arguments: {} })
+    expect(result.isError).toBeFalsy()
+    const content = result.content as Array<{ type: string; text: string }>
+    expect(JSON.parse(content[0].text).count).toBe(0)
+  })
+})
+
 describe("contract boundary validation", () => {
   test("a structurally malformed contract degrades to the setup error instead of crashing", async () => {
     const contractPath = path.join(tempDir, "primitiv.contract.json")
