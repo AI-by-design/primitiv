@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
-import { loadConfig } from "./index"
+import { build, loadConfig } from "./index"
 
 let tempDir: string
 
@@ -64,5 +64,51 @@ describe("loadConfig — boundary validation", () => {
 }`)
     const config = loadConfig(undefined, tempDir) as Record<string, unknown>
     expect(config.experimental).toEqual({ future: true })
+  })
+})
+
+describe("build — onConflict exit codes", () => {
+  // Anti-rot: one fixture with a real cross-source conflict (codebase Button vs a
+  // stubbed Storybook Button), built under "error" then "warn" — the exit codes must
+  // differ, or the onConflict wiring has gone inert again.
+  test('"error" exits 2 on a pending conflict and still writes the contract; "warn" exits 0 on the same fixture', async () => {
+    const manifest = {
+      entries: {
+        "components-button--default": {
+          type: "story",
+          id: "components-button--default",
+          title: "Components/Button",
+          name: "Default",
+          importPath: "./Button.stories.tsx"
+        }
+      }
+    }
+    const server = Bun.serve({ port: 0, fetch: () => Response.json(manifest) })
+    try {
+      fs.writeFileSync(
+        path.join(tempDir, "Button.tsx"),
+        `export function Button({ label }: { label: string }) {\n  return <button>{label}</button>\n}\n`
+      )
+      const configBody = (onConflict: string) => `module.exports = {
+  sources: {
+    codebase: { root: ".", patterns: ["**/*.tsx"], ignore: ["node_modules/**"] },
+    storybook: { url: "http://localhost:${server.port}" }
+  },
+  governance: { sourceOfTruth: "codebase", onConflict: "${onConflict}" },
+  output: { path: "./primitiv.contract.json" }
+}`
+      const configPath = path.join(tempDir, "primitiv.config.js")
+      const contractPath = path.join(tempDir, "primitiv.contract.json")
+
+      fs.writeFileSync(configPath, configBody("error"))
+      expect(await build(configPath)).toBe(2)
+      // Failing the build never withholds the artifact that explains the failure.
+      expect(fs.existsSync(contractPath)).toBe(true)
+
+      fs.writeFileSync(configPath, configBody("warn"))
+      expect(await build(configPath)).toBe(0)
+    } finally {
+      server.stop()
+    }
   })
 })

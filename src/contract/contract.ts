@@ -16,6 +16,7 @@ export class ContractBuilder {
     const conflicts: Conflict[] = []
     const mergedTokens = this.mergeTokens(sources, conflicts)
     const { components, nameIndex } = this.mergeComponents(sources, conflicts)
+    if (this.config.governance.onConflict === "auto-resolve") this.autoResolveConflicts(conflicts)
     const inferredRules = inferRules(mergedTokens, components)
 
     const contract: PrimitivContract = {
@@ -150,6 +151,22 @@ export class ContractBuilder {
     }
 
     return { components: merged, nameIndex }
+  }
+
+  // Under onConflict: "auto-resolve", a conflict the source of truth already decides is
+  // marked resolution: "auto" so build and verify pass on it. Genuine standoffs — no SoT
+  // contender — stay "pending". Under "warn"/"error" even SoT-decided conflicts stay
+  // pending on purpose: surfacing beats silencing, and "auto-resolve" is the explicit
+  // opt-in. The conflict record itself is never dropped either way (rule 11).
+  private autoResolveConflicts(conflicts: Conflict[]): void {
+    const sot = this.config.governance.sourceOfTruth
+    for (const conflict of conflicts) {
+      const sotDecided =
+        conflict.type === "component"
+          ? conflict.resolved !== undefined
+          : conflict.sources.some((s) => s.source.adapter === sot)
+      if (sotDecided) conflict.resolution = "auto"
+    }
   }
 
   private buildFixMessage(
