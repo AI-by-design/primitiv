@@ -205,7 +205,10 @@ function generateConfig(project: DetectedProject, _root: string): string {
   governance: {
     // Which source wins when values conflict: "codebase" | "figma" | "storybook" | "manual"
     sourceOfTruth: "${project.hasFigma ? "figma" : "codebase"}",
-    // What to do when a conflict is found: "error" | "warn" | "auto-resolve"
+    // What to do when a conflict is found:
+    //   "warn"         record conflicts as pending; build succeeds (default)
+    //   "error"        write the contract, then fail the build (exit 2) while conflicts are pending
+    //   "auto-resolve" conflicts the sourceOfTruth decides are marked resolved; standoffs stay pending
     onConflict: "warn"
   },
 

@@ -14,7 +14,8 @@ async function main() {
       await init(arg)
       break
     case "build":
-      await build(arg)
+      // exitCode (not process.exit) so queued stdout flushes before the process ends.
+      process.exitCode = await build(arg)
       break
     case "serve":
       await serve(arg)
@@ -57,6 +58,11 @@ Exit codes for verify:
   1  stale or token misuse detected (warning level)
   2  unresolved conflicts (or stale / token misuses in --strict)
   3  no config or contract found, or the contract is malformed
+
+Exit codes for build:
+  0  contract written
+  1  build failed (bad config, unreadable source)
+  2  pending conflicts and governance.onConflict is "error" (contract still written)
 
 Quick start:
   1. Run \`primitiv init\` in your project root

@@ -147,8 +147,11 @@ export async function buildContract(
   return contract
 }
 
-// Build command — scan sources, resolve conflicts, write contract
-export async function build(configPath?: string): Promise<void> {
+// Build command — scan sources, resolve conflicts, write contract.
+// Returns the process exit code: 0 = contract written, 2 = pending conflicts under
+// governance.onConflict: "error". The contract is always written first — failing the
+// build never withholds the artifact that explains the failure.
+export async function build(configPath?: string): Promise<number> {
   const config = loadConfig(configPath)
   const contract = await buildContract(configPath)
 
@@ -164,13 +167,25 @@ export async function build(configPath?: string): Promise<void> {
 
   const builder = new ContractBuilder(config)
   builder.save(contract)
+  const pendingConflicts = contract.conflicts.filter((c) => c.resolution === "pending").length
   console.log(`\n✅ Contract written to ${config.output.path}`)
   console.log(
     `   ${Object.values(contract.tokens).reduce((acc, cat) => acc + Object.keys(cat).length, 0)} tokens resolved`
   )
   console.log(`   ${Object.keys(contract.components).length} components indexed`)
-  console.log(`   ${contract.conflicts.filter((c) => c.resolution === "pending").length} pending conflicts`)
+  console.log(`   ${pendingConflicts} pending conflicts`)
   console.log(`   ${(contract.violations ?? []).length} hardcoded token values`)
+
+  if (config.governance.onConflict === "error" && pendingConflicts > 0) {
+    console.error(
+      `\n✗ governance.onConflict is "error": failing the build on ${pendingConflicts} pending conflict${pendingConflicts === 1 ? "" : "s"} (contract still written).`
+    )
+    console.error(
+      `   Resolve the conflicts above, or relax governance.onConflict to "warn" in primitiv.config.js.`
+    )
+    return 2
+  }
+  return 0
 }
 
 // Serve command — start MCP server

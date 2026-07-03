@@ -61,7 +61,7 @@ bun add @ai-by-design/primitiv
 | Command | Description |
 |---------|-------------|
 | `primitiv init [dir]` | Detect your project (framework, TypeScript, Tailwind, Figma, Storybook, package manager) and generate `primitiv.config.js`. Also writes a project-scoped MCP config, refreshes a Primitiv block in `AGENTS.md` and `CLAUDE.md`, installs a `verify --strict` GitHub Actions workflow, and drops a `/build-component` skill for Claude Code. |
-| `primitiv build [config]` | Scan sources, resolve conflicts, lint for token misuse, write the contract |
+| `primitiv build [config]` | Scan sources, resolve conflicts, lint for token misuse, write the contract. With `governance.onConflict: "error"`, exits `2` when pending conflicts remain (the contract is still written). |
 | `primitiv serve [config]` | Start the MCP server against the built contract. Hot-reloads when the contract file changes. |
 | `primitiv verify [config]` | Re-run `build` and exit non-zero if conflicts are unresolved, token misuse is detected, or the contract is stale. Flags: `--strict`, `--json`, `--fast`. Intended for CI. |
 
@@ -133,7 +133,15 @@ The workflow uses `npx --yes @ai-by-design/primitiv verify --strict`, so it work
 | `0` | Contract is fresh, conflicts resolved, no token misuse |
 | `1` | Stale contract OR token misuse detected (warning level, default) |
 | `2` | Unresolved conflicts, OR `--strict` escalation of stale / token misuse |
-| `3` | No config or contract found |
+| `3` | No config or contract found, or the contract is malformed |
+
+#### Build exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Contract written |
+| `1` | Build failed (bad config, unreadable source) |
+| `2` | Pending conflicts with `governance.onConflict: "error"` — the contract is still written first |
 
 The workflow is idempotent — re-running `primitiv init` refreshes the block between `# <!-- primitiv -->` markers, preserving any content you've added outside them.
 
@@ -197,7 +205,10 @@ module.exports = {
   },
   governance: {
     sourceOfTruth: "codebase", // "codebase" | "figma" | "storybook" | "manual"
-    onConflict: "warn"         // "error" | "warn" | "auto-resolve"
+    // "warn":         record conflicts as pending; build succeeds (default)
+    // "error":        write the contract, then fail the build (exit 2) while conflicts are pending
+    // "auto-resolve": conflicts the sourceOfTruth decides are marked resolved; standoffs stay pending
+    onConflict: "warn"
   },
   output: {
     path: "./primitiv.contract.json"
