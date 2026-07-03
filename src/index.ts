@@ -180,9 +180,7 @@ export async function build(configPath?: string): Promise<number> {
     console.error(
       `\n✗ governance.onConflict is "error": failing the build on ${pendingConflicts} pending conflict${pendingConflicts === 1 ? "" : "s"} (contract still written).`
     )
-    console.error(
-      `   Resolve the conflicts above, or relax governance.onConflict to "warn" in primitiv.config.js.`
-    )
+    console.error(`   Resolve the conflicts above, or relax governance.onConflict to "warn" in primitiv.config.js.`)
     return 2
   }
   return 0
