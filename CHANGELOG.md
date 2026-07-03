@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.2](https://github.com/AI-by-design/primitiv/compare/v2.1.1...v2.1.2) (2026-07-02)
+
+
+### Bug Fixes
+
+* **mcp:** declare omittable tool args optional so no-arg calls pass validation ([#63](https://github.com/AI-by-design/primitiv/issues/63)) ([9b03cd3](https://github.com/AI-by-design/primitiv/commit/9b03cd34015b6208a3f044c7868e1d8fd944fd94))
+
 ## [2.1.1](https://github.com/AI-by-design/primitiv/compare/v2.1.0...v2.1.1) (2026-06-30)
 
 
