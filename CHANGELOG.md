@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.1.3](https://github.com/AI-by-design/primitiv/compare/v2.1.2...v2.1.3) (2026-07-06)
+
+
+### Bug Fixes
+
+* **build:** record source scan statuses and hard-fail when the source of truth can't scan ([#67](https://github.com/AI-by-design/primitiv/issues/67)) ([a632502](https://github.com/AI-by-design/primitiv/commit/a632502d8e5a3a698abbc02f1ccc5983674e2d8d))
+* **build:** wire governance.onConflict so all three values take effect ([#65](https://github.com/AI-by-design/primitiv/issues/65)) ([f7c5712](https://github.com/AI-by-design/primitiv/commit/f7c571219cc5c72fcc6ae5352dca6b71f5e5fee5))
+
 ## [2.1.2](https://github.com/AI-by-design/primitiv/compare/v2.1.1...v2.1.2) (2026-07-02)
 
 
