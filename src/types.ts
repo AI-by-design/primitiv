@@ -43,11 +43,16 @@ export interface CodebaseSource {
   root: string
   patterns: string[]
   ignore: string[]
+  // `optional: false` marks the source required: a failed scan fails the whole build.
+  // Default (true/absent): a failed scan is recorded in sourceStatuses and the build
+  // continues. The governance.sourceOfTruth is always required regardless of this flag.
+  optional?: boolean
 }
 
 export interface FigmaSource {
   token: string
   fileId: string
+  optional?: boolean
 }
 
 export interface StorybookSource {
@@ -56,6 +61,7 @@ export interface StorybookSource {
   // When set, the adapter reads story source files to extract argTypes as props.
   // Usually the project root. Resolved relative to primitiv.config.js when relative.
   sourceRoot?: string
+  optional?: boolean
 }
 
 export interface Source {
@@ -68,6 +74,22 @@ export interface SourceProvenance {
   file?: string
   line?: number
   metadata?: Record<string, unknown>
+}
+
+// Scan outcome per known source, recorded on every build so the contract can
+// distinguish "not configured" (skipped) from "configured but failed" (failed).
+// One field covering every source — not a failures-only error list — so consumers
+// (verify, the MCP server, a future diff engine) read one complete picture.
+export type SourceScanStatus = "ok" | "failed" | "skipped"
+
+export interface SourceStatus {
+  status: SourceScanStatus
+  // Present on "ok": what the scan contributed.
+  tokens?: number
+  components?: number
+  // Present on "failed": sanitized message — status code + short reason only,
+  // never a response body or URL (the contract gets committed and fed to LLMs).
+  error?: string
 }
 
 // The resolved contract — single source of truth
@@ -86,6 +108,8 @@ export interface PrimitivContract {
   inferredRules?: InferredRules
   // Optional so older contract files (pre-1.6) load without crashing.
   violations?: Violation[]
+  // Optional so pre-2.2 contracts load. Keyed "codebase" | "figma" | "storybook".
+  sourceStatuses?: Record<string, SourceStatus>
 }
 
 export interface TokenMap {
@@ -237,10 +261,15 @@ export interface Violation {
 export const primitivConfigSchema = z.looseObject({
   sources: z.looseObject({
     codebase: z
-      .looseObject({ root: z.string(), patterns: z.array(z.string()), ignore: z.array(z.string()) })
+      .looseObject({
+        root: z.string(),
+        patterns: z.array(z.string()),
+        ignore: z.array(z.string()),
+        optional: z.boolean().optional()
+      })
       .optional(),
-    figma: z.looseObject({ token: z.string(), fileId: z.string() }).optional(),
-    storybook: z.looseObject({ url: z.string() }).optional()
+    figma: z.looseObject({ token: z.string(), fileId: z.string(), optional: z.boolean().optional() }).optional(),
+    storybook: z.looseObject({ url: z.string(), optional: z.boolean().optional() }).optional()
   }),
   governance: z.looseObject({
     sourceOfTruth: z.enum(["codebase", "figma", "storybook", "manual"]),

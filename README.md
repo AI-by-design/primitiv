@@ -132,16 +132,20 @@ The workflow uses `npx --yes @ai-by-design/primitiv verify --strict`, so it work
 |------|---------|
 | `0` | Contract is fresh, conflicts resolved, no token misuse |
 | `1` | Stale contract OR token misuse detected (warning level, default) |
-| `2` | Unresolved conflicts, OR `--strict` escalation of stale / token misuse |
+| `2` | Unresolved conflicts, OR `--strict` escalation of stale / token misuse / failed source scans |
 | `3` | No config or contract found, or the contract is malformed |
 
 #### Build exit codes
 
 | Code | Meaning |
 |------|---------|
-| `0` | Contract written |
-| `1` | Build failed (bad config, unreadable source) |
+| `0` | Contract written — a failed optional source is recorded in the contract's `sourceStatuses` and the build continues |
+| `1` | Build failed (bad config, or the `governance.sourceOfTruth` / a source marked `optional: false` failed to scan — no contract written) |
 | `2` | Pending conflicts with `governance.onConflict: "error"` — the contract is still written first |
+
+#### Failed sources
+
+Every build records a `sourceStatuses` field on the contract — `ok` (with token/component counts), `failed` (with a sanitized error), or `skipped` (not configured) per source — so consumers can distinguish "not configured" from "configured but failed". When a remote source (Figma, Storybook) is unreachable, the build warns, records the failure, and continues; `verify` skips drift reporting for that source's entries instead of reporting them all as removed. The one exception: if the failed source **is** your `governance.sourceOfTruth` (or is marked `optional: false`), the build hard-fails and writes nothing — conflict resolution without its authority would be worse than no contract.
 
 The workflow is idempotent — re-running `primitiv init` refreshes the block between `# <!-- primitiv -->` markers, preserving any content you've added outside them.
 
@@ -198,6 +202,7 @@ module.exports = {
     // figma: {
     //   token: process.env.FIGMA_ACCESS_TOKEN,
     //   fileId: "your-figma-file-id"
+    //   // optional: false, // fail the build when this source can't be scanned
     // },
     // storybook: {
     //   url: "http://localhost:6006"

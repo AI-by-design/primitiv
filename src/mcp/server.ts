@@ -119,6 +119,16 @@ export class PrimitivMCPServer {
       warnings.push(`STALE CONTRACT: built ${ageDays} day${ageDays === 1 ? "" : "s"} ago. Run: ${rebuildCmd}`)
     }
 
+    // A source that failed when this contract was built means its data may be missing —
+    // agents must know they're reading a partial picture, not a complete one.
+    for (const [name, status] of Object.entries(this.contract.sourceStatuses ?? {})) {
+      if (status.status !== "failed") continue
+      warnings.push(
+        `SOURCE FAILED: the '${name}' scan failed when this contract was built${status.error ? ` (${status.error})` : ""}. ` +
+          `Its data may be missing from the contract. Fix the source and run: ${rebuildCmd}`
+      )
+    }
+
     return warnings
   }
 
@@ -255,6 +265,7 @@ export class PrimitivMCPServer {
             generatedAt: this.contract.generatedAt,
             contractAgeHours,
             sources: this.contract.sources,
+            ...(this.contract.sourceStatuses ? { sourceStatuses: this.contract.sourceStatuses } : {}),
             tokenCounts,
             componentNames: [
               ...new Set(Object.values(this.contract.components).map((c) => c.displayName ?? c.name))

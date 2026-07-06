@@ -7,7 +7,7 @@ import { applyRationale, loadRationale } from "./rationale"
 import { CodebaseScanner } from "./scanner"
 import { FigmaAdapter } from "./sources/figma"
 import { StorybookAdapter } from "./sources/storybook"
-import type { PrimitivConfig, PrimitivContract } from "./types"
+import type { PrimitivConfig, PrimitivContract, SourceStatus, TokenMap } from "./types"
 import { primitivConfigSchema, summarizeValidationIssues } from "./types"
 
 // Load config — returns config with output.path resolved to an absolute path
@@ -60,23 +60,39 @@ export async function buildContract(
   const config = loadConfig(configPath, cwd)
   const projectRoot = path.dirname(path.resolve(cwd, configPath || "primitiv.config.js"))
   const sources = []
+  // Every known source gets a status so the contract distinguishes "not configured"
+  // (skipped) from "configured but failed" (failed) — a failed remote scan must never
+  // silently read as an emptied source.
+  const sourceStatuses: Record<string, SourceStatus> = {
+    codebase: { status: "skipped" },
+    figma: { status: "skipped" },
+    storybook: { status: "skipped" }
+  }
   const log = (msg: string) => {
     if (!options.silent) console.log(msg)
   }
 
-  log("🔍 Scanning codebase...")
-
   if (config.sources.codebase) {
-    const scanner = new CodebaseScanner(config.sources.codebase)
-    const { tokens, components, internalCssVars } = await scanner.scan()
-    sources.push({ name: "codebase", tokens, components })
-    log(`   ✓ Found ${Object.values(tokens).reduce((acc, cat) => acc + Object.keys(cat).length, 0)} tokens`)
-    if (internalCssVars > 0) {
-      log(`     (excluded ${internalCssVars} component-internal CSS var${internalCssVars === 1 ? "" : "s"})`)
+    log("🔍 Scanning codebase...")
+    try {
+      const scanner = new CodebaseScanner(config.sources.codebase)
+      const { tokens, components, internalCssVars } = await scanner.scan()
+      sources.push({ name: "codebase", tokens, components })
+      sourceStatuses.codebase = {
+        status: "ok",
+        tokens: countTokens(tokens),
+        components: Object.keys(components).length
+      }
+      log(`   ✓ Found ${countTokens(tokens)} tokens`)
+      if (internalCssVars > 0) {
+        log(`     (excluded ${internalCssVars} component-internal CSS var${internalCssVars === 1 ? "" : "s"})`)
+      }
+      log(`   ✓ Found ${Object.keys(components).length} components`)
+      const kindBreakdown = summarizeKinds(components)
+      if (kindBreakdown) log(`     ${kindBreakdown}`)
+    } catch (err: unknown) {
+      recordScanFailure({ name: "codebase", err, config, sourceStatuses, log })
     }
-    log(`   ✓ Found ${Object.keys(components).length} components`)
-    const kindBreakdown = summarizeKinds(components)
-    if (kindBreakdown) log(`     ${kindBreakdown}`)
   }
 
   if (config.sources.figma) {
@@ -85,10 +101,11 @@ export async function buildContract(
       const adapter = new FigmaAdapter(config.sources.figma)
       const { tokens, components } = await adapter.scan()
       sources.push({ name: "figma", tokens, components })
-      log(`   ✓ Found ${Object.values(tokens).reduce((acc, cat) => acc + Object.keys(cat).length, 0)} tokens`)
+      sourceStatuses.figma = { status: "ok", tokens: countTokens(tokens), components: Object.keys(components).length }
+      log(`   ✓ Found ${countTokens(tokens)} tokens`)
       log(`   ✓ Found ${Object.keys(components).length} components`)
     } catch (err: unknown) {
-      log(`   ✗ Figma scan failed: ${errorMessage(err)}`)
+      recordScanFailure({ name: "figma", err, config, sourceStatuses, log })
     }
   }
 
@@ -98,9 +115,14 @@ export async function buildContract(
       const adapter = new StorybookAdapter(config.sources.storybook)
       const { tokens, components } = await adapter.scan()
       sources.push({ name: "storybook", tokens, components })
+      sourceStatuses.storybook = {
+        status: "ok",
+        tokens: countTokens(tokens),
+        components: Object.keys(components).length
+      }
       log(`   ✓ Found ${Object.keys(components).length} components`)
     } catch (err: unknown) {
-      log(`   ✗ Storybook scan failed: ${errorMessage(err)}`)
+      recordScanFailure({ name: "storybook", err, config, sourceStatuses, log })
     }
   }
 
@@ -109,6 +131,7 @@ export async function buildContract(
   const contract = builder.build(sources)
   contract.sourceRoot = projectRoot
   contract.configPath = path.resolve(cwd, configPath || "primitiv.config.js")
+  contract.sourceStatuses = sourceStatuses
 
   // Non-blocking notice: same-name components now coexist under qualified ids instead of
   // first-wins. Surfaced so nobody mistakes a multi-id name for a duplicate-scan bug.
@@ -169,9 +192,7 @@ export async function build(configPath?: string): Promise<number> {
   builder.save(contract)
   const pendingConflicts = contract.conflicts.filter((c) => c.resolution === "pending").length
   console.log(`\n✅ Contract written to ${config.output.path}`)
-  console.log(
-    `   ${Object.values(contract.tokens).reduce((acc, cat) => acc + Object.keys(cat).length, 0)} tokens resolved`
-  )
+  console.log(`   ${countTokens(contract.tokens)} tokens resolved`)
   console.log(`   ${Object.keys(contract.components).length} components indexed`)
   console.log(`   ${pendingConflicts} pending conflicts`)
   console.log(`   ${(contract.violations ?? []).length} hardcoded token values`)
@@ -193,8 +214,49 @@ export async function serve(configPath?: string): Promise<void> {
   await server.start()
 }
 
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
+// Record a failed scan and decide whether the build survives it. The source of truth
+// is always required — resolving conflicts without the authority that decides them is
+// worse than no contract, so no contract is written. Other sources are optional unless
+// the config says `optional: false`; their failure is recorded and the build continues.
+function recordScanFailure(opts: {
+  name: "codebase" | "figma" | "storybook"
+  err: unknown
+  config: PrimitivConfig
+  sourceStatuses: Record<string, SourceStatus>
+  log: (msg: string) => void
+}): void {
+  const { name, err, config, sourceStatuses, log } = opts
+  const error = scanErrorMessage(err)
+  sourceStatuses[name] = { status: "failed", error }
+  if (config.governance.sourceOfTruth === name) {
+    throw new Error(
+      `${name} scan failed: ${error}\n` +
+        `governance.sourceOfTruth is "${name}" — a contract built without its source of truth would resolve conflicts with no authority, so none was written. ` +
+        `Fix the source and rerun \`primitiv build\`, or change governance.sourceOfTruth in primitiv.config.js.`
+    )
+  }
+  if (config.sources[name]?.optional === false) {
+    throw new Error(
+      `${name} scan failed: ${error}\n` +
+        `primitiv.config.js marks this source required (optional: false), so no contract was written. ` +
+        `Fix the source and rerun \`primitiv build\`, or drop \`optional: false\` to continue without it.`
+    )
+  }
+  log(`   ✗ ${name} scan failed: ${error}`)
+  log(`     Continuing without it — recorded in the contract's sourceStatuses.`)
+}
+
+// Sanitized error for logs and the persisted contract: first line only, capped, so a
+// thrown message can never drag a response body or secret into primitiv.contract.json
+// (the contract gets committed and fed to LLMs).
+function scanErrorMessage(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err)
+  const firstLine = msg.split("\n")[0]
+  return firstLine.length > 200 ? `${firstLine.slice(0, 200)}…` : firstLine
+}
+
+function countTokens(tokens: TokenMap): number {
+  return Object.values(tokens).reduce((acc, cat) => acc + Object.keys(cat).length, 0)
 }
 
 // "kind: component 285 · icon 40 · screen 12" — the AST classifier's breakdown, so a build log

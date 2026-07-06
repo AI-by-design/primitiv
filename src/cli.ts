@@ -48,7 +48,8 @@ Options:
   primitiv build  [config] Path to config file (default: primitiv.config.js)
   primitiv serve  [config] Path to config file (default: primitiv.config.js)
   primitiv verify [config] [--strict] [--json] [--fast]
-                           --strict: escalate stale contract / token misuses to hard failure (exit 2)
+                           --strict: escalate stale contract / token misuses / failed
+                                     source scans to hard failure (exit 2)
                            --json:   emit a machine-readable report instead of text
                            --fast:   skip the rebuild-and-compare step; use file mtimes
                                      instead. Faster but unreliable in CI / fresh clones.
@@ -56,12 +57,13 @@ Options:
 Exit codes for verify:
   0  clean — contract matches a fresh rebuild, conflicts resolved, no token misuses
   1  stale or token misuse detected (warning level)
-  2  unresolved conflicts (or stale / token misuses in --strict)
+  2  unresolved conflicts (or stale / token misuses / failed source scans in --strict)
   3  no config or contract found, or the contract is malformed
 
 Exit codes for build:
-  0  contract written
-  1  build failed (bad config, unreadable source)
+  0  contract written (failed optional sources are recorded in sourceStatuses)
+  1  build failed (bad config, or the source of truth / a source marked
+     optional: false failed to scan — no contract written)
   2  pending conflicts and governance.onConflict is "error" (contract still written)
 
 Quick start:

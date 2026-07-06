@@ -165,11 +165,13 @@ function generateConfig(project: DetectedProject, _root: string): string {
     // figma: {
     //   token: process.env.FIGMA_ACCESS_TOKEN,
     //   fileId: "your-figma-file-id"
+    //   // optional: false, // uncomment to fail the build when this source can't be scanned
     // },`
     : `\n    // Uncomment to add Figma as a source:
     // figma: {
     //   token: process.env.FIGMA_ACCESS_TOKEN,
     //   fileId: "your-figma-file-id"
+    //   // optional: false, // uncomment to fail the build when this source can't be scanned
     // },`
 
   const storybookSection = project.hasStorybook
@@ -177,11 +179,13 @@ function generateConfig(project: DetectedProject, _root: string): string {
     // storybook: {
     //   url: "http://localhost:6006",
     //   sourceRoot: "." // enables prop extraction from story files
+    //   // optional: false, // uncomment to fail the build when this source can't be scanned
     // },`
     : `\n    // Uncomment to add Storybook as a source:
     // storybook: {
     //   url: "http://localhost:6006",
     //   sourceRoot: "." // enables prop extraction from story files
+    //   // optional: false, // uncomment to fail the build when this source can't be scanned
     // },`
 
   const frameworkNote =

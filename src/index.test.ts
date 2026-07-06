@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
-import { build, loadConfig } from "./index"
+import { build, buildContract, loadConfig } from "./index"
 
 let tempDir: string
 
@@ -110,5 +110,74 @@ describe("build — onConflict exit codes", () => {
     } finally {
       server.stop()
     }
+  })
+})
+
+describe("buildContract — source scan statuses", () => {
+  // A port that was just bound and released — connecting to it refuses, which is the
+  // cheapest deterministic "remote source is down" a test can produce.
+  function unreachablePort(): number {
+    const s = Bun.serve({ port: 0, fetch: () => new Response("") })
+    const port = s.port
+    s.stop(true)
+    return port
+  }
+
+  function writeSources() {
+    fs.writeFileSync(path.join(tempDir, "tokens.css"), ":root { --color-primary: #3b82f6; }")
+  }
+
+  function configWith(opts: { sourceOfTruth?: string; storybookExtra?: string; port: number }): string {
+    const configPath = path.join(tempDir, "primitiv.config.js")
+    fs.writeFileSync(
+      configPath,
+      `module.exports = {
+  sources: {
+    codebase: { root: ".", patterns: ["**/*.css"], ignore: ["node_modules/**"] },
+    storybook: { url: "http://localhost:${opts.port}"${opts.storybookExtra ?? ""} }
+  },
+  governance: { sourceOfTruth: "${opts.sourceOfTruth ?? "codebase"}", onConflict: "warn" },
+  output: { path: "./primitiv.contract.json" }
+}`
+    )
+    return configPath
+  }
+
+  test("a failed optional source is recorded as failed; the build continues and the others read ok/skipped", async () => {
+    writeSources()
+    const configPath = configWith({ port: unreachablePort() })
+
+    const contract = await buildContract(configPath, { silent: true, cwd: tempDir })
+
+    expect(contract.sourceStatuses?.codebase.status).toBe("ok")
+    expect(contract.sourceStatuses?.codebase.tokens).toBe(1)
+    expect(contract.sourceStatuses?.storybook.status).toBe("failed")
+    expect(contract.sourceStatuses?.storybook.error).toContain("Could not reach Storybook")
+    expect(contract.sourceStatuses?.figma.status).toBe("skipped")
+    // The build survived: the contract carries the codebase data.
+    expect(Object.keys(contract.tokens.colors)).toContain("color-primary")
+  })
+
+  test("build exits 0 and still writes the contract when an optional source fails", async () => {
+    writeSources()
+    const configPath = configWith({ port: unreachablePort() })
+    expect(await build(configPath)).toBe(0)
+    expect(fs.existsSync(path.join(tempDir, "primitiv.contract.json"))).toBe(true)
+  })
+
+  test("hard-fails without writing a contract when the failed source IS governance.sourceOfTruth", async () => {
+    writeSources()
+    const configPath = configWith({ sourceOfTruth: "storybook", port: unreachablePort() })
+
+    expect(buildContract(configPath, { silent: true, cwd: tempDir })).rejects.toThrow(/sourceOfTruth/)
+    expect(fs.existsSync(path.join(tempDir, "primitiv.contract.json"))).toBe(false)
+  })
+
+  test("hard-fails when a failed source is marked required (optional: false)", async () => {
+    writeSources()
+    const configPath = configWith({ port: unreachablePort(), storybookExtra: ", optional: false" })
+
+    expect(buildContract(configPath, { silent: true, cwd: tempDir })).rejects.toThrow(/optional: false/)
+    expect(fs.existsSync(path.join(tempDir, "primitiv.contract.json"))).toBe(false)
   })
 })

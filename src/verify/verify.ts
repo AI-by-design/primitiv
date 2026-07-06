@@ -21,6 +21,7 @@ export type VerifyStatus =
   | "stale"
   | "unresolved-conflicts"
   | "token-misuse-detected"
+  | "source-scan-failed"
   | "missing-config"
   | "missing-contract"
   | "invalid-contract"
@@ -51,6 +52,11 @@ export interface VerifyResult {
     // contract itself; agents fetch it via the get_violations MCP tool.
     reported: Violation[]
   }
+  // Sources that failed to scan — during the rebuild in default mode, or as recorded
+  // on the committed contract in --fast mode. Warn-level by default; --strict
+  // escalates to a hard failure (exit 2). Drift for a failed source's entries is not
+  // evaluated, so an unreachable Figma never reads as "every figma token removed".
+  failedSources: Array<{ name: string; error?: string }>
 }
 
 const MAX_REPORTED_CHANGES = 10
@@ -70,7 +76,8 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
       contract: {},
       conflicts: { total: 0, pending: 0 },
       drift: { isStale: false, changes: [] },
-      violations: { total: 0, reported: [] }
+      violations: { total: 0, reported: [] },
+      failedSources: []
     }
   }
 
@@ -85,7 +92,8 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
       contract: {},
       conflicts: { total: 0, pending: 0 },
       drift: { isStale: false, changes: [] },
-      violations: { total: 0, reported: [] }
+      violations: { total: 0, reported: [] },
+      failedSources: []
     }
   }
 
@@ -111,13 +119,31 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
   // the current source tree. In --fast mode we trust the committed contract,
   // accepting that violations may be stale (same tradeoff as drift detection).
   const driftAndLint = options.fast
-    ? { ...(await detectDriftByMtime(config, resolvedConfigPath, generatedAt)), violations: contract.violations ?? [] }
+    ? {
+        ...(await detectDriftByMtime(config, resolvedConfigPath, generatedAt)),
+        violations: contract.violations ?? [],
+        failedSources: collectFailedSources(contract.sourceStatuses)
+      }
     : await detectDriftAndLintByRebuild(contract, configPath, cwd)
   const drift = { isStale: driftAndLint.isStale, changes: driftAndLint.changes }
   const violations = driftAndLint.violations
   const hasViolations = violations.length > 0
+  const failedSources = driftAndLint.failedSources
+  const hasFailedSources = failedSources.length > 0
 
   const messages: string[] = []
+
+  if (hasFailedSources) {
+    const severity = options.strict ? "✗" : "!"
+    for (const failed of failedSources) {
+      messages.push(
+        `${severity} Source '${failed.name}' failed to scan${failed.error ? ` (${failed.error})` : ""} — its data may be missing; drift for its entries is not evaluated.`
+      )
+    }
+    if (!options.strict) {
+      messages.push(`  Does not fail verify by default; --strict escalates failed sources to a hard failure.`)
+    }
+  }
 
   if (hasUnresolvedConflicts) {
     messages.push(
@@ -162,7 +188,7 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
     messages.push(`  Run \`primitiv build\` to refresh.`)
   }
 
-  if (!drift.isStale && !hasUnresolvedConflicts && !hasViolations) {
+  if (!drift.isStale && !hasUnresolvedConflicts && !hasViolations && !hasFailedSources) {
     messages.push(`✓ Contract is fresh (age ${formatAge(ageHours)}), conflicts resolved, no hardcoded token values.`)
   }
 
@@ -179,6 +205,7 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
     isStale: drift.isStale,
     hasUnresolvedConflicts,
     hasViolations,
+    hasFailedSources,
     strict: options.strict === true
   })
 
@@ -198,7 +225,8 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
     violations: {
       total: violations.length,
       reported: violations.slice(0, MAX_REPORTED_VIOLATIONS)
-    }
+    },
+    failedSources
   }
 }
 
@@ -213,7 +241,8 @@ function invalidContract(contractPath: string, reason: string): VerifyResult {
     contract: {},
     conflicts: { total: 0, pending: 0 },
     drift: { isStale: false, changes: [] },
-    violations: { total: 0, reported: [] }
+    violations: { total: 0, reported: [] },
+    failedSources: []
   }
 }
 
@@ -225,10 +254,24 @@ async function detectDriftAndLintByRebuild(
   committed: PrimitivContract,
   configPath: string | undefined,
   cwd: string
-): Promise<{ isStale: boolean; changes: string[]; violations: Violation[] }> {
+): Promise<{
+  isStale: boolean
+  changes: string[]
+  violations: Violation[]
+  failedSources: Array<{ name: string; error?: string }>
+}> {
   const fresh = await buildContract(configPath, { silent: true, cwd })
-  const changes = diffContracts(committed, fresh)
-  return { isStale: changes.length > 0, changes, violations: fresh.violations ?? [] }
+  const failedSources = collectFailedSources(fresh.sourceStatuses)
+  const changes = diffContracts(committed, fresh, new Set(failedSources.map((f) => f.name)))
+  return { isStale: changes.length > 0, changes, violations: fresh.violations ?? [], failedSources }
+}
+
+function collectFailedSources(
+  sourceStatuses: PrimitivContract["sourceStatuses"]
+): Array<{ name: string; error?: string }> {
+  return Object.entries(sourceStatuses ?? {})
+    .filter(([, s]) => s.status === "failed")
+    .map(([name, s]) => ({ name, ...(s.error ? { error: s.error } : {}) }))
 }
 
 // Compare two contracts and return a list of human-readable change descriptions.
@@ -237,13 +280,18 @@ async function detectDriftAndLintByRebuild(
 //   - component additions / removals
 // generatedAt timestamps and source provenance metadata are intentionally
 // ignored — drift is about the design surface, not when the file was written.
-function diffContracts(committed: PrimitivContract, fresh: PrimitivContract): string[] {
+// Entries whose provenance points at a source that failed during the fresh scan
+// are excluded from removal reporting: an unreachable Figma means "unknown",
+// not "every figma token was removed".
+function diffContracts(committed: PrimitivContract, fresh: PrimitivContract, failedSources?: Set<string>): string[] {
   const changes: string[] = []
+  const failed = failedSources ?? new Set<string>()
 
   const allCategories = new Set([...Object.keys(committed.tokens), ...Object.keys(fresh.tokens)])
   for (const category of allCategories) {
-    const committedTokens = (committed.tokens as Record<string, Record<string, { value: string }>>)[category] || {}
-    const freshTokens = (fresh.tokens as Record<string, Record<string, { value: string }>>)[category] || {}
+    type DiffToken = { value: string; source?: { adapter?: string } }
+    const committedTokens = (committed.tokens as Record<string, Record<string, DiffToken>>)[category] || {}
+    const freshTokens = (fresh.tokens as Record<string, Record<string, DiffToken>>)[category] || {}
     const allNames = new Set([...Object.keys(committedTokens), ...Object.keys(freshTokens)])
     for (const name of allNames) {
       const c = committedTokens[name]
@@ -251,14 +299,16 @@ function diffContracts(committed: PrimitivContract, fresh: PrimitivContract): st
       if (!c) {
         changes.push(`token added: ${category}.${name}`)
       } else if (!f) {
-        changes.push(`token removed: ${category}.${name}`)
+        if (!failed.has(c.source?.adapter ?? "")) changes.push(`token removed: ${category}.${name}`)
       } else if (c.value !== f.value) {
         changes.push(`token value changed: ${category}.${name} (${c.value} → ${f.value})`)
       }
     }
   }
 
-  const removed = Object.keys(committed.components).filter((key) => !fresh.components[key])
+  const removed = Object.keys(committed.components).filter(
+    (key) => !fresh.components[key] && !failed.has(committed.components[key].source.adapter)
+  )
   const added = Object.keys(fresh.components).filter((key) => !committed.components[key])
 
   // Re-key recognizer: the 0.2 → 0.3 migration renames every component key from bare name
@@ -341,14 +391,18 @@ function decideStatus(params: {
   isStale: boolean
   hasUnresolvedConflicts: boolean
   hasViolations: boolean
+  hasFailedSources: boolean
   strict: boolean
 }): {
   status: VerifyStatus
   exitCode: VerifyExitCode
 } {
-  // Precedence: data integrity (conflicts) > usage (violations) > freshness (stale).
-  // A fresh build with violations is more important to surface than a stale-but-clean one.
+  // Precedence: data integrity (conflicts) > completeness (failed sources, --strict only)
+  // > usage (violations) > freshness (stale). A failed source is warn-and-continue by
+  // default — codebase is usually the source of truth and a transient Storybook outage
+  // shouldn't fail every build — but under --strict an incomplete picture is a failure.
   if (params.hasUnresolvedConflicts) return { status: "unresolved-conflicts", exitCode: 2 }
+  if (params.strict && params.hasFailedSources) return { status: "source-scan-failed", exitCode: 2 }
   if (params.hasViolations) return { status: "token-misuse-detected", exitCode: params.strict ? 2 : 1 }
   if (params.isStale) return { status: "stale", exitCode: params.strict ? 2 : 1 }
   return { status: "clean", exitCode: 0 }
