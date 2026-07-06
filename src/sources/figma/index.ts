@@ -55,10 +55,10 @@ export class FigmaAdapter implements Source {
       headers: { "X-Figma-Token": this.config.token }
     })
     if (!res.ok) {
-      const body = await res.text().catch(() => "")
+      // Status code + statusText only — never the response body. This message ends up in
+      // the persisted contract's sourceStatuses, which gets committed and fed to LLMs.
       throw new Error(
-        `Figma API error (${res.status}): ${res.statusText}${body ? ` — ${body}` : ""}. ` +
-          `Check your token and fileId in primitiv.config.js.`
+        `Figma API error (${res.status}): ${res.statusText}. Check your token and fileId in primitiv.config.js.`
       )
     }
     return (await res.json()) as T

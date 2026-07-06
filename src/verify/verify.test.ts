@@ -314,6 +314,90 @@ describe("verify — component identity migration (0.2 → 0.3)", () => {
   })
 })
 
+describe("verify — failed sources", () => {
+  function unreachablePort(): number {
+    const s = Bun.serve({ port: 0, fetch: () => new Response("") })
+    const port = s.port
+    s.stop(true)
+    return port
+  }
+
+  function writeStorybookConfig(root: string, port: number) {
+    const body = `module.exports = {
+  sources: {
+    codebase: { root: ".", patterns: ["**/*.css"], ignore: ["node_modules/**"] },
+    storybook: { url: "http://localhost:${port}" }
+  },
+  governance: { sourceOfTruth: "codebase", onConflict: "warn" },
+  output: { path: "./primitiv.contract.json" }
+}
+`
+    fs.writeFileSync(path.join(root, "primitiv.config.js"), body)
+  }
+
+  // A committed contract holding a storybook-sourced component, as a build with a
+  // healthy Storybook would have written it.
+  function storybookCommit(root: string) {
+    writeContract(root, {
+      components: {
+        "storybook:Button": {
+          name: "Button",
+          displayName: "Button",
+          source: { adapter: "storybook", file: "./Button.stories.tsx" }
+        }
+      },
+      componentNameIndex: { Button: ["storybook:Button"] },
+      sourceStatuses: {
+        codebase: { status: "ok", tokens: 0, components: 0 },
+        figma: { status: "skipped" },
+        storybook: { status: "ok", tokens: 0, components: 1 }
+      }
+    })
+  }
+
+  test("entries from a source that failed during rebuild are not reported as removed", async () => {
+    writeStorybookConfig(tempDir, unreachablePort())
+    storybookCommit(tempDir)
+
+    const result = await verify(undefined, { cwd: tempDir })
+    // The unreachable Storybook must read as "unknown", not "Button was removed".
+    expect(result.drift.changes.some((c) => c.includes("storybook:Button"))).toBe(false)
+    expect(result.drift.isStale).toBe(false)
+    expect(result.status).toBe("clean")
+    expect(result.exitCode).toBe(0)
+    expect(result.failedSources).toEqual([{ name: "storybook", error: expect.stringContaining("Storybook") }])
+    expect(result.messages.some((m) => m.includes("failed to scan"))).toBe(true)
+  })
+
+  test("--strict escalates a failed source to exit 2 (source-scan-failed)", async () => {
+    writeStorybookConfig(tempDir, unreachablePort())
+    storybookCommit(tempDir)
+
+    const result = await verify(undefined, { cwd: tempDir, strict: true })
+    expect(result.status).toBe("source-scan-failed")
+    expect(result.exitCode).toBe(2)
+  })
+
+  test("--fast surfaces failed sources recorded on the committed contract", async () => {
+    writeConfig(tempDir)
+    writeContract(tempDir, {
+      sourceStatuses: {
+        codebase: { status: "ok", tokens: 0, components: 0 },
+        figma: { status: "failed", error: "Figma API error (403): Forbidden" },
+        storybook: { status: "skipped" }
+      }
+    })
+
+    const result = await verify(undefined, { cwd: tempDir, fast: true })
+    expect(result.failedSources).toEqual([{ name: "figma", error: "Figma API error (403): Forbidden" }])
+    expect(result.exitCode).toBe(0)
+
+    const strict = await verify(undefined, { cwd: tempDir, fast: true, strict: true })
+    expect(strict.status).toBe("source-scan-failed")
+    expect(strict.exitCode).toBe(2)
+  })
+})
+
 describe("verify — invalid contract", () => {
   test("returns invalid-contract (exit 3) when the contract isn't valid JSON", async () => {
     writeConfig(tempDir)

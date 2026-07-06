@@ -212,6 +212,23 @@ describe("get_design_context", () => {
     expect(payload.contractVersion).toBe("0.3.0")
   })
 
+  test("summary surfaces a failed source as a warning and passes sourceStatuses through", async () => {
+    const c = await connect(
+      writeContract({
+        sourceStatuses: {
+          codebase: { status: "ok", tokens: 3, components: 2 },
+          figma: { status: "failed", error: "Figma API error (403): Forbidden" },
+          storybook: { status: "skipped" }
+        }
+      })
+    )
+    const result = await c.callTool({ name: "get_design_context", arguments: {} })
+    const content = result.content as Array<{ type: string; text: string }>
+    const payload = JSON.parse(content[0].text)
+    expect(payload.sourceStatuses.figma.status).toBe("failed")
+    expect(payload.warnings.some((w: string) => w.includes("SOURCE FAILED") && w.includes("figma"))).toBe(true)
+  })
+
   test("summary token counts cover every canonical category", async () => {
     const c = await connect(writeContract({}))
     const result = await c.callTool({ name: "get_design_context", arguments: { category: "", tokenCategory: "" } })
