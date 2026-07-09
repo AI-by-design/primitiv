@@ -3,7 +3,15 @@ import * as path from "node:path"
 import { parse } from "@babel/parser"
 import type * as t from "@babel/types"
 import { glob } from "glob"
-import type { CodebaseSource, ComponentKind, ComponentMap, PropDefinition, TokenCategory, TokenMap } from "../types"
+import type {
+  CodebaseSource,
+  ComponentKind,
+  ComponentMap,
+  PropDefinition,
+  TokenCategory,
+  TokenMap,
+  TokenRedefinition
+} from "../types"
 import { emptyTokenMap } from "../types"
 
 export class CodebaseScanner {
@@ -13,11 +21,12 @@ export class CodebaseScanner {
     tokens: TokenMap
     components: ComponentMap
     internalCssVars: number
+    redefinitions: TokenRedefinition[]
   }> {
     const files = await this.getFiles()
-    const { tokens, internalCssVars } = await this.extractTokens(files)
+    const { tokens, internalCssVars, redefinitions } = await this.extractTokens(files)
     const components = await this.extractComponents(files)
-    return { tokens, components, internalCssVars }
+    return { tokens, components, internalCssVars, redefinitions }
   }
 
   private async getFiles(): Promise<string[]> {
@@ -30,10 +39,17 @@ export class CodebaseScanner {
       })
       files.push(...matches)
     }
-    return files
+    // glob returns filesystem enumeration order, which varies across machines. Scan order
+    // decides which definition "first write wins" keeps — sort so the kept value (and the
+    // contract as a whole) is deterministic everywhere, not per-platform.
+    return files.sort()
   }
 
-  private async extractTokens(files: string[]): Promise<{ tokens: TokenMap; internalCssVars: number }> {
+  private async extractTokens(files: string[]): Promise<{
+    tokens: TokenMap
+    internalCssVars: number
+    redefinitions: TokenRedefinition[]
+  }> {
     const tokens: TokenMap = emptyTokenMap()
 
     // Reference registry: base scales (e.g. Polaris `export const size = { '100': '4px' }`)
@@ -41,6 +57,9 @@ export class CodebaseScanner {
     // literal. Pending refs are resolved after every file is walked (refs can be forward).
     const registry = new TokenRegistry()
     const pending: PendingRef[] = []
+    // Same-name-different-value definitions within this scan, and which stored tokens came
+    // from a conditional (at-rule) scope — both feed the shared write discipline below.
+    const capture: WriteCapture = { redefs: new Map(), conditionalKeys: new Set() }
     let internalCssVars = 0
 
     for (const file of files) {
@@ -48,21 +67,29 @@ export class CodebaseScanner {
       const ext = path.extname(file)
 
       if (ext === ".css") {
-        internalCssVars += this.extractCSSTokens(content, file, tokens)
+        internalCssVars += this.extractCSSTokens({ content, file, tokens, capture })
       } else if (ext === ".ts" || ext === ".tsx" || ext === ".jsx") {
         const program = parseProgram(content)
-        if (program) this.extractTSTokens(program, file, tokens, registry, pending)
+        if (program) this.extractTSTokens(program, file, tokens, registry, pending, capture)
       }
     }
 
     for (const ref of pending) {
       const value = registry.resolve(ref.ref)
       if (value !== undefined && isDesignValue(value)) {
-        this.addToken({ tokens, name: ref.name, value, groupKey: ref.groupKey, file: ref.file, line: ref.line })
+        this.addToken({
+          tokens,
+          name: ref.name,
+          value,
+          groupKey: ref.groupKey,
+          file: ref.file,
+          line: ref.line,
+          capture
+        })
       }
     }
 
-    return { tokens, internalCssVars }
+    return { tokens, internalCssVars, redefinitions: [...capture.redefs.values()] }
   }
 
   // Returns the count of component-internal vars that were dropped (logged by the build).
@@ -70,7 +97,8 @@ export class CodebaseScanner {
   // `@theme`). Vars defined inside a component selector (`.root`, `.Thumbnail`) or matching a
   // component-prefix convention (`--pc-`) are component-internal implementation detail, not the
   // design-token scale — so they're excluded from the buckets and counted instead.
-  private extractCSSTokens(content: string, file: string, tokens: TokenMap): number {
+  private extractCSSTokens(opts: { content: string; file: string; tokens: TokenMap; capture: WriteCapture }): number {
+    const { content, file, tokens, capture } = opts
     let internal = 0
 
     for (const decl of cssCustomProperties(content)) {
@@ -85,12 +113,15 @@ export class CodebaseScanner {
       }
 
       const category = this.categorizeToken(decl.name, value)
-      if (!tokens[category]) tokens[category] = {}
-      tokens[category][decl.name] = {
+      this.writeToken({
+        tokens,
+        capture,
+        category,
         name: decl.name,
         value,
-        source: { adapter: "codebase", file, line: decl.line }
-      }
+        source: { adapter: "codebase", file, line: decl.line },
+        conditional: decl.conditional
+      })
     }
 
     return internal
@@ -107,7 +138,8 @@ export class CodebaseScanner {
     file: string,
     tokens: TokenMap,
     registry: TokenRegistry,
-    pending: PendingRef[]
+    pending: PendingRef[],
+    capture: WriteCapture
   ): void {
     for (const [exportName, objectExpr] of exportedObjectLiterals(program)) {
       registry.collect(exportName, objectExpr)
@@ -118,7 +150,9 @@ export class CodebaseScanner {
         onLeaf: (name, valueNode, groupKey, line) => {
           const literal = literalValue(valueNode)
           if (literal !== undefined) {
-            if (isDesignValue(literal)) this.addToken({ tokens, name, value: literal, groupKey, file, line })
+            if (isDesignValue(literal)) {
+              this.addToken({ tokens, name, value: literal, groupKey, file, line, capture })
+            }
             return
           }
           const ref = referenceTarget(valueNode)
@@ -135,13 +169,68 @@ export class CodebaseScanner {
     groupKey: string
     file: string
     line: number
+    capture: WriteCapture
   }): void {
-    const { tokens, name, value, groupKey, file, line } = opts
+    const { tokens, name, value, groupKey, file, line, capture } = opts
     const category = categorizeByGroup(groupKey) ?? this.categorizeToken(name, value)
+    this.writeToken({
+      tokens,
+      capture,
+      category,
+      name,
+      value,
+      source: { adapter: "codebase", file, line },
+      conditional: false
+    })
+  }
+
+  // The one write path for both extraction pipelines (CSS + TS). First write wins so
+  // provenance points at the earliest definition — and a later definition with a DIFFERENT
+  // value is captured as a redefinition for ContractBuilder to surface (rule 11), instead of
+  // silently losing one of the two. Conditional (at-rule) definitions are the exception:
+  // a responsive `@media { :root { --space: 12px } }` override is a legitimate second value,
+  // so it never wins over an unconditional definition and never counts as a redefinition.
+  private writeToken(opts: {
+    tokens: TokenMap
+    capture: WriteCapture
+    category: string
+    name: string
+    value: string
+    source: { adapter: "codebase"; file: string; line: number }
+    conditional: boolean
+  }): void {
+    const { tokens, capture, category, name, value, source, conditional } = opts
     if (!tokens[category]) tokens[category] = {}
-    // First write wins, mirroring the CSS path — provenance points at the earliest definition.
-    if (tokens[category][name]) return
-    tokens[category][name] = { name, value, source: { adapter: "codebase", file, line } }
+    const key = `${category} ${name}`
+    const existing = tokens[category][name]
+
+    if (!existing) {
+      tokens[category][name] = { name, value, source }
+      if (conditional) capture.conditionalKeys.add(key)
+      return
+    }
+
+    // An unconditional definition upgrades over a conditional first sighting — the
+    // unconditioned value is the token's canonical default.
+    if (!conditional && capture.conditionalKeys.has(key)) {
+      tokens[category][name] = { name, value, source }
+      capture.conditionalKeys.delete(key)
+      return
+    }
+
+    if (existing.value === value || conditional) return
+
+    const redef = capture.redefs.get(key)
+    if (redef) {
+      redef.discarded.push({ value, source })
+    } else {
+      capture.redefs.set(key, {
+        category,
+        name,
+        kept: { value: existing.value, source: existing.source },
+        discarded: [{ value, source }]
+      })
+    }
   }
 
   private categorizeToken(rawName: string, value: string): TokenCategory | "other" {
@@ -249,6 +338,13 @@ interface FoundComponent {
   line: number
   kind: ComponentKind
   props: Record<string, PropDefinition>
+}
+
+// Scan-scoped state for the shared token write path: redefinitions found so far
+// (keyed by category+name) and which stored tokens came from a conditional scope.
+interface WriteCapture {
+  redefs: Map<string, TokenRedefinition>
+  conditionalKeys: Set<string>
 }
 
 // Path-qualified component id: the file's path relative to the scan root, sans extension,
@@ -881,6 +977,10 @@ interface CssDecl {
   value: string
   selector: string
   line: number
+  // True when any enclosing frame above the innermost selector is an at-rule
+  // (`@media`, `@supports`, `@container`, `@layer`) — the definition only applies
+  // conditionally, so it neither overrides nor conflicts with the unconditional value.
+  conditional: boolean
 }
 
 // Walk CSS and yield each custom property with the innermost selector that scopes it.
@@ -915,7 +1015,15 @@ function cssCustomProperties(css: string): CssDecl[] {
     if (colon === -1) return
     const name = decl.slice(2, colon).trim()
     const value = decl.slice(colon + 1).trim()
-    if (name && value) out.push({ name, value, selector: stack[stack.length - 1] ?? "", line: tokenLine })
+    if (name && value) {
+      out.push({
+        name,
+        value,
+        selector: stack[stack.length - 1] ?? "",
+        line: tokenLine,
+        conditional: stack.slice(0, -1).some((frame) => frame.startsWith("@"))
+      })
+    }
   }
 
   for (let i = 0; i < css.length; i++) {

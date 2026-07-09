@@ -119,6 +119,77 @@ describe("CSS selector scope (global vs component-internal)", () => {
   })
 })
 
+describe("token redefinition capture", () => {
+  test("same name defined twice with different values → first wins + a redefinition record", async () => {
+    writeFixture(
+      "tokens.css",
+      `:root { --color-bg: #ffffff; }
+:root { --color-bg: #000000; }`
+    )
+    const { tokens, redefinitions } = await new CodebaseScanner(source()).scan()
+    expect(tokens.colors["color-bg"]?.value).toBe("#ffffff")
+    expect(redefinitions).toHaveLength(1)
+    expect(redefinitions[0].name).toBe("color-bg")
+    expect(redefinitions[0].kept.value).toBe("#ffffff")
+    expect(redefinitions[0].kept.source.line).toBe(1)
+    expect(redefinitions[0].discarded).toEqual([
+      { value: "#000000", source: { adapter: "codebase", file: "tokens.css", line: 2 } }
+    ])
+  })
+
+  test("same name with the SAME value twice is harmless — no redefinition", async () => {
+    writeFixture("a.css", `:root { --color-bg: #ffffff; }`)
+    writeFixture("b.css", `:root { --color-bg: #ffffff; }`)
+    const { redefinitions } = await new CodebaseScanner(source()).scan()
+    expect(redefinitions).toHaveLength(0)
+  })
+
+  test("cross-file redefinition within the source is captured with both provenances", async () => {
+    writeFixture("a.css", `:root { --space-md: 16px; }`)
+    writeFixture("b.css", `:root { --space-md: 20px; }`)
+    const { tokens, redefinitions } = await new CodebaseScanner(source()).scan()
+    expect(tokens.spacing["space-md"]?.value).toBe("16px")
+    expect(redefinitions).toHaveLength(1)
+    expect(redefinitions[0].kept.source.file).toBe("a.css")
+    expect(redefinitions[0].discarded[0].source.file).toBe("b.css")
+  })
+
+  test("a media-query override is a legitimate second value — not a redefinition", async () => {
+    writeFixture(
+      "responsive.css",
+      `:root { --space-page: 16px; }
+@media (min-width: 768px) { :root { --space-page: 24px; } }`
+    )
+    const { tokens, redefinitions } = await new CodebaseScanner(source()).scan()
+    expect(tokens.spacing["space-page"]?.value).toBe("16px")
+    expect(redefinitions).toHaveLength(0)
+  })
+
+  test("an unconditional definition upgrades over a conditional first sighting — no redefinition", async () => {
+    writeFixture(
+      "responsive.css",
+      `@media (min-width: 768px) { :root { --space-page: 24px; } }
+:root { --space-page: 16px; }`
+    )
+    const { tokens, redefinitions } = await new CodebaseScanner(source()).scan()
+    // The unconditioned value is the canonical default even though it scanned second.
+    expect(tokens.spacing["space-page"]?.value).toBe("16px")
+    expect(redefinitions).toHaveLength(0)
+  })
+
+  test("TS theme objects redefining the same token name are captured too", async () => {
+    writeFixture(
+      "themes.ts",
+      `export const base = { colors: { brand: "#111111" } }
+export const alt = { colors: { brand: "#222222" } }`
+    )
+    const { tokens, redefinitions } = await new CodebaseScanner(source()).scan()
+    expect(tokens.colors["colors-brand"]?.value).toBe("#111111")
+    expect(redefinitions).toHaveLength(1)
+    expect(redefinitions[0].discarded[0].value).toBe("#222222")
+  })
+})
+
 describe("TS theme-token extraction (AST)", () => {
   test("walks a nested `export const theme = {…} as const` and categorizes by group key", async () => {
     writeFixture(

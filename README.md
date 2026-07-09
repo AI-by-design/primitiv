@@ -40,7 +40,7 @@ Tokens file     ──┤
 Any adapter     ──┘
 ```
 
-1. **Scan** — Primitiv ingests from any configured source via adapters. The codebase scanner parses TypeScript/JSX structurally (AST, not regex): every component in a file is captured at its definition site and classified by `kind`, theme tokens are pulled across all categories, and component-internal CSS variables are separated from the global design-token scale
+1. **Scan** — Primitiv ingests from any configured source via adapters. The codebase scanner parses TypeScript/JSX structurally (AST, not regex): every component in a file is captured at its definition site and classified by `kind`, theme tokens are pulled across all categories, and component-internal CSS variables are separated from the global design-token scale. A token defined twice in one source with two different values surfaces as a pending conflict instead of silently losing one
 2. **Reconcile** — Conflicts between sources are surfaced and resolved according to your governance configuration
 3. **Infer** — Design rules are extracted from actual codebase patterns and written into the contract
 4. **Contract** — A single `primitiv.contract.json` is written as the canonical reference
@@ -213,6 +213,8 @@ module.exports = {
     // "warn":         record conflicts as pending; build succeeds (default)
     // "error":        write the contract, then fail the build (exit 2) while conflicts are pending
     // "auto-resolve": conflicts the sourceOfTruth decides are marked resolved; standoffs stay pending
+    // Same-source conflicts (one source defining a token twice with different values) are never
+    // auto-resolved — a source can't arbitrate itself — so they stay pending under every value.
     onConflict: "warn"
   },
   output: {
@@ -265,6 +267,7 @@ Bug reports, feature ideas, and PRs are welcome. See [CONTRIBUTING.md](./CONTRIB
 - [x] Rationale layer — annotate tokens with `why` / `when` / `deprecated` / `alternatives` via `primitiv.rationale.yml`; agents prefer annotated tokens and refuse deprecated ones
 - [x] CI enforcement — `primitiv init` auto-installs a GitHub Actions workflow that runs `verify --strict` on every PR, failing on conflicts, token misuse, or stale contracts
 - [x] Structural (AST) extraction — the codebase scanner parses TypeScript/JSX with an AST instead of regex: every component is captured at its definition site (incl. `forwardRef` / `memo` / `styled` / factory wrappers) and classified by `kind`; theme tokens are extracted across nine categories (colors, spacing, sizes, typography, border-radius, shadows, z-index, breakpoints, motion) with Tailwind class strings rejected and scale aliases resolved; component-internal CSS variables are separated from the global design-token scale
+- [x] Same-source redefinition surfacing — a token defined twice within one source with two different values becomes a pending conflict (both provenances, a `suggestedFix` naming each `file:line`) instead of silently keeping one; never auto-resolved
 - [ ] Token relationships — document how tokens relate and what constraints exist between them
 
 ## Part of a larger system

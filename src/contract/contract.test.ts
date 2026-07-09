@@ -176,6 +176,39 @@ describe("onConflict policy (governance.onConflict)", () => {
   })
 })
 
+describe("same-source redefinition conflicts", () => {
+  function redefinition() {
+    return {
+      category: "colors",
+      name: "color-bg",
+      kept: { value: "#ffffff", source: { adapter: "codebase" as const, file: "a.css", line: 1 } },
+      discarded: [{ value: "#000000", source: { adapter: "codebase" as const, file: "b.css", line: 3 } }]
+    }
+  }
+
+  test("a redefinition surfaces as a pending, actionable token conflict with every provenance", () => {
+    const contract = new ContractBuilder(config()).build([
+      { name: "codebase", tokens: emptyTokenMap(), components: {}, redefinitions: [redefinition()] }
+    ])
+    const conflict = contract.conflicts.find((c) => c.type === "token" && c.name === "colors.color-bg")
+    expect(conflict).toBeDefined()
+    expect(conflict?.resolution).toBe("pending")
+    expect(conflict?.actionable).toBe(true)
+    expect(conflict?.sources).toHaveLength(2)
+    expect(conflict?.suggestedFix).toContain("a.css:1")
+    expect(conflict?.suggestedFix).toContain("b.css:3")
+    expect(conflict?.suggestedFix).toContain("keeps the first")
+  })
+
+  test("auto-resolve never self-arbitrates: a same-source conflict stays pending even when the source IS the source of truth", () => {
+    const contract = new ContractBuilder(config("codebase", "auto-resolve")).build([
+      { name: "codebase", tokens: emptyTokenMap(), components: {}, redefinitions: [redefinition()] }
+    ])
+    const conflict = contract.conflicts.find((c) => c.name === "colors.color-bg")
+    expect(conflict?.resolution).toBe("pending")
+  })
+})
+
 describe("token categories (single-source vocabulary)", () => {
   test("a built contract carries exactly the canonical token-category set", () => {
     const contract = buildWith([])
