@@ -278,7 +278,10 @@ export class PrimitivMCPServer {
         }
 
         const stripSource = (
-          tokens: Record<string, { name: string; value: string; references?: string[]; rationale?: Rationale }>
+          tokens: Record<
+            string,
+            { name: string; value: string; references?: string[]; rationale?: Rationale; modes?: Record<string, string> }
+          >
         ) =>
           Object.fromEntries(
             Object.entries(tokens).map(([k, t]) => [
@@ -287,7 +290,8 @@ export class PrimitivMCPServer {
                 name: t.name,
                 value: t.value,
                 ...(t.references ? { references: t.references } : {}),
-                ...(t.rationale ? { rationale: t.rationale } : {})
+                ...(t.rationale ? { rationale: t.rationale } : {}),
+                ...(t.modes ? { modes: t.modes } : {})
               }
             ])
           )

@@ -59,7 +59,7 @@ export class CodebaseScanner {
     const pending: PendingRef[] = []
     // Same-name-different-value definitions within this scan, and which stored tokens came
     // from a conditional (at-rule) scope — both feed the shared write discipline below.
-    const capture: WriteCapture = { redefs: new Map(), conditionalKeys: new Set() }
+    const capture: WriteCapture = { redefs: new Map(), conditionalKeys: new Set(), promotedKeys: new Set() }
     let internalCssVars = 0
 
     for (const file of files) {
@@ -93,10 +93,11 @@ export class CodebaseScanner {
   }
 
   // Returns the count of component-internal vars that were dropped (logged by the build).
-  // A var is a design token only if its innermost selector is global (`:root`/`:host`/`html`/
-  // `@theme`). Vars defined inside a component selector (`.root`, `.Thumbnail`) or matching a
-  // component-prefix convention (`--pc-`) are component-internal implementation detail, not the
-  // design-token scale — so they're excluded from the buckets and counted instead.
+  // A var is a design token when its scope is global (`:root`/`:host`/`html`/`@theme`) or a theme
+  // variant (`.dark`, `[data-theme="dim"]`, `@media (prefers-color-scheme: …)`) — theme values
+  // land in the token's `modes` map rather than as separate tokens. Vars inside a component
+  // selector (`.root`, `.Thumbnail`) or matching a component-prefix convention (`--pc-`) are
+  // component-internal implementation detail, not the token scale — excluded and counted instead.
   private extractCSSTokens(opts: { content: string; file: string; tokens: TokenMap; capture: WriteCapture }): number {
     const { content, file, tokens, capture } = opts
     let internal = 0
@@ -107,7 +108,11 @@ export class CodebaseScanner {
       // Skip aliases — tokens whose value is just a var() reference to another token.
       if (/^var\(--[\w-]+\)$/.test(value)) continue
 
-      if (!isGlobalSelector(decl.selector) || isComponentInternalVar(decl.name)) {
+      const scope = classifySelectorScope(decl.selectors)
+      // Component-scoped vars, and the `--pc-` component-prefix convention, are implementation
+      // detail, not the token scale — excluded and counted. The name check wins over scope, so a
+      // `--pc-*` var inside a theme selector still stays component-internal.
+      if (scope.kind === "component" || isComponentInternalVar(decl.name)) {
         internal++
         continue
       }
@@ -120,7 +125,8 @@ export class CodebaseScanner {
         name: decl.name,
         value,
         source: { adapter: "codebase", file, line: decl.line },
-        conditional: decl.conditional
+        conditional: scope.conditional,
+        mode: scope.mode
       })
     }
 
@@ -198,11 +204,30 @@ export class CodebaseScanner {
     value: string
     source: { adapter: "codebase"; file: string; line: number }
     conditional: boolean
+    mode?: string
   }): void {
-    const { tokens, capture, category, name, value, source, conditional } = opts
+    const { tokens, capture, category, name, value, source, conditional, mode } = opts
     if (!tokens[category]) tokens[category] = {}
     const key = `${category} ${name}`
     const existing = tokens[category][name]
+
+    if (mode) {
+      // A theme-scoped value routes into the token's `modes` map, never the default — a theme
+      // value IS the same token in another mode, not a redefinition of it.
+      if (!existing) {
+        // No `:root` default seen yet (e.g. cal.com's `.dark`-only `--cal-*`): promote the mode
+        // value to a placeholder default so the token exists, and record the mode. A real default
+        // arriving later upgrades it (promotedKeys) while keeping the collected modes.
+        tokens[category][name] = { name, value, source, modes: { [mode]: value } }
+        capture.promotedKeys.add(key)
+        return
+      }
+      const token = tokens[category][name]
+      if (!token.modes) token.modes = {}
+      // First value per mode wins, matching the default's first-write-wins discipline.
+      if (!(mode in token.modes)) token.modes[mode] = value
+      return
+    }
 
     if (!existing) {
       tokens[category][name] = { name, value, source }
@@ -210,10 +235,11 @@ export class CodebaseScanner {
       return
     }
 
-    // An unconditional definition upgrades over a conditional first sighting — the
-    // unconditioned value is the token's canonical default.
-    if (!conditional && capture.conditionalKeys.has(key)) {
-      tokens[category][name] = { name, value, source }
+    // A real unconditional default upgrades over a placeholder — one promoted from a theme mode,
+    // or one seen only under a conditional (at-rule) scope — while preserving collected modes.
+    if (!conditional && (capture.promotedKeys.has(key) || capture.conditionalKeys.has(key))) {
+      tokens[category][name] = { ...existing, name, value, source }
+      capture.promotedKeys.delete(key)
       capture.conditionalKeys.delete(key)
       return
     }
@@ -340,11 +366,13 @@ interface FoundComponent {
   props: Record<string, PropDefinition>
 }
 
-// Scan-scoped state for the shared token write path: redefinitions found so far
-// (keyed by category+name) and which stored tokens came from a conditional scope.
+// Scan-scoped state for the shared token write path: redefinitions found so far (keyed by
+// category+name), which stored tokens came from a conditional scope, and which stored tokens
+// have only a placeholder default promoted from a theme mode (no real `:root` definition yet).
 interface WriteCapture {
   redefs: Map<string, TokenRedefinition>
   conditionalKeys: Set<string>
+  promotedKeys: Set<string>
 }
 
 // Path-qualified component id: the file's path relative to the scan root, sans extension,
@@ -975,15 +1003,15 @@ function isValuePart(p: string): boolean {
 interface CssDecl {
   name: string
   value: string
-  selector: string
+  // The full frame stack scoping this declaration, outermost → innermost: at-rule frames
+  // (`@media …`, `@theme`) and selector frames (`:root`, `.dark`). classifySelectorScope reads
+  // the whole stack so it can distinguish a `@media (prefers-color-scheme: …)` theme mode from a
+  // plain responsive override, and see both the media condition and the inner selector at once.
+  selectors: string[]
   line: number
-  // True when any enclosing frame above the innermost selector is an at-rule
-  // (`@media`, `@supports`, `@container`, `@layer`) — the definition only applies
-  // conditionally, so it neither overrides nor conflicts with the unconditional value.
-  conditional: boolean
 }
 
-// Walk CSS and yield each custom property with the innermost selector that scopes it.
+// Walk CSS and yield each custom property with the full frame stack that scopes it.
 // Brace/paren/quote/comment-aware so a value or selector containing `;`/`{`/`}` doesn't corrupt
 // the scope stack. Deliberately lightweight — no postcss dependency for the one fact we need.
 function cssCustomProperties(css: string): CssDecl[] {
@@ -1016,13 +1044,7 @@ function cssCustomProperties(css: string): CssDecl[] {
     const name = decl.slice(2, colon).trim()
     const value = decl.slice(colon + 1).trim()
     if (name && value) {
-      out.push({
-        name,
-        value,
-        selector: stack[stack.length - 1] ?? "",
-        line: tokenLine,
-        conditional: stack.slice(0, -1).some((frame) => frame.startsWith("@"))
-      })
+      out.push({ name, value, selectors: [...stack], line: tokenLine })
     }
   }
 
@@ -1086,26 +1108,155 @@ function cssCustomProperties(css: string): CssDecl[] {
   return out
 }
 
-// A custom property is a global design token when its innermost selector targets the document
-// root / element-wide scope. Vars defined inside a component selector (`.root`, `.Thumbnail`) are
-// component-internal implementation detail, not the design-token scale.
-function isGlobalSelector(selector: string): boolean {
-  const s = selector.trim().toLowerCase()
-  if (s === "") return true
-  if (s.startsWith("@theme") || s.startsWith("@property")) return true
-  return s.split(",").some((part) => {
-    const p = part.trim()
-    return (
-      p === "*" ||
-      /^:root\b/.test(p) ||
-      /^:host\b/.test(p) ||
-      /^html\b/.test(p) ||
-      /^body\b/.test(p) ||
-      p.includes(":root") ||
-      p.includes(":host") ||
-      p.includes(":global")
-    )
-  })
+// The scope a custom property is declared in. `token` = part of the design-token scale (a
+// document-root or theme-variant scope); `component` = implementation detail, excluded. A `token`
+// carries `mode` when it is theme-scoped (the value belongs in the token's `modes` map, not the
+// default) and `conditional` when wrapped in a non-theme at-rule (a responsive override that must
+// not win over or conflict with the unconditional value — see writeToken).
+type SelectorScope = { kind: "component" } | { kind: "token"; mode?: string; conditional: boolean }
+
+// Classify the full frame stack (outermost → innermost) that scopes a declaration. Design-token
+// scope is a document-root selector (`:root`/`:host`/`html`/`body`/`*`/`:global`) or a Tailwind
+// `@theme`/`@property` block; a theme-variant selector (`.dark`, `:root.theme-dim`, `[data-theme]`)
+// or a `@media (prefers-color-scheme: …)` makes it a mode of that token. Everything else — a
+// component selector, or any nesting under one — is component-internal.
+function classifySelectorScope(selectors: string[]): SelectorScope {
+  const atRules: string[] = []
+  const selectorFrames: string[] = []
+  for (const frame of selectors) {
+    const f = frame.trim()
+    if (f.startsWith("@")) atRules.push(f)
+    else if (f) selectorFrames.push(f)
+  }
+
+  // Nesting under an ancestor selector (native CSS nesting) scopes the var to that subtree —
+  // component-internal, the same as a descendant combinator (`.dark .card`).
+  if (selectorFrames.length > 1) return { kind: "component" }
+
+  const self = classifyInnermostSelector(selectorFrames[0] ?? "")
+  const hasGlobalAtRule = atRules.some(isGlobalAtRule)
+  const mediaMode = prefersColorSchemeMode(atRules)
+  // Any at-rule that isn't @theme/@property or prefers-color-scheme (a responsive @media, @supports,
+  // @container, @layer) makes the value a conditional override.
+  const conditional = atRules.some((a) => !isGlobalAtRule(a) && prefersColorSchemeMode([a]) === null)
+
+  if (self === "component") return { kind: "component" }
+  // An empty innermost (declaration directly under an at-rule) is a token only when that at-rule is
+  // a global-token block (`@theme`) or a prefers-color-scheme media; otherwise it isn't token scope.
+  if (self === "empty" && !hasGlobalAtRule && mediaMode === null) return { kind: "component" }
+
+  const selfMode = typeof self === "object" ? self.mode : undefined
+  return { kind: "token", mode: selfMode ?? mediaMode ?? undefined, conditional }
+}
+
+// Classify a single (innermost) selector string: "global" root scope, "component", "empty", or a
+// theme scope carrying its mode. A compound is a theme scope only when EVERY comma-part is a theme
+// qualifier — optionally anchored to `:root`/`html`/`body`, no descendant combinator.
+function classifyInnermostSelector(selector: string): "global" | "component" | "empty" | { mode: string } {
+  const parts = selector
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean)
+  if (parts.length === 0) return "empty"
+
+  const modes = parts.map(themeModeOfPart)
+  if (modes.every((m) => m !== null)) return { mode: modes[0] as string }
+  if (parts.some(isGlobalSelectorPart)) return "global"
+  return "component"
+}
+
+// A document-root / element-wide scope — the pre-existing global-token test, unchanged so the
+// non-theme classification stays identical to before.
+function isGlobalSelectorPart(part: string): boolean {
+  const p = part.trim()
+  return (
+    p === "*" ||
+    /^:root\b/.test(p) ||
+    /^:host\b/.test(p) ||
+    /^html\b/.test(p) ||
+    /^body\b/.test(p) ||
+    p.includes(":root") ||
+    p.includes(":host") ||
+    p.includes(":global")
+  )
+}
+
+const THEME_ATTRS = new Set(["data-theme", "data-mode", "data-color-scheme", "data-color-mode"])
+
+// The theme mode a single compound selector encodes, or null if it isn't a theme scope. A theme
+// compound is one or more theme qualifiers (a `dark`/`light`/`theme-*` class or a theme data
+// attribute), optionally anchored to `:root`/`html`/`body`, with no combinator. Mode key: class
+// name sans `theme-` (`.theme-dim` → `dim`), attribute value (`[data-theme="dim"]` → `dim`), or a
+// bare attribute's name sans `data-` (`[data-theme]` → `theme`).
+function themeModeOfPart(part: string): string | null {
+  const p = part.trim()
+  if (p === "" || hasCombinator(p)) return null
+
+  const tokens = p.match(/\[[^\]]*\]|::?[a-zA-Z][\w-]*|\.[\w-]+|[a-zA-Z][\w-]*|\*/g)
+  if (!tokens) return null
+
+  let mode: string | null = null
+  for (const tok of tokens) {
+    if (tok === ":root" || /^(html|body)$/i.test(tok)) continue // anchor, no mode of its own
+    let m: string | null
+    if (tok.startsWith("[")) m = themeAttrMode(tok)
+    else if (tok.startsWith(".")) m = themeClassMode(tok.slice(1))
+    else return null // element, universal, or other pseudo — not a theme qualifier
+    if (m === null) return null
+    if (mode !== null && mode !== m) return null // a compound spanning two modes isn't one scope
+    mode = m
+  }
+  return mode
+}
+
+function themeClassMode(cls: string): string | null {
+  const c = cls.toLowerCase()
+  if (c === "dark" || c === "light") return c
+  if (c.startsWith("theme-")) return c.slice("theme-".length) || null
+  return null
+}
+
+function themeAttrMode(tok: string): string | null {
+  const inner = tok.slice(1, -1).trim()
+  const m = inner.match(/^([a-zA-Z][\w-]*)\s*(?:[~|^$*]?=\s*(.*))?$/)
+  if (!m) return null
+  const name = m[1].toLowerCase()
+  if (!THEME_ATTRS.has(name)) return null
+  const rawVal = m[2]
+  if (rawVal === undefined) return name.replace(/^data-/, "") // bare attribute → name sans data-
+  const val = rawVal
+    .trim()
+    .replace(/\s+i$/i, "") // drop a case-insensitivity flag
+    .trim()
+    .replace(/^["']|["']$/g, "")
+  return val || name.replace(/^data-/, "")
+}
+
+// True when the selector has a top-level combinator (descendant/child/sibling) outside `[]`/`()`,
+// so `.dark .card` and `.dark > .card` are NOT single theme scopes but `html.dark` is.
+function hasCombinator(selector: string): boolean {
+  let depth = 0
+  for (const c of selector) {
+    if (c === "[" || c === "(") depth++
+    else if (c === "]" || c === ")") depth = Math.max(0, depth - 1)
+    else if (depth === 0 && (c === ">" || c === "+" || c === "~" || /\s/.test(c))) return true
+  }
+  return false
+}
+
+function isGlobalAtRule(atRule: string): boolean {
+  const s = atRule.trim().toLowerCase()
+  return s.startsWith("@theme") || s.startsWith("@property")
+}
+
+// The mode a `@media (prefers-color-scheme: dark|light)` frame encodes, or null. Theme via media
+// query is the same token in another mode — not a responsive override.
+function prefersColorSchemeMode(atRules: string[]): string | null {
+  for (const a of atRules) {
+    const m = a.toLowerCase().match(/prefers-color-scheme\s*:\s*(dark|light)/)
+    if (m) return m[1]
+  }
+  return null
 }
 
 // Component-prefix conventions: vars a design system namespaces per-component rather than as

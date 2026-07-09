@@ -161,6 +161,14 @@ export interface Token {
   source: SourceProvenance
   references?: string[]
   rationale?: Rationale
+  // Theme-scoped values keyed by mode (`dark`, `light`, `dim`, …). `value` is the default —
+  // the value under `:root`/unscoped selectors — while each entry here is the SAME token's value
+  // under a theme selector (`.dark`, `[data-theme="dim"]`) or `@media (prefers-color-scheme: …)`.
+  // A theme value is the token in another mode, not a separate token, so it lives here instead of
+  // spawning a `-dark` name or a false cross-value conflict. Mirrors Figma's valuesByMode with a
+  // default mode: future non-default Figma modes land in this field with no schema change. Absent
+  // when the token has no theme variants.
+  modes?: Record<string, string>
 }
 
 // A token name defined more than once with DIFFERENT values inside one source.

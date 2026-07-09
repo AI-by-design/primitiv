@@ -289,7 +289,7 @@ function diffContracts(committed: PrimitivContract, fresh: PrimitivContract, fai
 
   const allCategories = new Set([...Object.keys(committed.tokens), ...Object.keys(fresh.tokens)])
   for (const category of allCategories) {
-    type DiffToken = { value: string; source?: { adapter?: string } }
+    type DiffToken = { value: string; source?: { adapter?: string }; modes?: Record<string, string> }
     const committedTokens = (committed.tokens as Record<string, Record<string, DiffToken>>)[category] || {}
     const freshTokens = (fresh.tokens as Record<string, Record<string, DiffToken>>)[category] || {}
     const allNames = new Set([...Object.keys(committedTokens), ...Object.keys(freshTokens)])
@@ -300,8 +300,20 @@ function diffContracts(committed: PrimitivContract, fresh: PrimitivContract, fai
         changes.push(`token added: ${category}.${name}`)
       } else if (!f) {
         if (!failed.has(c.source?.adapter ?? "")) changes.push(`token removed: ${category}.${name}`)
-      } else if (c.value !== f.value) {
-        changes.push(`token value changed: ${category}.${name} (${c.value} → ${f.value})`)
+      } else {
+        if (c.value !== f.value) {
+          changes.push(`token value changed: ${category}.${name} (${c.value} → ${f.value})`)
+        }
+        // Theme-mode drift is real drift even when the default value is unchanged.
+        const cModes = c.modes ?? {}
+        const fModes = f.modes ?? {}
+        for (const mode of new Set([...Object.keys(cModes), ...Object.keys(fModes)])) {
+          const cv = cModes[mode]
+          const fv = fModes[mode]
+          if (cv === undefined) changes.push(`token mode added: ${category}.${name} (${mode}: ${fv})`)
+          else if (fv === undefined) changes.push(`token mode removed: ${category}.${name} (${mode}: ${cv})`)
+          else if (cv !== fv) changes.push(`token mode changed: ${category}.${name} (${mode}: ${cv} → ${fv})`)
+        }
       }
     }
   }

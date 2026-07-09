@@ -87,6 +87,8 @@ export async function buildContract(
       if (internalCssVars > 0) {
         log(`     (excluded ${internalCssVars} component-internal CSS var${internalCssVars === 1 ? "" : "s"})`)
       }
+      const modeSummary = summarizeModes(tokens)
+      if (modeSummary) log(`     ${modeSummary}`)
       if (redefinitions.length > 0) {
         log(
           `   ⚠ ${redefinitions.length} token name${redefinitions.length === 1 ? "" : "s"} defined multiple times with different values — recorded as pending conflicts`
@@ -262,6 +264,24 @@ function scanErrorMessage(err: unknown): string {
 
 function countTokens(tokens: TokenMap): number {
   return Object.values(tokens).reduce((acc, cat) => acc + Object.keys(cat).length, 0)
+}
+
+// "3 tokens carry theme modes: dark, dim" — how many tokens have theme-scoped values and which
+// modes appeared, so a dark-mode design system can confirm its variants were captured (not dropped
+// as component-internal, the pre-modes behavior). Empty when no token has modes.
+function summarizeModes(tokens: TokenMap): string {
+  const modeKeys = new Set<string>()
+  let count = 0
+  for (const cat of Object.values(tokens)) {
+    for (const token of Object.values(cat)) {
+      if (token.modes && Object.keys(token.modes).length > 0) {
+        count++
+        for (const key of Object.keys(token.modes)) modeKeys.add(key)
+      }
+    }
+  }
+  if (count === 0) return ""
+  return `${count} token${count === 1 ? "" : "s"} carry theme modes: ${[...modeKeys].sort().join(", ")}`
 }
 
 // "kind: component 285 · icon 40 · screen 12" — the AST classifier's breakdown, so a build log

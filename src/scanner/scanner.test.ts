@@ -190,6 +190,88 @@ export const alt = { colors: { brand: "#222222" } }`
   })
 })
 
+describe("CSS theme-scoped tokens (modes)", () => {
+  test("a `.dark` value becomes the token's dark mode, not a redefinition conflict", async () => {
+    writeFixture(
+      "theme.css",
+      `:root { --color-bg: #ffffff; }
+.dark { --color-bg: #000000; }`
+    )
+    const { tokens, redefinitions } = await new CodebaseScanner(source()).scan()
+    const token = tokens.colors["color-bg"]
+    expect(token?.value).toBe("#ffffff")
+    expect(token?.modes).toEqual({ dark: "#000000" })
+    expect(redefinitions).toHaveLength(0)
+  })
+
+  test("a theme-only var (no :root default) still enters the contract — the cal.com `--cal-*` case", async () => {
+    writeFixture("dark.css", `[data-theme="dark"] { --cal-brand: #292929; }`)
+    const { tokens } = await new CodebaseScanner(source()).scan()
+    const token = tokens.colors["cal-brand"]
+    // Value promoted from the only definition; provenance points at that definition.
+    expect(token?.value).toBe("#292929")
+    expect(token?.modes).toEqual({ dark: "#292929" })
+    expect(token?.source.file).toBe("dark.css")
+  })
+
+  test("`@media (prefers-color-scheme: dark)` wrapping :root is a dark mode, not a responsive override", async () => {
+    writeFixture(
+      "scheme.css",
+      `:root { --color-bg: #ffffff; }
+@media (prefers-color-scheme: dark) { :root { --color-bg: #000000; } }`
+    )
+    const { tokens, redefinitions } = await new CodebaseScanner(source()).scan()
+    expect(tokens.colors["color-bg"]?.value).toBe("#ffffff")
+    expect(tokens.colors["color-bg"]?.modes).toEqual({ dark: "#000000" })
+    expect(redefinitions).toHaveLength(0)
+  })
+
+  test("`.dark .card` (descendant combinator) stays component-internal", async () => {
+    writeFixture(
+      "nested.css",
+      `:root { --color-bg: #ffffff; }
+.dark .card { --card-pad: 4px; }`
+    )
+    const { tokens, internalCssVars } = await new CodebaseScanner(source()).scan()
+    const allNames = Object.values(tokens).flatMap((cat) => Object.keys(cat))
+    expect(allNames).not.toContain("card-pad")
+    expect(internalCssVars).toBe(1)
+    // The theme root token gained no `.dark .card` mode.
+    expect(tokens.colors["color-bg"]?.modes).toBeUndefined()
+  })
+
+  test("anchored theme selectors and `theme-*` classes derive the mode key", async () => {
+    writeFixture(
+      "themes.css",
+      `:root { --color-bg: #ffffff; }
+html.dark { --color-bg: #000000; }
+:root.theme-dim { --color-bg: #111111; }`
+    )
+    const { tokens } = await new CodebaseScanner(source()).scan()
+    expect(tokens.colors["color-bg"]?.modes).toEqual({ dark: "#000000", dim: "#111111" })
+  })
+
+  test("a `--pc-` prefixed var inside a theme selector stays component-internal (name wins over scope)", async () => {
+    writeFixture("dark.css", `.dark { --pc-thumb: #000000; }`)
+    const { tokens, internalCssVars } = await new CodebaseScanner(source()).scan()
+    const allNames = Object.values(tokens).flatMap((cat) => Object.keys(cat))
+    expect(allNames).not.toContain("pc-thumb")
+    expect(internalCssVars).toBe(1)
+  })
+
+  test("a theme value seen before its :root default is upgraded when the default arrives", async () => {
+    // Files scan in sorted order, so `a-dark.css` (the `.dark` value) is read before `b-root.css`.
+    writeFixture("a-dark.css", `.dark { --color-bg: #000000; }`)
+    writeFixture("b-root.css", `:root { --color-bg: #ffffff; }`)
+    const { tokens, redefinitions } = await new CodebaseScanner(source()).scan()
+    // :root is the canonical default even though the `.dark` value scanned first.
+    expect(tokens.colors["color-bg"]?.value).toBe("#ffffff")
+    expect(tokens.colors["color-bg"]?.source.file).toBe("b-root.css")
+    expect(tokens.colors["color-bg"]?.modes).toEqual({ dark: "#000000" })
+    expect(redefinitions).toHaveLength(0)
+  })
+})
+
 describe("TS theme-token extraction (AST)", () => {
   test("walks a nested `export const theme = {…} as const` and categorizes by group key", async () => {
     writeFixture(

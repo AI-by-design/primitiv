@@ -115,6 +115,28 @@ describe("verify", () => {
     expect(result.drift.changes).toContain("token added: colors.color-warning")
   })
 
+  test("a changed theme-mode value is reported as drift even when the default is unchanged", async () => {
+    fs.writeFileSync(
+      path.join(tempDir, "styles.css"),
+      `:root { --color-bg: #ffffff; }
+.dark { --color-bg: #000000; }`
+    )
+    writeConfig(tempDir)
+    // Committed contract has the same default but a STALE dark-mode value.
+    const tokens = emptyTokenMap()
+    tokens.colors["color-bg"] = {
+      name: "color-bg",
+      value: "#ffffff",
+      source: { adapter: "codebase", file: "styles.css", line: 1 },
+      modes: { dark: "#111111" }
+    }
+    writeContract(tempDir, { tokens })
+
+    const result = await verify(undefined, { cwd: tempDir })
+    expect(result.status).toBe("stale")
+    expect(result.drift.changes).toContain("token mode changed: colors.color-bg (dark: #111111 → #000000)")
+  })
+
   test("--strict escalates stale from exit 1 to exit 2", async () => {
     fs.writeFileSync(path.join(tempDir, "styles.css"), ":root { --color-primary: oklch(0.5 0.2 260); }")
     writeConfig(tempDir)
