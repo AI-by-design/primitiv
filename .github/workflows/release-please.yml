@@ -2,6 +2,10 @@ on:
   push:
     branches:
       - main
+  # Manual re-publish of the current main HEAD to npm — recovery for a release whose publish
+  # step failed after release-please already tagged it (the version can't be re-released, so
+  # dispatch this to publish main's package.json version directly).
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -16,28 +20,32 @@ jobs:
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
+        if: ${{ github.event_name == 'push' }}
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           release-type: node
 
       - uses: actions/checkout@v4
-        if: ${{ steps.release.outputs.release_created }}
+        if: ${{ steps.release.outputs.release_created || github.event_name == 'workflow_dispatch' }}
 
       - uses: oven-sh/setup-bun@v2
-        if: ${{ steps.release.outputs.release_created }}
+        if: ${{ steps.release.outputs.release_created || github.event_name == 'workflow_dispatch' }}
 
       - uses: actions/setup-node@v4
-        if: ${{ steps.release.outputs.release_created }}
+        if: ${{ steps.release.outputs.release_created || github.event_name == 'workflow_dispatch' }}
         with:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
-      # No `npm install -g npm@latest`: it pulled npm@12 (requires Node >=22.22) onto the
-      # Node-20 runner and EBADENGINE-failed before publish (broke the v2.2.0 release). Node 22's
-      # bundled npm already supports `--provenance`, so the extra install is both unnecessary and a
-      # recurring break every time npm ships a major that drops the runner's Node.
+      # Publishing uses npm OIDC trusted publishing, which needs npm >= 11.5.1 — Node 22's
+      # bundled npm (10.9) is too old and falls back to no auth (404 on publish). Pin to npm@11:
+      # OIDC-capable and Node-22-compatible. NOT `npm@latest` — that pulled npm@12 (Node >=22.22)
+      # and EBADENGINE-broke the v2.2.0 release; a pinned major won't jump Node requirements again.
+      - run: npm install -g npm@11
+        if: ${{ steps.release.outputs.release_created || github.event_name == 'workflow_dispatch' }}
+
       - run: bun install --frozen-lockfile
-        if: ${{ steps.release.outputs.release_created }}
+        if: ${{ steps.release.outputs.release_created || github.event_name == 'workflow_dispatch' }}
 
       - run: npm publish --provenance --access public
-        if: ${{ steps.release.outputs.release_created }}
+        if: ${{ steps.release.outputs.release_created || github.event_name == 'workflow_dispatch' }}
