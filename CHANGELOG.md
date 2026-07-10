@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.2.0](https://github.com/AI-by-design/primitiv/compare/v2.1.3...v2.2.0) (2026-07-10)
+
+
+### Features
+
+* **scanner:** capture theme-scoped tokens as modes ([#69](https://github.com/AI-by-design/primitiv/issues/69)) ([d600101](https://github.com/AI-by-design/primitiv/commit/d6001012b50107cd92a30a0c6c101b55b4a5324b))
+
+
+### Bug Fixes
+
+* **scanner:** surface same-source token redefinitions as conflicts ([#68](https://github.com/AI-by-design/primitiv/issues/68)) ([eb68b33](https://github.com/AI-by-design/primitiv/commit/eb68b332fe963dfe730b8ffadac3282243743a99))
+
 ## [2.1.3](https://github.com/AI-by-design/primitiv/compare/v2.1.2...v2.1.3) (2026-07-06)
 
 
