@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.1](https://github.com/AI-by-design/primitiv/compare/v2.2.0...v2.2.1) (2026-07-10)
+
+
+### Bug Fixes
+
+* **release:** stop installing npm@latest; publish on Node 22 bundled npm ([#71](https://github.com/AI-by-design/primitiv/issues/71)) ([16302dc](https://github.com/AI-by-design/primitiv/commit/16302dcc99b11e2e03f5ad90c67e94f9f34816be))
+
 ## [2.2.0](https://github.com/AI-by-design/primitiv/compare/v2.1.3...v2.2.0) (2026-07-10)
 
 
