@@ -29,12 +29,13 @@ jobs:
       - uses: actions/setup-node@v4
         if: ${{ steps.release.outputs.release_created }}
         with:
-          node-version: '20'
+          node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
-      - run: npm install -g npm@latest
-        if: ${{ steps.release.outputs.release_created }}
-
+      # No `npm install -g npm@latest`: it pulled npm@12 (requires Node >=22.22) onto the
+      # Node-20 runner and EBADENGINE-failed before publish (broke the v2.2.0 release). Node 22's
+      # bundled npm already supports `--provenance`, so the extra install is both unnecessary and a
+      # recurring break every time npm ships a major that drops the runner's Node.
       - run: bun install --frozen-lockfile
         if: ${{ steps.release.outputs.release_created }}
 
