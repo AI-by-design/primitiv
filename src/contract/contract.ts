@@ -1,6 +1,6 @@
 import * as fs from "node:fs"
 import { inferRules } from "../inferrer"
-import type { ComponentMap, Conflict, PrimitivConfig, PrimitivContract, TokenMap } from "../types"
+import type { ComponentMap, Conflict, PrimitivConfig, PrimitivContract, TokenMap, TokenRedefinition } from "../types"
 import { emptyTokenMap } from "../types"
 
 export class ContractBuilder {
@@ -11,12 +11,20 @@ export class ContractBuilder {
       name: string
       tokens: TokenMap
       components: ComponentMap
+      // Same-name-different-value definitions found WITHIN this source — invisible to the
+      // cross-source merge below (each source's map is collapsed before it), so the source
+      // reports them and they surface as conflicts here (rule 11).
+      redefinitions?: TokenRedefinition[]
     }>
   ): PrimitivContract {
     const conflicts: Conflict[] = []
     const mergedTokens = this.mergeTokens(sources, conflicts)
     const { components, nameIndex } = this.mergeComponents(sources, conflicts)
     if (this.config.governance.onConflict === "auto-resolve") this.autoResolveConflicts(conflicts)
+    // Folded in AFTER the merge + auto-resolve passes on purpose: mergeTokens appends to
+    // existing conflicts by name, and a same-source dispute must never share a record with
+    // (or be auto-resolved alongside) a cross-source one — a source can't arbitrate itself.
+    conflicts.push(...this.redefinitionConflicts(sources))
     const inferredRules = inferRules(mergedTokens, components)
 
     const contract: PrimitivContract = {
@@ -123,8 +131,10 @@ export class ContractBuilder {
     // Cross-source conflict detection moved from key-equality to displayName grouping —
     // keys stopped colliding across sources once they became qualified ids. Same-name
     // within one source is coexistence (surfaced via the index and resolved at lookup
-    // time by scope/rationale), never a conflict; hard conflicts stay reserved for
-    // cross-source disagreements.
+    // time by scope/rationale), never a conflict; hard COMPONENT conflicts stay reserved
+    // for cross-source disagreements. (Tokens differ: a same-source token redefinition IS
+    // a conflict — see redefinitionConflicts — because two values can't coexist under one
+    // token name the way two Cards coexist under qualified ids.)
     for (const [name, ids] of Object.entries(nameIndex)) {
       if (ids.length < 2) continue
       const adapters = new Set(ids.map((id) => merged[id].source.adapter))
@@ -161,12 +171,43 @@ export class ContractBuilder {
   private autoResolveConflicts(conflicts: Conflict[]): void {
     const sot = this.config.governance.sourceOfTruth
     for (const conflict of conflicts) {
+      // A source can never arbitrate a dispute within itself: a conflict whose sources all
+      // share one adapter (a same-source redefinition) stays pending regardless of
+      // sourceOfTruth — the `some(adapter === sot)` check below would wrongly self-resolve it.
+      if (new Set(conflict.sources.map((s) => s.source.adapter)).size < 2) continue
       const sotDecided =
         conflict.type === "component"
           ? conflict.resolved !== undefined
           : conflict.sources.some((s) => s.source.adapter === sot)
       if (sotDecided) conflict.resolution = "auto"
     }
+  }
+
+  // A token defined more than once with different values inside ONE source becomes a
+  // pending conflict carrying every definition's provenance. Kept separate from the
+  // cross-source records (never merged by name) and never auto-resolved.
+  private redefinitionConflicts(sources: Array<{ name: string; redefinitions?: TokenRedefinition[] }>): Conflict[] {
+    const out: Conflict[] = []
+    for (const source of sources) {
+      for (const redef of source.redefinitions ?? []) {
+        const all = [redef.kept, ...redef.discarded]
+        const where = all
+          .map((d) => `${d.source.file ?? source.name}${d.source.line ? `:${d.source.line}` : ""}: '${d.value}'`)
+          .join(", ")
+        out.push({
+          type: "token",
+          name: `${redef.category}.${redef.name}`,
+          sources: all.map((d) => ({ source: d.source, value: d.value })),
+          resolution: "pending",
+          actionable: true,
+          suggestedFix:
+            `Token '${redef.category}.${redef.name}' is defined ${all.length} times within '${source.name}' ` +
+            `with different values (${where}). The contract keeps the first (value: '${redef.kept.value}'). ` +
+            `Remove the other definition${redef.discarded.length === 1 ? "" : "s"} so one value remains.`
+        })
+      }
+    }
+    return out
   }
 
   private buildFixMessage(

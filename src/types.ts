@@ -163,6 +163,20 @@ export interface Token {
   rationale?: Rationale
 }
 
+// A token name defined more than once with DIFFERENT values inside one source.
+// Cross-source conflict detection can never see these — each source's token map is
+// collapsed before merging — so the scanner reports them and ContractBuilder surfaces
+// them as pending conflicts (rule 11: conflicts surface, never silence). Same-value
+// duplicates are harmless and not reported.
+export interface TokenRedefinition {
+  category: string
+  name: string
+  // The definition the contract keeps (first write wins).
+  kept: { value: string; source: SourceProvenance }
+  // Later definitions with different values, in scan order.
+  discarded: Array<{ value: string; source: SourceProvenance }>
+}
+
 // Keyed by component id, not bare name, so same-name components coexist instead of
 // overwriting each other. Codebase ids are path-qualified: the file's path relative to the
 // scan root, sans extension (`components/ui/Card`), with `#Name` appended only when the

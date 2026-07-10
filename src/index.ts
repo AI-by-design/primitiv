@@ -76,8 +76,8 @@ export async function buildContract(
     log("🔍 Scanning codebase...")
     try {
       const scanner = new CodebaseScanner(config.sources.codebase)
-      const { tokens, components, internalCssVars } = await scanner.scan()
-      sources.push({ name: "codebase", tokens, components })
+      const { tokens, components, internalCssVars, redefinitions } = await scanner.scan()
+      sources.push({ name: "codebase", tokens, components, redefinitions })
       sourceStatuses.codebase = {
         status: "ok",
         tokens: countTokens(tokens),
@@ -86,6 +86,11 @@ export async function buildContract(
       log(`   ✓ Found ${countTokens(tokens)} tokens`)
       if (internalCssVars > 0) {
         log(`     (excluded ${internalCssVars} component-internal CSS var${internalCssVars === 1 ? "" : "s"})`)
+      }
+      if (redefinitions.length > 0) {
+        log(
+          `   ⚠ ${redefinitions.length} token name${redefinitions.length === 1 ? "" : "s"} defined multiple times with different values — recorded as pending conflicts`
+        )
       }
       log(`   ✓ Found ${Object.keys(components).length} components`)
       const kindBreakdown = summarizeKinds(components)

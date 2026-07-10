@@ -113,6 +113,31 @@ describe("build — onConflict exit codes", () => {
   })
 })
 
+describe("build — same-source token redefinitions", () => {
+  test("a redefined token becomes a pending conflict in the written contract; onConflict error fails the build", async () => {
+    fs.writeFileSync(path.join(tempDir, "a.css"), ":root { --color-bg: #ffffff; }")
+    fs.writeFileSync(path.join(tempDir, "b.css"), ":root { --color-bg: #000000; }")
+    const configBody = (onConflict: string) => `module.exports = {
+  sources: { codebase: { root: ".", patterns: ["**/*.css"], ignore: ["node_modules/**"] } },
+  governance: { sourceOfTruth: "codebase", onConflict: "${onConflict}" },
+  output: { path: "./primitiv.contract.json" }
+}`
+    const configPath = path.join(tempDir, "primitiv.config.js")
+
+    fs.writeFileSync(configPath, configBody("warn"))
+    expect(await build(configPath)).toBe(0)
+    const contract = JSON.parse(fs.readFileSync(path.join(tempDir, "primitiv.contract.json"), "utf-8"))
+    const conflict = contract.conflicts.find(
+      (c: { type: string; name: string }) => c.type === "token" && c.name === "colors.color-bg"
+    )
+    expect(conflict.resolution).toBe("pending")
+    expect(contract.tokens.colors["color-bg"].value).toBe("#ffffff")
+
+    fs.writeFileSync(configPath, configBody("error"))
+    expect(await build(configPath)).toBe(2)
+  })
+})
+
 describe("buildContract — source scan statuses", () => {
   // A port that was just bound and released — connecting to it refuses, which is the
   // cheapest deterministic "remote source is down" a test can produce.
