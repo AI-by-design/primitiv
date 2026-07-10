@@ -51,6 +51,30 @@ describe("inferRules — category vocabulary", () => {
   })
 })
 
+describe("inferRules — dark mode via token modes", () => {
+  test("color-dark-mode-tokens fires on tokens carrying a `dark` mode, not just `-dark-` names", () => {
+    const modeToken = (name: string, value: string, dark: string) => ({
+      name,
+      value,
+      source: { adapter: "codebase" as const },
+      modes: { dark }
+    })
+    const tokenMap: TokenMap = {
+      ...emptyTokenMap(),
+      colors: {
+        // No name contains "dark" — the rule can only fire via the modes.
+        "color-bg": modeToken("color-bg", "#ffffff", "#000000"),
+        "color-fg": modeToken("color-fg", "#111111", "#eeeeee"),
+        "color-border": modeToken("color-border", "#dddddd", "#333333")
+      }
+    }
+    const { rules } = inferRules(tokenMap, {})
+    const darkRule = rules.find((r) => r.id === "color-dark-mode-tokens")
+    expect(darkRule).toBeDefined()
+    expect(darkRule?.evidence).toContain("color-bg")
+  })
+})
+
 describe("normalizeRuleCategory", () => {
   test("maps legacy spellings to the token vocabulary", () => {
     expect(normalizeRuleCategory("color")).toBe("colors")

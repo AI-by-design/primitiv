@@ -237,6 +237,21 @@ describe("get_design_context", () => {
     expect(Object.keys(payload.tokenCounts)).toContain("zIndex")
     expect(Object.keys(payload.tokenCounts)).toContain("motion")
   })
+
+  test("theme modes pass through to the token payload", async () => {
+    const tokens = emptyTokenMap()
+    tokens.colors["color-bg"] = {
+      name: "color-bg",
+      value: "#ffffff",
+      source: { adapter: "codebase", file: "theme.css", line: 1 },
+      modes: { dark: "#000000" }
+    }
+    const c = await connect(writeContract({ tokens }))
+    const result = await c.callTool({ name: "get_design_context", arguments: { category: "tokens" } })
+    const content = result.content as Array<{ type: string; text: string }>
+    const payload = JSON.parse(content[0].text)
+    expect(payload.tokens.colors["color-bg"].modes).toEqual({ dark: "#000000" })
+  })
 })
 
 describe("get_violations", () => {

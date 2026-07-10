@@ -83,10 +83,14 @@ function buildTokenIndex(contract: PrimitivContract): Map<string, TokenIndexEntr
   const index = new Map<string, TokenIndexEntry>()
   for (const [category, tokens] of Object.entries(contract.tokens)) {
     for (const token of Object.values(tokens)) {
-      const key = normalizeValue(token.value)
-      // First match wins when multiple tokens share a value (deferred decision).
-      if (!index.has(key)) {
-        index.set(key, { name: token.name, category, value: token.value })
+      // Index the default first, then each theme-mode value, so a hardcoded dark-mode literal
+      // (e.g. `#000` that only appears as this token's `dark` value) still smart-matches its token.
+      for (const value of [token.value, ...Object.values(token.modes ?? {})]) {
+        const key = normalizeValue(value)
+        // First match wins when multiple tokens (or modes) share a value (deferred decision).
+        if (!index.has(key)) {
+          index.set(key, { name: token.name, category, value })
+        }
       }
     }
   }

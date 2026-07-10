@@ -19,12 +19,15 @@ export function normalizeRuleCategory(category: string): string {
   return category
 }
 
-// Flatten TokenMap into a single array for easier analysis
-function flattenTokens(tokenMap: TokenMap): Array<{ name: string; value: string; category: string }> {
+// Flatten TokenMap into a single array for easier analysis. `modes` rides along so mode-aware
+// rules (e.g. dark-mode detection) can see theme variants that no longer live in the token name.
+function flattenTokens(tokenMap: TokenMap): FlatToken[] {
   return Object.entries(tokenMap).flatMap(([category, tokens]) =>
-    Object.values(tokens).map((t) => ({ name: t.name, value: t.value, category }))
+    Object.values(tokens).map((t) => ({ name: t.name, value: t.value, category, modes: t.modes }))
   )
 }
+
+type FlatToken = { name: string; value: string; category: string; modes?: Record<string, string> }
 
 export function inferRules(tokenMap: TokenMap, componentMap: ComponentMap): InferredRules {
   const tokens = flattenTokens(tokenMap)
@@ -102,7 +105,7 @@ function inferSpacingRules(tokens: Array<{ name: string; value: string; category
 
 // ─── Color ───────────────────────────────────────────────────────────────────
 
-function inferColorRules(tokens: Array<{ name: string; value: string; category: string }>): InferredRule[] {
+function inferColorRules(tokens: FlatToken[]): InferredRule[] {
   const rules: InferredRule[] = []
   const colorTokens = tokens.filter((t) => t.category === "colors")
   if (colorTokens.length === 0) return rules
@@ -159,8 +162,13 @@ function inferColorRules(tokens: Array<{ name: string; value: string; category: 
     }
   }
 
-  // Check for dark mode pattern (if both light and dark tokens exist)
-  const darkTokens = colorTokens.filter((t) => t.name.includes("dark") || t.name.includes("-dark-"))
+  // Check for dark mode pattern. Name-based `-dark-` tokens are the older convention; a token that
+  // carries a `dark` (or `light`) mode is the mode-aware form — without this the rule would stop
+  // firing exactly when a project adopts proper `:root`/`.dark` theming and drops `-dark` names.
+  const darkTokens = colorTokens.filter(
+    (t) =>
+      t.name.includes("dark") || t.name.includes("-dark-") || (t.modes && ("dark" in t.modes || "light" in t.modes))
+  )
   if (darkTokens.length > 2) {
     rules.push({
       id: "color-dark-mode-tokens",
