@@ -280,7 +280,13 @@ export class PrimitivMCPServer {
         const stripSource = (
           tokens: Record<
             string,
-            { name: string; value: string; references?: string[]; rationale?: Rationale; modes?: Record<string, string> }
+            {
+              name: string
+              value: string
+              references?: string[]
+              rationale?: Rationale
+              modes?: Record<string, string>
+            }
           >
         ) =>
           Object.fromEntries(

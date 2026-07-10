@@ -166,7 +166,8 @@ function inferColorRules(tokens: FlatToken[]): InferredRule[] {
   // carries a `dark` (or `light`) mode is the mode-aware form — without this the rule would stop
   // firing exactly when a project adopts proper `:root`/`.dark` theming and drops `-dark` names.
   const darkTokens = colorTokens.filter(
-    (t) => t.name.includes("dark") || t.name.includes("-dark-") || (t.modes && ("dark" in t.modes || "light" in t.modes))
+    (t) =>
+      t.name.includes("dark") || t.name.includes("-dark-") || (t.modes && ("dark" in t.modes || "light" in t.modes))
   )
   if (darkTokens.length > 2) {
     rules.push({
