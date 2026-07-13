@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.0](https://github.com/AI-by-design/primitiv/compare/v2.2.1...v2.3.0) (2026-07-13)
+
+
+### Features
+
+* **api:** export contract types and schema from package root ([#75](https://github.com/AI-by-design/primitiv/issues/75)) ([2a48035](https://github.com/AI-by-design/primitiv/commit/2a48035fdb396a961c6d9d635f30a229463d642d))
+
 ## [2.2.1](https://github.com/AI-by-design/primitiv/compare/v2.2.0...v2.2.1) (2026-07-10)
 
 
