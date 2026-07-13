@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
-import { build, buildContract, loadConfig } from "./index"
+import { build, buildContract, loadConfig, primitivContractSchema } from "./index"
+import type { PrimitivContract, Token } from "./index"
 
 let tempDir: string
 
@@ -135,6 +136,26 @@ describe("build — same-source token redefinitions", () => {
 
     fs.writeFileSync(configPath, configBody("error"))
     expect(await build(configPath)).toBe(2)
+  })
+})
+
+describe("package root — public type surface", () => {
+  // Anti-rot: external consumers (primitiv-pro first) import the contract types and
+  // schema from the package root, not from ./types. If a re-export is removed, this
+  // file stops compiling (types) or this test fails (schema) before the change ships.
+  test("primitivContractSchema is importable from the root and accepts a minimal contract", () => {
+    const colors: Record<string, Token> = {}
+    const contract: PrimitivContract = {
+      version: "0.3.0",
+      generatedAt: new Date().toISOString(),
+      sources: ["codebase"],
+      sourceRoot: "/tmp/project",
+      configPath: "/tmp/project/primitiv.config.js",
+      tokens: { colors, spacing: {}, typography: {}, borderRadius: {}, shadows: {} },
+      components: {},
+      conflicts: []
+    }
+    expect(primitivContractSchema.safeParse(contract).success).toBe(true)
   })
 })
 

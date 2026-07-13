@@ -10,6 +10,33 @@ import { StorybookAdapter } from "./sources/storybook"
 import type { PrimitivConfig, PrimitivContract, SourceStatus, TokenMap } from "./types"
 import { primitivConfigSchema, summarizeValidationIssues } from "./types"
 
+// Public type surface for external consumers of the package (rule 2: every
+// export is a maintained contract). Curated, not `export *` — config internals
+// (Source, FigmaSource, …) stay private until a consumer needs them.
+export type {
+  PrimitivContract,
+  Token,
+  TokenMap,
+  TokenCategory,
+  TokenRedefinition,
+  Component,
+  ComponentMap,
+  ComponentKind,
+  PropDefinition,
+  Conflict,
+  SourceProvenance,
+  SourceStatus,
+  SourceScanStatus,
+  InferredRule,
+  InferredRules,
+  Rationale,
+  RationaleMap,
+  Violation,
+  LintCategory,
+  PrimitivConfig,
+} from "./types"
+export { primitivContractSchema } from "./types"
+
 // Load config — returns config with output.path resolved to an absolute path
 export function loadConfig(configPath?: string, cwd: string = process.cwd()): PrimitivConfig {
   const resolved = path.resolve(cwd, configPath || "primitiv.config.js")
