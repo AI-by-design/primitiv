@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
-import { build, buildContract, loadConfig, primitivContractSchema } from "./index"
 import type { PrimitivContract, Token } from "./index"
+import { build, buildContract, loadConfig, primitivContractSchema } from "./index"
 
 let tempDir: string
 

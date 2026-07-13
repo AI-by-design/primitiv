@@ -14,26 +14,26 @@ import { primitivConfigSchema, summarizeValidationIssues } from "./types"
 // export is a maintained contract). Curated, not `export *` — config internals
 // (Source, FigmaSource, …) stay private until a consumer needs them.
 export type {
-  PrimitivContract,
-  Token,
-  TokenMap,
-  TokenCategory,
-  TokenRedefinition,
   Component,
-  ComponentMap,
   ComponentKind,
-  PropDefinition,
+  ComponentMap,
   Conflict,
-  SourceProvenance,
-  SourceStatus,
-  SourceScanStatus,
   InferredRule,
   InferredRules,
-  Rationale,
-  RationaleMap,
-  Violation,
   LintCategory,
   PrimitivConfig,
+  PrimitivContract,
+  PropDefinition,
+  Rationale,
+  RationaleMap,
+  SourceProvenance,
+  SourceScanStatus,
+  SourceStatus,
+  Token,
+  TokenCategory,
+  TokenMap,
+  TokenRedefinition,
+  Violation
 } from "./types"
 export { primitivContractSchema } from "./types"
 
