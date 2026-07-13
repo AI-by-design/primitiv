@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.4.0](https://github.com/AI-by-design/primitiv/compare/v2.3.0...v2.4.0) (2026-07-13)
+
+
+### Features
+
+* **figma:** capture publish-stable variable key in token metadata ([#77](https://github.com/AI-by-design/primitiv/issues/77)) ([aaa0490](https://github.com/AI-by-design/primitiv/commit/aaa0490734e5a69fd8ec566c7e42d7a19e28286e))
+
 ## [2.3.0](https://github.com/AI-by-design/primitiv/compare/v2.2.1...v2.3.0) (2026-07-13)
 
 
