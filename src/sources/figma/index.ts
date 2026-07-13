@@ -10,10 +10,12 @@ type FigmaRawValue =
 interface FigmaVariable {
   id: string
   name: string
+  key?: string
   remote?: boolean
   resolvedType: string
   variableCollectionId: string
   valuesByMode?: Record<string, FigmaRawValue>
+  hiddenFromPublishing?: boolean
 }
 
 interface FigmaVariableCollection {
@@ -97,7 +99,11 @@ export class FigmaAdapter implements Source {
         source: {
           adapter: "figma",
           metadata: {
+            // variableId is file-local and ephemeral; key is Figma's publish-stable
+            // identity — it survives renames, so cross-scan matching must prefer it.
             variableId: variable.id,
+            variableKey: variable.key,
+            hiddenFromPublishing: variable.hiddenFromPublishing,
             collectionName: collection?.name
           }
         }
