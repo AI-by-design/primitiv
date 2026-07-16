@@ -35,7 +35,7 @@ export type {
   TokenRedefinition,
   Violation
 } from "./types"
-export { primitivContractSchema } from "./types"
+export { emptyTokenMap, primitivContractSchema, TOKEN_CATEGORIES } from "./types"
 
 // Load config — returns config with output.path resolved to an absolute path
 export function loadConfig(configPath?: string, cwd: string = process.cwd()): PrimitivConfig {
