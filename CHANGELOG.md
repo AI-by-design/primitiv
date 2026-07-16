@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.5.0](https://github.com/AI-by-design/primitiv/compare/v2.4.0...v2.5.0) (2026-07-16)
+
+
+### Features
+
+* **api:** export TOKEN_CATEGORIES and emptyTokenMap from package root ([#79](https://github.com/AI-by-design/primitiv/issues/79)) ([a2d265a](https://github.com/AI-by-design/primitiv/commit/a2d265a674375cb90a9894b295e8af4b0c37ac72))
+
 ## [2.4.0](https://github.com/AI-by-design/primitiv/compare/v2.3.0...v2.4.0) (2026-07-13)
 
 
