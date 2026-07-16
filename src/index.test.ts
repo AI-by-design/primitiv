@@ -3,7 +3,7 @@ import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import type { PrimitivContract, Token } from "./index"
-import { build, buildContract, loadConfig, primitivContractSchema } from "./index"
+import { build, buildContract, emptyTokenMap, loadConfig, primitivContractSchema, TOKEN_CATEGORIES } from "./index"
 
 let tempDir: string
 
@@ -225,5 +225,18 @@ describe("buildContract — source scan statuses", () => {
 
     expect(buildContract(configPath, { silent: true, cwd: tempDir })).rejects.toThrow(/optional: false/)
     expect(fs.existsSync(path.join(tempDir, "primitiv.contract.json"))).toBe(false)
+  })
+})
+
+describe("package root export surface — token category vocabulary", () => {
+  // External consumers (e.g. contract diffing) need the canonical category set from the
+  // package root so their fixtures and category walks never drift from the real vocabulary.
+  test("exports TOKEN_CATEGORIES and emptyTokenMap, and they agree with each other", () => {
+    expect(TOKEN_CATEGORIES.length).toBeGreaterThan(0)
+    const map = emptyTokenMap()
+    for (const category of TOKEN_CATEGORIES) {
+      expect(map[category]).toEqual({})
+    }
+    expect(Object.keys(map)).toEqual([...TOKEN_CATEGORIES])
   })
 })
