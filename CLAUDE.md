@@ -28,13 +28,13 @@ Config → scan() per source → ContractBuilder.build() → primitiv.contract.j
 - `src/index.ts` — exports `build(configPath?)` and `serve(configPath?)`
 
 **Modules:**
-- `src/scanner/` — `CodebaseScanner` extracts tokens (CSS custom properties, TS color literals) and React components from the filesystem via glob
-- `src/sources/figma/` — `FigmaAdapter` scans Figma Variables (tokens) and components via the REST API
-- `src/sources/storybook/` — `StorybookAdapter` scans components and variants via the Storybook manifest (`index.json` / `stories.json`)
-- `src/contract/` — `ContractBuilder` merges token/component maps across sources, detects conflicts, applies governance rules, calls the inferrer
-- `src/inferrer/` — `inferRules()` derives design rules (spacing scale, color semantics, naming conventions, etc.) from token and component patterns
-- `src/mcp/` — `PrimitivMCPServer` loads the contract JSON and registers 5 read-only MCP tools
-- `src/init/` — detects framework, Tailwind, Figma tokens, Storybook and writes a starter `primitiv.config.js`. Also merges an `mcpServers.primitiv` entry into `.mcp.json` / `.cursor/mcp.json`, appends a Primitiv block to `CLAUDE.md` / `AGENTS.md` (idempotent — re-runs refresh the block between `<!-- primitiv -->` markers), installs `.claude/commands/build-component.md`, and adds the server to Codex via `codex mcp add` when `codex` is on PATH
+- `src/scanner/` — `CodebaseScanner`, reads tokens and components from the codebase
+- `src/sources/figma/` — `FigmaAdapter` (Figma Variables + components via the REST API)
+- `src/sources/storybook/` — `StorybookAdapter` (Storybook manifest)
+- `src/contract/` — `ContractBuilder`, assembles the contract from all sources
+- `src/inferrer/` — `inferRules()`, the inferred-rules layer
+- `src/mcp/` — `PrimitivMCPServer` loads the contract JSON and registers the read-only MCP tools
+- `src/init/` — project detection and wiring (writes `primitiv.config.js`, MCP config, agent blocks, the `build-component` skill)
 - `src/types.ts` — **all shared interfaces live here** — `SourceProvenance` tracks where every token/component came from (adapter, file, line, metadata)
 
 **Runtime features in the MCP server** (not all obvious from the module list):
@@ -59,7 +59,7 @@ These rules are specific to Primitiv's architecture. Deviations need a comment e
 
 **13. Provenance is mandatory.** Every token and component in the contract carries `SourceProvenance` (adapter, file, line, metadata). Never drop provenance for convenience or to make a diff cleaner — it's the audit trail for every governance decision and the basis for every actionable error message Primitiv surfaces.
 
-**14. Normalized value indexing for suggestion lookups.** When matching user-supplied literals against contract values (e.g. raw hex against design tokens), normalize both via one canonical function and index into a map for O(1) lookup. Don't re-implement match logic per category — each category gets its own normalizer, but the lookup mechanism stays uniform. Lives in `src/lint/lint.ts`.
+**14. Keep suggestion matching uniform.** Token-misuse suggestions live in `src/lint/`. Add a per-category normalizer rather than re-implementing match logic inline, so every category goes through one lookup path.
 
 ## Coding Discipline
 

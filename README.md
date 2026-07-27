@@ -40,7 +40,7 @@ Tokens file     ──┤
 Any adapter     ──┘
 ```
 
-1. **Scan** — Primitiv ingests from any configured source via adapters. The codebase scanner parses TypeScript/JSX structurally (AST, not regex): every component in a file is captured at its definition site and classified by `kind`, theme tokens are pulled across all categories, and component-internal CSS variables are separated from the global design-token scale. Theme-variant values (`.dark`, `[data-theme="dim"]`, `@media (prefers-color-scheme: …)`) are captured as the token's `modes` rather than dropped or duplicated, and a token defined twice in one source with two different values surfaces as a pending conflict instead of silently losing one
+1. **Scan** — Primitiv ingests from every configured source via adapters — codebase, Figma, Storybook, token files — capturing tokens, components, their variants, and theme modes
 2. **Reconcile** — Conflicts between sources are surfaced and resolved according to your governance configuration
 3. **Infer** — Design rules are extracted from actual codebase patterns and written into the contract
 4. **Contract** — A single `primitiv.contract.json` is written as the canonical reference
@@ -76,7 +76,7 @@ bun add @ai-by-design/primitiv
 | `get_component` | Look up a specific component by name. Returns props, variants, source provenance, and `kind` — `component`, `screen`, `provider`, `icon`, or `other`, so agents reuse real UI and skip screens/providers/icons. |
 | `get_conflicts` | Get conflicts between sources. Pass `type: "all" \| "token" \| "component"` and `status: "all" \| "pending" \| "resolved"`. Returns `actionableCount` and `pendingDecisionCount` alongside the list. |
 | `get_inferred_rules` | Get the design rules Primitiv has extracted from your codebase patterns. Pass `category` to filter. |
-| `get_violations` | List token-misuse violations — hardcoded literals in source that bypass the contract. Smart-matched to a suggested token when the literal matches one. Pass `category: "all" \| "colors" \| "spacing"` to filter. |
+| `get_violations` | List token-misuse violations — hardcoded literals in source that bypass the contract, with a suggested token when one fits. Pass `category: "all" \| "colors" \| "spacing"` to filter. |
 
 All tools are read-only — they never modify your code or contract. Primitiv works with any tool that speaks MCP — it is not tied to a specific editor or agent ecosystem.
 
@@ -145,13 +145,13 @@ The workflow uses `npx --yes @ai-by-design/primitiv verify --strict`, so it work
 
 #### Failed sources
 
-Every build records a `sourceStatuses` field on the contract — `ok` (with token/component counts), `failed` (with a sanitized error), or `skipped` (not configured) per source — so consumers can distinguish "not configured" from "configured but failed". When a remote source (Figma, Storybook) is unreachable, the build warns, records the failure, and continues; `verify` skips drift reporting for that source's entries instead of reporting them all as removed. The one exception: if the failed source **is** your `governance.sourceOfTruth` (or is marked `optional: false`), the build hard-fails and writes nothing — conflict resolution without its authority would be worse than no contract.
+Every build records a `sourceStatuses` field on the contract — `ok` (with token/component counts), `failed` (with a sanitized error), or `skipped` (not configured) per source — so consumers can distinguish "not configured" from "configured but failed". When a remote source (Figma, Storybook) is unreachable, the build warns, records the failure, and continues. The one exception: if the failed source **is** your `governance.sourceOfTruth` (or is marked `optional: false`), the build hard-fails and writes nothing.
 
 The workflow is idempotent — re-running `primitiv init` refreshes the block between `# <!-- primitiv -->` markers, preserving any content you've added outside them.
 
 ### Token misuse
 
-Every `primitiv build` and `primitiv verify` scans your source for hardcoded literals that bypass the contract — Tailwind arbitrary values like `bg-[#ff0000]` or `p-[8px]`. When a literal matches the value of a token already in your contract, the violation is smart-matched to a suggested replacement:
+Every `primitiv build` and `primitiv verify` scans your source for hardcoded literals that bypass the contract — Tailwind arbitrary values like `bg-[#ff0000]` or `p-[8px]`. When a suitable token exists, the violation points to it:
 
 ```
 $ primitiv verify
@@ -263,12 +263,12 @@ Bug reports, feature ideas, and PRs are welcome. See [CONTRIBUTING.md](./CONTRIB
 - [x] Figma source adapter — scan Figma Variables and components via the Figma REST API
 - [x] Storybook source adapter — scan components and variants via the Storybook manifest
 - [x] Source provenance — every token and component in the contract traces back to its origin (file, line number, Figma variable ID, Storybook story ID)
-- [x] Token-misuse detection — `build` and `verify` lint for hardcoded Tailwind arbitrary values and smart-match them to existing tokens; exposed via the `get_violations` MCP tool
+- [x] Token-misuse detection — `build` and `verify` lint for hardcoded Tailwind arbitrary values and suggest existing tokens; exposed via the `get_violations` MCP tool
 - [x] Rationale layer — annotate tokens with `why` / `when` / `deprecated` / `alternatives` via `primitiv.rationale.yml`; agents prefer annotated tokens and refuse deprecated ones
 - [x] CI enforcement — `primitiv init` auto-installs a GitHub Actions workflow that runs `verify --strict` on every PR, failing on conflicts, token misuse, or stale contracts
-- [x] Structural (AST) extraction — the codebase scanner parses TypeScript/JSX with an AST instead of regex: every component is captured at its definition site (incl. `forwardRef` / `memo` / `styled` / factory wrappers) and classified by `kind`; theme tokens are extracted across nine categories (colors, spacing, sizes, typography, border-radius, shadows, z-index, breakpoints, motion) with Tailwind class strings rejected and scale aliases resolved; component-internal CSS variables are separated from the global design-token scale
-- [x] Theme modes — theme-variant values (`.dark`, `[data-theme="dim"]`, `@media (prefers-color-scheme: …)`) are captured as a token's `modes` map instead of being dropped or duplicated into `-dark` names; tokens defined only under a theme scope still enter the contract
-- [x] Same-source redefinition surfacing — a token defined twice within one source with two different values becomes a pending conflict (both provenances, a `suggestedFix` naming each `file:line`) instead of silently keeping one; never auto-resolved
+- [x] Structural extraction — components captured with their `kind`, props, and variants; theme tokens captured across every category, separate from component-internal variables
+- [x] Theme modes — light/dark and other theme-variant values captured as a token's `modes` instead of being dropped or duplicated
+- [x] Same-source redefinition surfacing — a token defined twice in one source with conflicting values is surfaced as a pending conflict instead of silently keeping one
 - [ ] Token relationships — document how tokens relate and what constraints exist between them
 
 ## Part of a larger system

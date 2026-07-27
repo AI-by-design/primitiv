@@ -56,11 +56,11 @@ src/
 ├── index.ts        Exports build() and serve()
 ├── types.ts        All shared interfaces — define types here, not inline
 ├── scanner/        CodebaseScanner — extracts tokens and components from the filesystem
-├── sources/        Source adapters — Figma (Variables API), Storybook (manifest)
-├── contract/       ContractBuilder — merges sources, detects conflicts, applies governance
-├── inferrer/       inferRules() — derives design rules from token and component patterns
-├── lint/           Token-misuse detection — hardcoded literals smart-matched to contract tokens
-├── rationale/      Loads primitiv.rationale.yml and merges why / when / deprecated into the contract
+├── sources/        Source adapters — Figma, Storybook
+├── contract/       ContractBuilder — assembles the contract from all sources
+├── inferrer/       inferRules() — the inferred-rules layer
+├── lint/           Token-misuse detection
+├── rationale/      Loads primitiv.rationale.yml into the contract
 ├── mcp/            PrimitivMCPServer — loads the contract and registers the 6 MCP tools
 ├── init/           init() — detects framework and writes primitiv.config.js + project wiring
 └── verify/         verify() — re-runs build and exits non-zero for CI

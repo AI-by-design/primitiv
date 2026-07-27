@@ -1,6 +1,10 @@
 dist/
 node_modules/
 .DS_Store
+# Private, never-published docs (loaded by Claude Code, never committed)
+*.local.md
+# Local agent memory — never publish
+memory/
 # Only ignore a contract at the repo root — demo contracts under examples/ are
 # committed so the README recording can reference them without a local build.
 /primitiv.contract.json
