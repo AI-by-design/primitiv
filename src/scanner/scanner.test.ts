@@ -492,3 +492,28 @@ describe("component identity (path-qualified ids)", () => {
     expect(components["ui/widgets#Widget"]?.displayName).toBe("Widget")
   })
 })
+
+describe("directories that look like source files", () => {
+  // `node_modules/ipaddr.js` is a real, extremely common case: a package directory whose
+  // name ends in .js, matched by the `**/*.js` pattern `init` generates. Reading it threw
+  // EISDIR and failed the whole scan, so no contract was written.
+  test("a directory whose name matches a source pattern is skipped, not read", async () => {
+    writeFixture("theme.css", `:root { --color-brand: #2f6bff; }`)
+    fs.mkdirSync(path.join(tempDir, "vendor.css"), { recursive: true })
+
+    const { tokens } = await new CodebaseScanner(source()).scan()
+
+    expect(tokens.colors["color-brand"]?.value).toBe("#2f6bff")
+  })
+
+  test("scanning survives a dependency directory named like a source file", async () => {
+    writeFixture("theme.css", `:root { --space-md: 16px; }`)
+    fs.mkdirSync(path.join(tempDir, "node_modules/ipaddr.js"), { recursive: true })
+    writeFixture("node_modules/ipaddr.js/index.ts", `export const x = 1`)
+
+    const scanner = new CodebaseScanner({ ...source(), ignore: ["**/node_modules/**"] })
+    const { tokens } = await scanner.scan()
+
+    expect(tokens.spacing["space-md"]?.value).toBe("16px")
+  })
+})

@@ -55,6 +55,9 @@ async function collectFiles(source: CodebaseSource): Promise<string[]> {
     const matches = await glob(pattern, {
       cwd: source.root,
       ignore: source.ignore,
+      // Directories match source patterns on name alone (`node_modules/ipaddr.js` vs
+      // `**/*.js`). Reading one throws EISDIR — exclude them at the glob instead.
+      nodir: true,
       absolute: false
     })
     for (const m of matches) files.add(m)

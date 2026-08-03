@@ -143,14 +143,17 @@ function detectProject(root: string): DetectedProject {
   const extensions = hasTypeScript ? ["ts", "tsx"] : ["js", "jsx"]
   const patterns = ["**/*.css", ...extensions.map((ext) => `**/*.${ext}`)]
 
-  // Ignore
+  // Ignore. Directory entries need `**/<dir>/**` — a bare "node_modules" only matches an
+  // entry with that exact name, leaving everything beneath it in scope. That put whole
+  // dependency trees through the scanner, and any file pattern is then free to match a
+  // directory (`node_modules/ipaddr.js` matches `**/*.js`).
   const ignore = [
-    "node_modules",
-    "dist",
-    ".next",
-    "out",
-    "build",
-    "coverage",
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/.next/**",
+    "**/out/**",
+    "**/build/**",
+    "**/coverage/**",
     "**/*.test.*",
     "**/*.spec.*",
     "**/*.stories.*"
