@@ -165,7 +165,12 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
     const noun = violations.length === 1 ? "value" : "values"
     messages.push(`${severity} ${violations.length} hardcoded token ${noun} detected:`)
     for (const v of violations.slice(0, MAX_REPORTED_VIOLATIONS)) {
-      const suggestion = v.suggestion ? ` → use --${v.suggestion.token}` : ` → no matching token`
+      // Token names are stored bare (`color-destructive`), so the reference is assembled
+      // here. `use --color-destructive` reads as a CLI flag rather than a custom property;
+      // leading dashes are stripped first so a `--`-prefixed name can't yield `var(----x)`.
+      const suggestion = v.suggestion
+        ? ` → use var(--${v.suggestion.token.replace(/^-+/, "")})`
+        : ` → no matching token`
       messages.push(`  - ${v.source.file}:${v.source.line}  ${v.context}${suggestion}`)
     }
     if (violations.length > MAX_REPORTED_VIOLATIONS) {
