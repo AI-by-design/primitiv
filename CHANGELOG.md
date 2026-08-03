@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.5.2](https://github.com/AI-by-design/primitiv/compare/v2.5.1...v2.5.2) (2026-08-03)
+
+
+### Bug Fixes
+
+* address the three outstanding code-scanning findings ([#84](https://github.com/AI-by-design/primitiv/issues/84)) ([5c11e32](https://github.com/AI-by-design/primitiv/commit/5c11e3249150b75ff4de34c9bc9708e2a782d001))
+
 ## [2.5.1](https://github.com/AI-by-design/primitiv/compare/v2.5.0...v2.5.1) (2026-08-03)
 
 
