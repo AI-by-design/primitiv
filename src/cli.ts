@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import * as fs from "node:fs"
+import * as path from "node:path"
 import { build, serve } from "./index"
 import { init } from "./init"
 import { verify } from "./verify"
@@ -10,6 +12,11 @@ const arg = positional[0]
 
 async function main() {
   switch (command) {
+    case "--version":
+    case "-v":
+    case "version":
+      console.log(readVersion())
+      break
     case "init":
       await init(arg)
       break
@@ -42,6 +49,7 @@ Usage:
   primitiv build          Scan sources, resolve conflicts, write the contract
   primitiv serve          Start the MCP server
   primitiv verify         Check the contract is fresh and conflict-free (for CI)
+  primitiv --version      Print the installed version
 
 Options:
   primitiv init   [dir]    Target directory (default: current directory)
@@ -84,3 +92,19 @@ main().catch((err) => {
   console.error("Error:", err instanceof Error ? err.message : String(err))
   process.exit(1)
 })
+
+// Read from the manifest that ships beside the compiled CLI rather than baking the
+// version in at build time, so what it prints is always what npm actually installed.
+// Resolves identically from src/ and dist/ — both sit one level under the package root.
+function readVersion(): string {
+  try {
+    const manifest: unknown = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf-8"))
+    if (typeof manifest === "object" && manifest !== null && "version" in manifest) {
+      const version = (manifest as { version: unknown }).version
+      if (typeof version === "string" && version.length > 0) return version
+    }
+  } catch {
+    // An unreadable or malformed manifest is not a reason for `--version` to throw.
+  }
+  return "unknown"
+}
