@@ -35,6 +35,9 @@ export class CodebaseScanner {
       const matches = await glob(pattern, {
         cwd: this.config.root,
         ignore: this.config.ignore,
+        // A directory can match a source pattern on name alone — `node_modules/ipaddr.js`
+        // matches `**/*.js`. Reading it throws EISDIR and fails the entire scan.
+        nodir: true,
         absolute: false
       })
       files.push(...matches)

@@ -385,6 +385,9 @@ async function findSourceFilesNewerThan(
     const matches = await glob(pattern, {
       cwd: codebaseRoot,
       ignore: config.sources.codebase.ignore,
+      // Directories match source patterns on name alone (`node_modules/ipaddr.js` vs
+      // `**/*.js`); stat'ing one and treating it as a source file is meaningless.
+      nodir: true,
       absolute: false
     })
     for (const file of matches) {
