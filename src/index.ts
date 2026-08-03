@@ -55,8 +55,10 @@ export function loadConfig(configPath?: string, cwd: string = process.cwd()): Pr
         `Fix the file or run \`primitiv init\` to regenerate it.`
     )
   }
-  // Validated at the boundary (rule 12) — trust the shape from here on.
-  const config = raw as PrimitivConfig
+  // Validated at the boundary (rule 12) — trust the shape from here on. Take the parsed
+  // value rather than re-casting `raw`: it carries whatever the schema resolved, and the
+  // path rewrites below then mutate a copy instead of the required module's own object.
+  const config = parsed.data as PrimitivConfig
   const configDir = path.dirname(resolved)
   config.output.path = path.resolve(configDir, config.output.path)
   if (config.sources.codebase) {
@@ -154,6 +156,7 @@ export async function buildContract(
         tokens: countTokens(tokens),
         components: Object.keys(components).length
       }
+      log(`   ✓ Found ${countTokens(tokens)} tokens`)
       log(`   ✓ Found ${Object.keys(components).length} components`)
     } catch (err: unknown) {
       recordScanFailure({ name: "storybook", err, config, sourceStatuses, log })

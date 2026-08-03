@@ -238,7 +238,7 @@ describe("verify — hardcoded token values", () => {
     const result = await verify(undefined, { cwd: tempDir })
     expect(result.status).toBe("token-misuse-detected")
     expect(result.violations.reported[0].suggestion?.token).toBe("color-destructive")
-    expect(result.messages.some((m) => m.includes("use --color-destructive"))).toBe(true)
+    expect(result.messages.some((m) => m.includes("use var(--color-destructive)"))).toBe(true)
   })
 
   test("// primitiv-ignore-next-line suppresses a violation end-to-end", async () => {
