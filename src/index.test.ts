@@ -215,7 +215,7 @@ describe("buildContract — source scan statuses", () => {
     writeSources()
     const configPath = configWith({ sourceOfTruth: "storybook", port: unreachablePort() })
 
-    expect(buildContract(configPath, { silent: true, cwd: tempDir })).rejects.toThrow(/sourceOfTruth/)
+    await expect(buildContract(configPath, { silent: true, cwd: tempDir })).rejects.toThrow(/sourceOfTruth/)
     expect(fs.existsSync(path.join(tempDir, "primitiv.contract.json"))).toBe(false)
   })
 
@@ -223,7 +223,7 @@ describe("buildContract — source scan statuses", () => {
     writeSources()
     const configPath = configWith({ port: unreachablePort(), storybookExtra: ", optional: false" })
 
-    expect(buildContract(configPath, { silent: true, cwd: tempDir })).rejects.toThrow(/optional: false/)
+    await expect(buildContract(configPath, { silent: true, cwd: tempDir })).rejects.toThrow(/optional: false/)
     expect(fs.existsSync(path.join(tempDir, "primitiv.contract.json"))).toBe(false)
   })
 })

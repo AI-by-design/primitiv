@@ -235,3 +235,17 @@ describe("lintTokenMisuse — multiple matches per file", () => {
     expect(lines).toEqual([1, 1, 1, 2])
   })
 })
+
+describe("lintTokenMisuse — unreadable files", () => {
+  // A dangling symlink is the stable stand-in for the real race: the glob matches the
+  // entry, the read fails. Deleting a file mid-scan produces the same ENOENT.
+  test("skips a file that disappeared after the glob and still lints the rest", async () => {
+    writeFixture("Button.tsx", `<button className="bg-[#ff0000]" />`)
+    fs.symlinkSync(path.join(tempDir, "deleted.tsx"), path.join(tempDir, "Ghost.tsx"))
+
+    const violations = await lintTokenMisuse(buildConfig(), buildContract())
+
+    expect(violations).toHaveLength(1)
+    expect(violations[0].source.file).toBe("Button.tsx")
+  })
+})

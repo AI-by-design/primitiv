@@ -39,7 +39,10 @@ export async function lintTokenMisuse(config: PrimitivConfig, contract: Primitiv
     if (exemptFiles.has(normalizePath(relFile))) continue
     if (!hostsClassStrings(relFile)) continue
     const absPath = path.resolve(codebase.root, relFile)
-    const content = fs.readFileSync(absPath, "utf-8")
+    // A file can vanish between the glob and the read (editor rewrite, concurrent
+    // checkout). Skip it rather than failing the whole build over one missing file.
+    const content = readFileOrSkip(absPath)
+    if (content === undefined) continue
     const lines = content.split("\n")
 
     collectMatches(content, lines, COLOR_PREFIX_RE, "colors", relFile, tokenIndex, violations)
@@ -174,4 +177,21 @@ function hasIgnoreDirectiveAbove(lines: string[], line: number): boolean {
     return text.includes(IGNORE_DIRECTIVE)
   }
   return false
+}
+
+// Returns undefined when the file is no longer readable — a lint pass over a moving
+// tree should skip what disappeared, not abort. Any other read error still throws.
+function readFileOrSkip(absPath: string): string | undefined {
+  try {
+    return fs.readFileSync(absPath, "utf-8")
+  } catch (err: unknown) {
+    if (isMissingFileError(err)) return undefined
+    throw err
+  }
+}
+
+function isMissingFileError(err: unknown): boolean {
+  if (typeof err !== "object" || err === null || !("code" in err)) return false
+  const code = (err as { code: unknown }).code
+  return code === "ENOENT" || code === "EISDIR"
 }
