@@ -288,6 +288,18 @@ describe("verify --fast (legacy mtime check)", () => {
     expect(result.status).toBe("clean")
     expect(result.exitCode).toBe(0)
   })
+
+  // A dangling symlink is the stable stand-in for the real race: the glob matches the
+  // entry, the stat fails. Deleting a file mid-scan produces the same ENOENT.
+  test("counts a file that disappeared after the glob as stale instead of crashing", async () => {
+    writeConfig(tempDir)
+    writeContract(tempDir)
+    fs.symlinkSync(path.join(tempDir, "deleted.css"), path.join(tempDir, "ghost.css"))
+
+    const result = await verify(undefined, { cwd: tempDir, fast: true })
+    expect(result.status).toBe("stale")
+    expect(result.drift.changes.some((c) => c.includes("ghost.css"))).toBe(true)
+  })
 })
 
 describe("verify — component identity migration (0.2 → 0.3)", () => {

@@ -388,8 +388,10 @@ async function findSourceFilesNewerThan(
       absolute: false
     })
     for (const file of matches) {
-      const stat = fs.statSync(path.resolve(codebaseRoot, file))
-      if (stat.mtime > threshold) {
+      // A file can vanish between the glob and the stat. Treat it as changed rather
+      // than crashing: something moved under us, which is exactly what staleness means.
+      const stat = statOrUndefined(path.resolve(codebaseRoot, file))
+      if (stat === undefined || stat.mtime > threshold) {
         newer.push(file)
         if (newer.length >= MAX_DETECTED_NEWER_FILES) return newer
       }
@@ -424,6 +426,19 @@ function formatAge(hours: number): string {
   if (hours < 1) return `${Math.round(hours * 60)}m`
   if (hours < 24) return `${hours.toFixed(1)}h`
   return `${(hours / 24).toFixed(1)}d`
+}
+
+// Returns undefined when the path is gone — the caller decides what a vanished file means.
+// Any other stat error still throws.
+function statOrUndefined(absPath: string): fs.Stats | undefined {
+  try {
+    return fs.statSync(absPath)
+  } catch (err: unknown) {
+    if (typeof err === "object" && err !== null && "code" in err && (err as { code: unknown }).code === "ENOENT") {
+      return undefined
+    }
+    throw err
+  }
 }
 
 // Re-exported so callers can narrow a result's conflict list without importing the full types module.
