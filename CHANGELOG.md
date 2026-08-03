@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.5.1](https://github.com/AI-by-design/primitiv/compare/v2.5.0...v2.5.1) (2026-08-03)
+
+
+### Bug Fixes
+
+* stop a directory matching a source pattern from failing the scan ([#83](https://github.com/AI-by-design/primitiv/issues/83)) ([768b065](https://github.com/AI-by-design/primitiv/commit/768b065bb1b153b6412428117550fdb39207c41e))
+
 ## [2.5.0](https://github.com/AI-by-design/primitiv/compare/v2.4.0...v2.5.0) (2026-07-16)
 
 
