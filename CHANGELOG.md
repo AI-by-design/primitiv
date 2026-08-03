@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.6.0](https://github.com/AI-by-design/primitiv/compare/v2.5.3...v2.6.0) (2026-08-03)
+
+
+### Features
+
+* **cli:** add --version ([#89](https://github.com/AI-by-design/primitiv/issues/89)) ([8cca268](https://github.com/AI-by-design/primitiv/commit/8cca268379de5e14b212974540667540a15a2a24))
+
 ## [2.5.3](https://github.com/AI-by-design/primitiv/compare/v2.5.2...v2.5.3) (2026-08-03)
 
 
