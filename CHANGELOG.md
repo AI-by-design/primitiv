@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.5.3](https://github.com/AI-by-design/primitiv/compare/v2.5.2...v2.5.3) (2026-08-03)
+
+
+### Bug Fixes
+
+* pin the image build, restore two silent tests, survive files that vanish mid-scan ([#87](https://github.com/AI-by-design/primitiv/issues/87)) ([6b258a2](https://github.com/AI-by-design/primitiv/commit/6b258a2f85a965fb64f42e6ecee71083e74550a5))
+
 ## [2.5.2](https://github.com/AI-by-design/primitiv/compare/v2.5.1...v2.5.2) (2026-08-03)
 
 
