@@ -209,6 +209,82 @@ describe("same-source redefinition conflicts", () => {
   })
 })
 
+describe("token value equivalence", () => {
+  function source(name: "codebase" | "figma", value: string, category = "colors") {
+    const tokens = emptyTokenMap()
+    tokens[category].brand = { name: "brand", value, source: { adapter: name } }
+    return { name, tokens, components: {} }
+  }
+
+  test("does not create cross-source conflicts for equivalent colour spellings", () => {
+    const contract = new ContractBuilder(config("manual")).build([
+      source("codebase", "#1E4FD8"),
+      source("figma", "#1e4fd8")
+    ])
+    expect(contract.conflicts).toHaveLength(0)
+    // The comparison is normalized, not stored: provenance retains the source spelling.
+    expect(contract.tokens.colors.brand.value).toBe("#1E4FD8")
+  })
+
+  test("does not hide genuinely different values", () => {
+    const contract = new ContractBuilder(config("manual")).build([
+      source("codebase", "600", "typography"),
+      source("figma", "600px", "typography")
+    ])
+    expect(contract.conflicts).toHaveLength(1)
+  })
+})
+
+describe("theme-mode reconciliation", () => {
+  function tokenSource(adapter: "codebase" | "figma", value: string, modes?: Record<string, string>) {
+    const tokens = emptyTokenMap()
+    tokens.colors.brand = {
+      name: "brand",
+      value,
+      source: { adapter },
+      ...(modes
+        ? {
+            modes,
+            modeSources: Object.fromEntries(Object.keys(modes).map((mode) => [mode, { adapter }]))
+          }
+        : {})
+    }
+    return { name: adapter, tokens, components: {} }
+  }
+
+  test("a conflicting mode is a separate conflict and the source of truth owns its provenance", () => {
+    const contract = new ContractBuilder(config("figma", "auto-resolve")).build([
+      tokenSource("codebase", "#fff", { dark: "#000" }),
+      tokenSource("figma", "#ffffff", { dark: "#111111" })
+    ])
+    const conflict = contract.conflicts.find((candidate) => candidate.name === "colors.brand.modes.dark")
+    expect(conflict?.resolution).toBe("auto")
+    expect(contract.tokens.colors.brand?.value).toBe("#fff")
+    expect(contract.tokens.colors.brand?.modes?.dark).toBe("#111111")
+    expect(contract.tokens.colors.brand?.modeSources?.dark?.adapter).toBe("figma")
+  })
+
+  test("equivalent mode values do not conflict and retain the first observed source", () => {
+    const contract = new ContractBuilder(config("manual")).build([
+      tokenSource("codebase", "#fff", { dark: "#000" }),
+      tokenSource("figma", "#ffffff", { dark: "#000000" })
+    ])
+    expect(contract.conflicts).toEqual([])
+    expect(contract.tokens.colors.brand?.modes?.dark).toBe("#000")
+    expect(contract.tokens.colors.brand?.modeSources?.dark?.adapter).toBe("codebase")
+  })
+
+  test("a source without a mode cannot erase a known mode while it wins the default", () => {
+    const contract = new ContractBuilder(config("figma", "auto-resolve")).build([
+      tokenSource("codebase", "#fff", { dark: "#000" }),
+      tokenSource("figma", "#111111")
+    ])
+    expect(contract.tokens.colors.brand?.value).toBe("#111111")
+    expect(contract.tokens.colors.brand?.modes?.dark).toBe("#000")
+    expect(contract.tokens.colors.brand?.modeSources?.dark?.adapter).toBe("codebase")
+  })
+})
+
 describe("token categories (single-source vocabulary)", () => {
   test("a built contract carries exactly the canonical token-category set", () => {
     const contract = buildWith([])

@@ -169,6 +169,10 @@ export interface Token {
   // default mode: future non-default Figma modes land in this field with no schema change. Absent
   // when the token has no theme variants.
   modes?: Record<string, string>
+  // Provenance for each theme-mode value. This stays separate from `source`, whose value tracks
+  // the default token only: governance may legitimately select a default from one source and a
+  // mode from another. Optional for backwards compatibility with existing contracts.
+  modeSources?: Record<string, SourceProvenance>
 }
 
 // A token name defined more than once with DIFFERENT values inside one source.

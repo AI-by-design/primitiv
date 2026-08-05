@@ -1,4 +1,4 @@
-import type { ComponentMap, FigmaSource, Source, TokenCategory, TokenMap } from "../../types"
+import type { ComponentMap, FigmaSource, Source, SourceProvenance, TokenCategory, TokenMap } from "../../types"
 import { emptyTokenMap } from "../../types"
 
 type FigmaRawValue =
@@ -21,6 +21,7 @@ interface FigmaVariable {
 interface FigmaVariableCollection {
   name?: string
   defaultModeId?: string
+  modes?: Array<{ modeId?: string; name?: string }>
 }
 
 interface FigmaComponentMeta {
@@ -110,21 +111,50 @@ export class FigmaAdapter implements Source {
       const name = this.normalizeName(variable.name)
       const category = this.categorize(variable.resolvedType, name)
       if (!tokens[category]) tokens[category] = {}
+      const source: SourceProvenance = {
+        adapter: "figma",
+        metadata: {
+          // variableId is file-local and ephemeral; key is Figma's publish-stable
+          // identity — it survives renames, so cross-scan matching must prefer it.
+          variableId: variable.id,
+          variableKey: variable.key,
+          hiddenFromPublishing: variable.hiddenFromPublishing,
+          collectionName: collection?.name
+        }
+      }
+      const modes: Record<string, string> = {}
+      const modeSources: Record<string, SourceProvenance> = {}
+      const namedModes = new Map(
+        (collection?.modes ?? [])
+          .filter((mode): mode is { modeId: string; name: string } => Boolean(mode.modeId && mode.name))
+          .map((mode) => [mode.modeId, mode.name])
+      )
+
+      for (const [modeId, modeRawValue] of Object.entries(variable.valuesByMode ?? {})) {
+        if (modeId === defaultModeId) continue
+        const rawModeName = namedModes.get(modeId)
+        if (!rawModeName) continue
+        // Normalization is lexical only: "Night" becomes "night", never "dark". Semantic
+        // aliases are an explicit future configuration decision, not an adapter guess.
+        const mode = this.normalizeModeName(rawModeName)
+        if (!mode || mode in modes) continue
+        if (typeof modeRawValue === "object" && "type" in modeRawValue && modeRawValue.type === "VARIABLE_ALIAS") {
+          continue
+        }
+        const modeValue = this.resolveValue(variable.resolvedType, modeRawValue)
+        if (!modeValue) continue
+        modes[mode] = modeValue
+        modeSources[mode] = {
+          ...source,
+          metadata: { ...source.metadata, modeId, modeName: rawModeName }
+        }
+      }
 
       tokens[category][name] = {
         name,
         value: resolved,
-        source: {
-          adapter: "figma",
-          metadata: {
-            // variableId is file-local and ephemeral; key is Figma's publish-stable
-            // identity — it survives renames, so cross-scan matching must prefer it.
-            variableId: variable.id,
-            variableKey: variable.key,
-            hiddenFromPublishing: variable.hiddenFromPublishing,
-            collectionName: collection?.name
-          }
-        }
+        source,
+        ...(Object.keys(modes).length > 0 ? { modes, modeSources } : {})
       }
     }
 
@@ -187,6 +217,10 @@ export class FigmaAdapter implements Source {
   private normalizeName(figmaName: string): string {
     // Figma uses "/" separators (e.g., "colors/primary/500") → kebab-case
     return figmaName.replace(/\//g, "-").replace(/\s+/g, "-").toLowerCase()
+  }
+
+  private normalizeModeName(figmaModeName: string): string {
+    return figmaModeName.trim().replace(/\s+/g, "-").toLowerCase()
   }
 
   private categorize(resolvedType: string, name: string): TokenCategory {

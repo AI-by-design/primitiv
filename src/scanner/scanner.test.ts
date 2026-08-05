@@ -209,6 +209,7 @@ describe("CSS theme-scoped tokens (modes)", () => {
     const token = tokens.colors["color-bg"]
     expect(token?.value).toBe("#ffffff")
     expect(token?.modes).toEqual({ dark: "#000000" })
+    expect(token?.modeSources?.dark).toMatchObject({ adapter: "codebase", file: "theme.css", line: 2 })
     expect(redefinitions).toHaveLength(0)
   })
 

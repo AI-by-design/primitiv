@@ -4,6 +4,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import type { PrimitivContract, Token } from "./index"
 import { build, buildContract, emptyTokenMap, loadConfig, primitivContractSchema, TOKEN_CATEGORIES } from "./index"
+import { verify } from "./verify/verify"
 
 let tempDir: string
 
@@ -225,6 +226,147 @@ describe("buildContract — source scan statuses", () => {
 
     await expect(buildContract(configPath, { silent: true, cwd: tempDir })).rejects.toThrow(/optional: false/)
     expect(fs.existsSync(path.join(tempDir, "primitiv.contract.json"))).toBe(false)
+  })
+})
+
+describe("build — codebase and Figma integration", () => {
+  test("reconciles equivalent CSS and Figma colors without a false conflict", async () => {
+    const originalFetch = globalThis.fetch
+    const requests: string[] = []
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : input.toString()
+      requests.push(url)
+
+      if (url.endsWith("/files/demo-file/variables/local")) {
+        return Response.json({
+          meta: {
+            variables: {
+              "VariableID:1": {
+                id: "VariableID:1",
+                key: "stable-variable-key",
+                name: "color/primary",
+                resolvedType: "COLOR",
+                variableCollectionId: "VariableCollectionId:1",
+                valuesByMode: {
+                  "1:0": { r: 1, g: 1, b: 1, a: 1 },
+                  "1:1": { r: 0, g: 0, b: 0, a: 1 }
+                }
+              }
+            },
+            variableCollections: {
+              "VariableCollectionId:1": {
+                name: "Foundation",
+                defaultModeId: "1:0",
+                modes: [
+                  { modeId: "1:0", name: "Light" },
+                  { modeId: "1:1", name: "Dark" }
+                ]
+              }
+            }
+          }
+        })
+      }
+
+      if (url.endsWith("/files/demo-file/components")) return Response.json({ meta: { components: [] } })
+      return new Response("Not found", { status: 404, statusText: "Not Found" })
+    }) as typeof fetch
+
+    try {
+      fs.writeFileSync(
+        path.join(tempDir, "tokens.css"),
+        ":root { --color-primary: #fff; } .dark { --color-primary: #000; }"
+      )
+      const configPath = path.join(tempDir, "primitiv.config.js")
+      fs.writeFileSync(
+        configPath,
+        `module.exports = {
+  sources: {
+    codebase: { root: ".", patterns: ["**/*.css"], ignore: ["node_modules/**"] },
+    figma: { token: "test-token", fileId: "demo-file" }
+  },
+  governance: { sourceOfTruth: "codebase", onConflict: "error" },
+  output: { path: "./primitiv.contract.json" }
+}`
+      )
+
+      expect(await build(configPath)).toBe(0)
+      const contract = JSON.parse(fs.readFileSync(path.join(tempDir, "primitiv.contract.json"), "utf-8"))
+      expect(contract.sourceStatuses.figma).toMatchObject({ status: "ok", tokens: 1, components: 0 })
+      expect(contract.tokens.colors["color-primary"].value).toBe("#fff")
+      expect(contract.tokens.colors["color-primary"].modes).toEqual({ dark: "#000" })
+      expect(contract.tokens.colors["color-primary"].modeSources.dark.adapter).toBe("codebase")
+      expect(contract.conflicts).toEqual([])
+      expect((await verify(configPath, { cwd: tempDir })).status).toBe("clean")
+      expect(requests).toEqual(
+        expect.arrayContaining([
+          "https://api.figma.com/v1/files/demo-file/variables/local",
+          "https://api.figma.com/v1/files/demo-file/components"
+        ])
+      )
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("records a timed-out Figma scan without discarding the codebase contract", async () => {
+    const originalFetch = globalThis.fetch
+    const originalTimeout = AbortSignal.timeout
+    const requests: Array<{ url: string; signal?: AbortSignal | null }> = []
+    // The production policy remains 30 seconds. Shorten it only inside this end-to-end fixture
+    // so it proves build-level failure isolation without making the suite wait half a minute.
+    Object.defineProperty(AbortSignal, "timeout", {
+      value: (_ms: number) => originalTimeout(10),
+      configurable: true,
+      writable: true
+    })
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString()
+      requests.push({ url, signal: init?.signal })
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true })
+      })
+    }) as typeof fetch
+
+    try {
+      fs.writeFileSync(path.join(tempDir, "tokens.css"), ":root { --color-primary: #fff; }")
+      const configPath = path.join(tempDir, "primitiv.config.js")
+      fs.writeFileSync(
+        configPath,
+        `module.exports = {
+  sources: {
+    codebase: { root: ".", patterns: ["**/*.css"], ignore: ["node_modules/**"] },
+    figma: { token: "test-token", fileId: "demo-file" }
+  },
+  governance: { sourceOfTruth: "codebase", onConflict: "warn" },
+  output: { path: "./primitiv.contract.json" }
+}`
+      )
+
+      expect(await build(configPath)).toBe(0)
+      // Promise.all reports the first timeout immediately; allow the second endpoint's signal
+      // to fire before proving both requests were independently bounded.
+      await new Promise<void>((resolve) => setTimeout(resolve, 20))
+      const contract = JSON.parse(fs.readFileSync(path.join(tempDir, "primitiv.contract.json"), "utf-8"))
+      expect(contract.tokens.colors["color-primary"].value).toBe("#fff")
+      expect(contract.sourceStatuses.figma).toEqual({
+        status: "failed",
+        error: "Figma API request timed out after 30000ms. Check your network connection and try again."
+      })
+      expect(requests.map((request) => request.url)).toEqual(
+        expect.arrayContaining([
+          "https://api.figma.com/v1/files/demo-file/variables/local",
+          "https://api.figma.com/v1/files/demo-file/components"
+        ])
+      )
+      expect(requests.every((request) => request.signal?.aborted)).toBe(true)
+    } finally {
+      globalThis.fetch = originalFetch
+      Object.defineProperty(AbortSignal, "timeout", {
+        value: originalTimeout,
+        configurable: true,
+        writable: true
+      })
+    }
   })
 })
 
