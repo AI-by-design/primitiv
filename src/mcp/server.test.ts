@@ -71,6 +71,16 @@ const twoCards: PrimitivContract["components"] = {
   }
 }
 
+describe("tool annotations", () => {
+  test("every MCP tool advertises its read-only behaviour", async () => {
+    const c = await connect(writeContract())
+    const { tools } = await c.listTools()
+
+    expect(tools).toHaveLength(6)
+    for (const tool of tools) expect(tool.annotations?.readOnlyHint).toBe(true)
+  })
+})
+
 describe("get_component resolution", () => {
   test("name-only lookup with a single match returns the component with its id", async () => {
     const c = await connect(
