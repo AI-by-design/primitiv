@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.7.0](https://github.com/AI-by-design/primitiv/compare/v2.6.0...v2.7.0) (2026-08-05)
+
+
+### Features
+
+* **figma:** reconcile named modes with provenance ([#95](https://github.com/AI-by-design/primitiv/issues/95)) ([44f4b8e](https://github.com/AI-by-design/primitiv/commit/44f4b8e298117f352a0254d4b9b4baab6fce98dc))
+
+
+### Bug Fixes
+
+* compare provably equivalent token values ([#93](https://github.com/AI-by-design/primitiv/issues/93)) ([1ed9cd1](https://github.com/AI-by-design/primitiv/commit/1ed9cd150966483be71af86a3409e45721e39d1c))
+* **figma:** preserve floats and bound requests ([#94](https://github.com/AI-by-design/primitiv/issues/94)) ([f419a2f](https://github.com/AI-by-design/primitiv/commit/f419a2f86091f5446535fe0fdeeef48dab0cd1ff))
+
 ## [2.6.0](https://github.com/AI-by-design/primitiv/compare/v2.5.3...v2.6.0) (2026-08-03)
 
 
