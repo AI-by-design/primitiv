@@ -1,6 +1,5 @@
-import { execFileSync, execSync } from "node:child_process"
+import { execSync } from "node:child_process"
 import * as fs from "node:fs"
-import * as os from "node:os"
 import * as path from "node:path"
 
 interface DetectedProject {
@@ -85,7 +84,6 @@ export async function init(targetDir?: string): Promise<void> {
 
   writeAgentInstructions(root, runner)
   writeMcpConfig(root, runner)
-  writeCodexConfig(root, runner)
   writeSkillFile(root)
   writeSetupSkill(root)
   writeGitHubWorkflow(root)
@@ -495,35 +493,6 @@ export function writeGitHubWorkflow(root: string): void {
   if (ctx.owner && ctx.repo) {
     console.log(`   → Enable branch protection on \`${ctx.defaultBranch}\` to gate merges on contract verification:`)
     console.log(`     https://github.com/${ctx.owner}/${ctx.repo}/settings/branches`)
-  }
-}
-
-function writeCodexConfig(root: string, runner: Runner = detectRunner(root)): void {
-  // Prefer $HOME so tests can redirect the lookup to a temp dir; fall back to os.homedir() for portability.
-  const home = process.env.HOME || os.homedir()
-  const codexDir = path.join(home, ".codex")
-  if (!fs.existsSync(codexDir)) return
-
-  let hasCodexCli = false
-  try {
-    execSync("command -v codex", { stdio: "ignore" })
-    hasCodexCli = true
-  } catch {
-    hasCodexCli = false
-  }
-
-  if (!hasCodexCli) {
-    console.log("ℹ️  ~/.codex found but `codex` CLI not on PATH — skipping Codex MCP setup.")
-    return
-  }
-
-  const configPath = path.join(root, "primitiv.config.js")
-  const runnerArgv = formatRunnerArgv(runner, "@ai-by-design/primitiv", "serve", configPath)
-  try {
-    execFileSync("codex", ["mcp", "add", "primitiv", "--", ...runnerArgv], { stdio: "ignore" })
-    console.log("✅ Added Primitiv to Codex (~/.codex/config.toml)")
-  } catch {
-    console.log("⚠️  `codex mcp add` failed. Add [mcp_servers.primitiv] to ~/.codex/config.toml manually.")
   }
 }
 

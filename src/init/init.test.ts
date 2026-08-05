@@ -6,17 +6,12 @@ import * as path from "node:path"
 import { init, writeAgentInstructions, writeGitHubWorkflow } from "./init"
 
 let tempDir: string
-let origHome: string | undefined
 
 beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "primitiv-init-test-"))
-  origHome = process.env.HOME
-  // Redirect os.homedir() to temp dir so Codex-config detection doesn't touch the real ~/.codex.
-  process.env.HOME = tempDir
 })
 
 afterEach(() => {
-  if (origHome !== undefined) process.env.HOME = origHome
   fs.rmSync(tempDir, { recursive: true, force: true })
 })
 
@@ -24,6 +19,23 @@ describe("init", () => {
   test("creates primitiv.config.js", async () => {
     await init(tempDir)
     expect(fs.existsSync(path.join(tempDir, "primitiv.config.js"))).toBe(true)
+  })
+
+  test("never writes to a user-level Codex configuration", async () => {
+    const originalHome = process.env.HOME
+    const home = path.join(tempDir, "home")
+    const codexConfig = path.join(home, ".codex", "config.toml")
+    fs.mkdirSync(path.dirname(codexConfig), { recursive: true })
+    fs.writeFileSync(codexConfig, "[mcp_servers.existing]\ncommand = 'keep'\n")
+    process.env.HOME = home
+
+    try {
+      await init(tempDir)
+      expect(fs.readFileSync(codexConfig, "utf-8")).toBe("[mcp_servers.existing]\ncommand = 'keep'\n")
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME
+      else process.env.HOME = originalHome
+    }
   })
 
   test("AGENT_BLOCK contains the Aura-style routing rule", async () => {
