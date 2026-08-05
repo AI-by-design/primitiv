@@ -248,7 +248,9 @@ export interface InferredRule {
 }
 
 export interface InferredRules {
-  generatedAt: string
+  // New contracts use the enclosing contract's generatedAt timestamp. Keep this optional
+  // so contracts written before that consolidation still load without migration.
+  generatedAt?: string
   rules: InferredRule[]
 }
 

@@ -499,7 +499,7 @@ export class PrimitivMCPServer {
         if (!args.category) {
           return this.json({
             count: inferredRules.rules.length,
-            generatedAt: inferredRules.generatedAt,
+            generatedAt: this.contract.generatedAt,
             rules: inferredRules.rules
           })
         }
@@ -510,7 +510,7 @@ export class PrimitivMCPServer {
           )
         }
         const rules = inferredRules.rules.filter((r) => r.category === category)
-        return this.json({ count: rules.length, generatedAt: inferredRules.generatedAt, rules })
+        return this.json({ count: rules.length, generatedAt: this.contract.generatedAt, rules })
       }
     )
 

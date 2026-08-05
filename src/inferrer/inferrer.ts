@@ -42,10 +42,9 @@ export function inferRules(tokenMap: TokenMap, componentMap: ComponentMap): Infe
     ...inferComponentRules(components)
   ]
 
-  return {
-    generatedAt: new Date().toISOString(),
-    rules
-  }
+  // Inferred rules are generated as part of the contract build, not independently.
+  // The enclosing contract carries the single canonical build timestamp.
+  return { rules }
 }
 
 // ─── Spacing ────────────────────────────────────────────────────────────────

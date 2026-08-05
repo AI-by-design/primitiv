@@ -115,6 +115,32 @@ describe("build — onConflict exit codes", () => {
   })
 })
 
+describe("build — inferred-rule metadata", () => {
+  test("keeps inferred rules identical across repeat builds while retaining the contract freshness timestamp", async () => {
+    fs.writeFileSync(
+      path.join(tempDir, "tokens.css"),
+      ":root { --spacing-sm: 8px; --spacing-md: 16px; --spacing-lg: 24px; }"
+    )
+    writeConfig(`module.exports = {
+  sources: { codebase: { root: ".", patterns: ["**/*.css"], ignore: [] } },
+  governance: { sourceOfTruth: "codebase", onConflict: "warn" },
+  output: { path: "./primitiv.contract.json" }
+}`)
+
+    const configPath = path.join(tempDir, "primitiv.config.js")
+    const contractPath = path.join(tempDir, "primitiv.contract.json")
+    expect(await build(configPath)).toBe(0)
+    const first = JSON.parse(fs.readFileSync(contractPath, "utf-8"))
+
+    expect(await build(configPath)).toBe(0)
+    const second = JSON.parse(fs.readFileSync(contractPath, "utf-8"))
+    expect(second.generatedAt).toEqual(expect.any(String))
+    expect(second.inferredRules.generatedAt).toBeUndefined()
+    expect(second.inferredRules.rules.length).toBeGreaterThan(0)
+    expect(second.inferredRules).toEqual(first.inferredRules)
+  })
+})
+
 describe("build — same-source token redefinitions", () => {
   test("a redefined token becomes a pending conflict in the written contract; onConflict error fails the build", async () => {
     fs.writeFileSync(path.join(tempDir, "a.css"), ":root { --color-bg: #ffffff; }")
