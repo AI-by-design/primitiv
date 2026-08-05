@@ -52,6 +52,11 @@ export interface CodebaseSource {
 export interface FigmaSource {
   token: string
   fileId: string
+  // Explicit mappings keyed by Figma's publish-stable variable `key` (and mode `modeId`).
+  // They are opt-in declarations, never name-based inference.
+  numericUnits?: Record<string, string>
+  tokenAliases?: Record<string, string>
+  modeAliases?: Record<string, string>
   optional?: boolean
 }
 
@@ -286,6 +291,8 @@ export interface Violation {
 // contract schema to the token/prop shapes it has no reason to know about — so
 // `tokens`/`components` are validated only as objects, their values left opaque.
 
+const figmaStableKeyMappings = z.record(z.string().min(1), z.string().min(1))
+
 export const primitivConfigSchema = z.looseObject({
   sources: z.looseObject({
     codebase: z
@@ -296,7 +303,18 @@ export const primitivConfigSchema = z.looseObject({
         optional: z.boolean().optional()
       })
       .optional(),
-    figma: z.looseObject({ token: z.string(), fileId: z.string(), optional: z.boolean().optional() }).optional(),
+    figma: z
+      .looseObject({
+        token: z.string(),
+        fileId: z.string(),
+        // Empty keys would act as accidental wildcards for Figma variables that lack a
+        // publish-stable key; empty values would erase a token or mode name.
+        numericUnits: figmaStableKeyMappings.optional(),
+        tokenAliases: figmaStableKeyMappings.optional(),
+        modeAliases: figmaStableKeyMappings.optional(),
+        optional: z.boolean().optional()
+      })
+      .optional(),
     storybook: z.looseObject({ url: z.string(), optional: z.boolean().optional() }).optional()
   }),
   governance: z.looseObject({

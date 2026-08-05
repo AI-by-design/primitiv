@@ -105,10 +105,10 @@ export class FigmaAdapter implements Source {
       // Skip alias variables (references to other variables)
       if (typeof rawValue === "object" && "type" in rawValue && rawValue.type === "VARIABLE_ALIAS") continue
 
-      const resolved = this.resolveValue(variable.resolvedType, rawValue)
+      const resolved = this.resolveValue(variable.resolvedType, rawValue, variable.key)
       if (!resolved) continue
 
-      const name = this.normalizeName(variable.name)
+      const name = this.normalizeName(this.mappingFor(this.config.tokenAliases, variable.key) ?? variable.name)
       const category = this.categorize(variable.resolvedType, name)
       if (!tokens[category]) tokens[category] = {}
       const source: SourceProvenance = {
@@ -122,8 +122,17 @@ export class FigmaAdapter implements Source {
           collectionName: collection?.name
         }
       }
+      const existing = tokens[category][name]
+      if (existing) {
+        const existingKey = existing.source.metadata?.variableKey
+        const existingIdentity = typeof existingKey === "string" ? existingKey : existing.name
+        throw new Error(
+          `Figma token mapping collision: variables '${existingIdentity}' and '${this.variableIdentity(variable)}' both resolve to '${category}.${name}'. Give each token a distinct name or tokenAliases value.`
+        )
+      }
       const modes: Record<string, string> = {}
       const modeSources: Record<string, SourceProvenance> = {}
+      const modeOrigins: Record<string, { id: string; name: string }> = {}
       const namedModes = new Map(
         (collection?.modes ?? [])
           .filter((mode): mode is { modeId: string; name: string } => Boolean(mode.modeId && mode.name))
@@ -136,14 +145,21 @@ export class FigmaAdapter implements Source {
         if (!rawModeName) continue
         // Normalization is lexical only: "Night" becomes "night", never "dark". Semantic
         // aliases are an explicit future configuration decision, not an adapter guess.
-        const mode = this.normalizeModeName(rawModeName)
-        if (!mode || mode in modes) continue
+        const mode = this.normalizeModeName(this.config.modeAliases?.[modeId] ?? rawModeName)
+        if (!mode) continue
         if (typeof modeRawValue === "object" && "type" in modeRawValue && modeRawValue.type === "VARIABLE_ALIAS") {
           continue
         }
-        const modeValue = this.resolveValue(variable.resolvedType, modeRawValue)
+        if (mode in modes) {
+          const existingMode = modeOrigins[mode]
+          throw new Error(
+            `Figma mode mapping collision for variable '${this.variableIdentity(variable)}': modes '${existingMode.name}' (${existingMode.id}) and '${rawModeName}' (${modeId}) both resolve to '${mode}'. Give each mode a distinct modeAliases value.`
+          )
+        }
+        const modeValue = this.resolveValue(variable.resolvedType, modeRawValue, variable.key)
         if (!modeValue) continue
         modes[mode] = modeValue
+        modeOrigins[mode] = { id: modeId, name: rawModeName }
         modeSources[mode] = {
           ...source,
           metadata: { ...source.metadata, modeId, modeName: rawModeName }
@@ -189,15 +205,25 @@ export class FigmaAdapter implements Source {
     return components
   }
 
-  private resolveValue(type: string, raw: FigmaRawValue): string | null {
+  private mappingFor(mapping: Record<string, string> | undefined, stableKey: string | undefined): string | undefined {
+    // A variable without Figma's publish-stable key cannot opt in to a mapping. In
+    // particular, never fall back to mapping[""]: that makes an empty config key a wildcard.
+    return stableKey ? mapping?.[stableKey] : undefined
+  }
+
+  private variableIdentity(variable: FigmaVariable): string {
+    return variable.key ?? variable.id
+  }
+
+  private resolveValue(type: string, raw: FigmaRawValue, variableKey?: string): string | null {
     if (type === "COLOR" && typeof raw === "object" && "r" in raw) {
       return this.rgbaToHex(raw.r, raw.g, raw.b, raw.a)
     }
     if (type === "FLOAT" && typeof raw === "number") {
       // Figma FLOAT has no CSS-unit semantics. Adding `px` turns valid opacity,
       // weight, z-index, line-height, and motion values into a different value.
-      // Preserve the raw number until a user-declared unit mapping exists.
-      return String(raw)
+      // Preserve the raw number unless the user declared a unit for this stable variable key.
+      return `${raw}${this.mappingFor(this.config.numericUnits, variableKey) ?? ""}`
     }
     if (type === "STRING" && typeof raw === "string") {
       return raw

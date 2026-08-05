@@ -67,6 +67,23 @@ describe("loadConfig — boundary validation", () => {
     const config = loadConfig(undefined, tempDir) as Record<string, unknown>
     expect(config.experimental).toEqual({ future: true })
   })
+
+  test("rejects empty Figma mapping keys and values before they can erase or wildcard names", () => {
+    writeConfig(`module.exports = {
+  sources: {
+    figma: {
+      token: "test-token",
+      fileId: "file123",
+      numericUnits: { "": "px" },
+      tokenAliases: { "valid-key": "" },
+      modeAliases: { "valid-mode": "" }
+    }
+  },
+  governance: { sourceOfTruth: "figma", onConflict: "warn" },
+  output: { path: "./primitiv.contract.json" }
+}`)
+    expect(() => loadConfig(undefined, tempDir)).toThrow(/Invalid config/)
+  })
 })
 
 describe("build — onConflict exit codes", () => {
