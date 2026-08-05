@@ -222,14 +222,24 @@ export class CodebaseScanner {
         // No `:root` default seen yet (e.g. cal.com's `.dark`-only `--cal-*`): promote the mode
         // value to a placeholder default so the token exists, and record the mode. A real default
         // arriving later upgrades it (promotedKeys) while keeping the collected modes.
-        tokens[category][name] = { name, value, source, modes: { [mode]: value } }
+        tokens[category][name] = {
+          name,
+          value,
+          source,
+          modes: { [mode]: value },
+          modeSources: { [mode]: source }
+        }
         capture.promotedKeys.add(key)
         return
       }
       const token = tokens[category][name]
       if (!token.modes) token.modes = {}
+      if (!token.modeSources) token.modeSources = {}
       // First value per mode wins, matching the default's first-write-wins discipline.
-      if (!(mode in token.modes)) token.modes[mode] = value
+      if (!(mode in token.modes)) {
+        token.modes[mode] = value
+        token.modeSources[mode] = source
+      }
       return
     }
 

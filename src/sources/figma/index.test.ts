@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import { FigmaAdapter } from "./index"
 
+function adapterWithTimeout(timeoutMs: number): FigmaAdapter {
+  const adapter = new FigmaAdapter({ token: "test-token", fileId: "file123" })
+  ;(adapter as unknown as { requestTimeoutMs: number }).requestTimeoutMs = timeoutMs
+  return adapter
+}
+
 describe("FigmaAdapter — durable identity capture", () => {
   test("a variable's publish-stable key and publish visibility land in token source metadata", async () => {
     // The ephemeral variableId alone cannot survive Figma's id regeneration — the
@@ -73,6 +79,136 @@ describe("FigmaAdapter — error sanitization", () => {
       expect(message).not.toContain("SECRET-BODY-DO-NOT-PERSIST")
     } finally {
       server.stop(true)
+    }
+  })
+})
+
+describe("FigmaAdapter — FLOAT and request handling", () => {
+  test("preserves FLOAT values as unitless numbers", async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : input.toString()
+      if (url.endsWith("/variables/local")) {
+        return Response.json({
+          meta: {
+            variables: {
+              opacity: {
+                id: "opacity",
+                name: "opacity/disabled",
+                resolvedType: "FLOAT",
+                variableCollectionId: "collection",
+                valuesByMode: { default: 0.4 }
+              },
+              weight: {
+                id: "weight",
+                name: "font/weight/semibold",
+                resolvedType: "FLOAT",
+                variableCollectionId: "collection",
+                valuesByMode: { default: 600 }
+              },
+              spacing: {
+                id: "spacing",
+                name: "spacing/md",
+                resolvedType: "FLOAT",
+                variableCollectionId: "collection",
+                valuesByMode: { default: 16 }
+              }
+            },
+            variableCollections: { collection: { defaultModeId: "default" } }
+          }
+        })
+      }
+      return Response.json({ meta: { components: [] } })
+    }) as typeof fetch
+
+    try {
+      const { tokens } = await new FigmaAdapter({ token: "test-token", fileId: "file123" }).scan()
+      expect(tokens.spacing["opacity-disabled"]?.value).toBe("0.4")
+      expect(tokens.typography["font-weight-semibold"]?.value).toBe("600")
+      expect(tokens.spacing["spacing-md"]?.value).toBe("16")
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("times out both Figma endpoints with a sanitised error", async () => {
+    const originalFetch = globalThis.fetch
+    const requests: Array<{ url: string; signal?: AbortSignal | null }> = []
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString()
+      requests.push({ url, signal: init?.signal })
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true })
+      })
+    }) as typeof fetch
+
+    try {
+      await expect(adapterWithTimeout(10).scan()).rejects.toThrow(
+        "Figma API request timed out after 10ms. Check your network connection and try again."
+      )
+      // Promise.all rejects as soon as the first endpoint times out; give the concurrently
+      // started second request its own timeout turn before asserting both signals fired.
+      await new Promise<void>((resolve) => setTimeout(resolve, 20))
+      expect(requests.map((request) => request.url)).toEqual(
+        expect.arrayContaining([
+          "https://api.figma.com/v1/files/file123/variables/local",
+          "https://api.figma.com/v1/files/file123/components"
+        ])
+      )
+      expect(requests.every((request) => request.signal?.aborted)).toBe(true)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+})
+
+describe("FigmaAdapter — theme modes", () => {
+  test("extracts each named non-default Figma mode with its own provenance", async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : input.toString()
+      if (url.endsWith("/variables/local")) {
+        return Response.json({
+          meta: {
+            variables: {
+              brand: {
+                id: "brand",
+                name: "color/brand",
+                resolvedType: "COLOR",
+                variableCollectionId: "collection",
+                valuesByMode: {
+                  light: { r: 1, g: 1, b: 1, a: 1 },
+                  dark: { r: 0, g: 0, b: 0, a: 1 },
+                  night: { r: 0.1, g: 0.1, b: 0.1, a: 1 }
+                }
+              }
+            },
+            variableCollections: {
+              collection: {
+                defaultModeId: "light",
+                modes: [
+                  { modeId: "light", name: "Light" },
+                  { modeId: "dark", name: "Dark" },
+                  { modeId: "night", name: "Night" }
+                ]
+              }
+            }
+          }
+        })
+      }
+      return Response.json({ meta: { components: [] } })
+    }) as typeof fetch
+
+    try {
+      const { tokens } = await new FigmaAdapter({ token: "test-token", fileId: "file123" }).scan()
+      const token = tokens.colors["color-brand"]
+      expect(token?.value).toBe("#ffffff")
+      // "Night" is not guessed to mean "dark"; it remains its own lexical mode key.
+      expect(token?.modes).toEqual({ dark: "#000000", night: "#1a1a1a" })
+      expect(token?.modeSources?.dark?.metadata).toMatchObject({ modeId: "dark", modeName: "Dark" })
+      expect(token?.modeSources?.night?.metadata).toMatchObject({ modeId: "night", modeName: "Night" })
+    } finally {
+      globalThis.fetch = originalFetch
     }
   })
 })

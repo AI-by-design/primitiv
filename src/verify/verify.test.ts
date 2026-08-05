@@ -389,6 +389,20 @@ describe("verify — failed sources", () => {
     fs.writeFileSync(path.join(root, "primitiv.config.js"), body)
   }
 
+  function writeFigmaConfig(root: string) {
+    fs.writeFileSync(
+      path.join(root, "primitiv.config.js"),
+      `module.exports = {
+  sources: {
+    codebase: { root: ".", patterns: ["**/*.css"], ignore: ["node_modules/**"] },
+    figma: { token: "test-token", fileId: "demo-file" }
+  },
+  governance: { sourceOfTruth: "codebase", onConflict: "warn" },
+  output: { path: "./primitiv.contract.json" }
+}`
+    )
+  }
+
   // A committed contract holding a storybook-sourced component, as a build with a
   // healthy Storybook would have written it.
   function storybookCommit(root: string) {
@@ -430,6 +444,55 @@ describe("verify — failed sources", () => {
     const result = await verify(undefined, { cwd: tempDir, strict: true })
     expect(result.status).toBe("source-scan-failed")
     expect(result.exitCode).toBe(2)
+  })
+
+  test("a failed Figma source does not report its previously sourced mode as removed", async () => {
+    const originalFetch = globalThis.fetch
+    try {
+      fs.writeFileSync(path.join(tempDir, "tokens.css"), ":root { --color-brand: #fff; }")
+      writeFigmaConfig(tempDir)
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = input instanceof Request ? input.url : input.toString()
+        if (url.endsWith("/variables/local")) {
+          return Response.json({
+            meta: {
+              variables: {
+                brand: {
+                  id: "brand",
+                  name: "color/brand",
+                  resolvedType: "COLOR",
+                  variableCollectionId: "collection",
+                  valuesByMode: { light: { r: 1, g: 1, b: 1, a: 1 }, dark: { r: 0, g: 0, b: 0, a: 1 } }
+                }
+              },
+              variableCollections: {
+                collection: {
+                  defaultModeId: "light",
+                  modes: [
+                    { modeId: "light", name: "Light" },
+                    { modeId: "dark", name: "Dark" }
+                  ]
+                }
+              }
+            }
+          })
+        }
+        return Response.json({ meta: { components: [] } })
+      }) as typeof fetch
+      const committed = await buildContract(undefined, { cwd: tempDir, silent: true })
+      expect(committed.tokens.colors["color-brand"]?.modeSources?.dark?.adapter).toBe("figma")
+      fs.writeFileSync(path.join(tempDir, "primitiv.contract.json"), JSON.stringify(committed, null, 2))
+
+      globalThis.fetch = (async () => {
+        throw new Error("offline")
+      }) as typeof fetch
+      const result = await verify(undefined, { cwd: tempDir })
+      expect(result.drift.changes.some((change) => change.includes("mode removed"))).toBe(false)
+      expect(result.status).toBe("clean")
+      expect(result.failedSources).toEqual([{ name: "figma", error: "offline" }])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 
   test("--fast surfaces failed sources recorded on the committed contract", async () => {

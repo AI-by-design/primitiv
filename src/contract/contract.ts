@@ -99,11 +99,18 @@ export class ContractBuilder {
               }
 
               if (this.config.governance.sourceOfTruth === source.name) {
-                merged[category][name] = token
+                // Default and mode values are independent evidence. Selecting a new default
+                // must never discard a mode the incoming source simply did not provide.
+                const existing = merged[category][name]
+                merged[category][name] = this.withRetainedModes(token, existing)
+                // Later sources must compare with the elected value, not the first source's
+                // value. This matters as soon as a third token-producing adapter participates.
+                seen[category][name] = { adapter: source.name, value: token.value }
               }
             }
+            this.mergeModes(merged[category][name], token, source.name, category, name, conflicts)
           } else {
-            merged[category][name] = token
+            merged[category][name] = this.copyTokenWithModeSources(token)
             seen[category][name] = { adapter: source.name, value: token.value }
           }
         }
@@ -111,6 +118,74 @@ export class ContractBuilder {
     }
 
     return merged
+  }
+
+  private copyTokenWithModeSources(token: Token): Token {
+    if (!token.modes || Object.keys(token.modes).length === 0) return { ...token }
+    const modes = { ...token.modes }
+    const modeSources = Object.fromEntries(
+      Object.keys(modes).map((mode) => [mode, token.modeSources?.[mode] ?? token.source])
+    ) as Record<string, SourceProvenance>
+    return { ...token, modes, modeSources }
+  }
+
+  private withRetainedModes(next: Token, existing: Token): Token {
+    const selected = this.copyTokenWithModeSources(next)
+    if (!existing.modes || Object.keys(existing.modes).length === 0) return selected
+    return { ...selected, modes: { ...existing.modes }, modeSources: { ...existing.modeSources } }
+  }
+
+  private mergeModes(
+    merged: Token,
+    incoming: Token,
+    sourceName: string,
+    category: string,
+    name: string,
+    conflicts: Conflict[]
+  ): void {
+    if (!incoming.modes || Object.keys(incoming.modes).length === 0) return
+    if (!merged.modes) merged.modes = {}
+    if (!merged.modeSources) merged.modeSources = {}
+
+    for (const [mode, value] of Object.entries(incoming.modes)) {
+      const incomingSource = incoming.modeSources?.[mode] ?? incoming.source
+      const existingValue = merged.modes[mode]
+      if (existingValue === undefined) {
+        merged.modes[mode] = value
+        merged.modeSources[mode] = incomingSource
+        continue
+      }
+      if (valuesEquivalent(existingValue, value, category)) continue
+
+      const existingSource = merged.modeSources[mode] ?? merged.source
+      const conflictName = `${category}.${name}.modes.${mode}`
+      const existingConflict = conflicts.find((c) => c.type === "token" && c.name === conflictName)
+      if (existingConflict) {
+        existingConflict.sources.push({ source: incomingSource, value })
+        const fix = this.buildFixMessage("token", conflictName, existingConflict.sources)
+        existingConflict.suggestedFix = fix.suggestedFix
+        existingConflict.actionable = fix.actionable
+      } else {
+        const conflictSources = [
+          { source: existingSource, value: existingValue },
+          { source: incomingSource, value }
+        ]
+        const fix = this.buildFixMessage("token", conflictName, conflictSources)
+        conflicts.push({
+          type: "token",
+          name: conflictName,
+          sources: conflictSources,
+          resolution: "pending",
+          suggestedFix: fix.suggestedFix,
+          actionable: fix.actionable
+        })
+      }
+
+      if (this.config.governance.sourceOfTruth === sourceName) {
+        merged.modes[mode] = value
+        merged.modeSources[mode] = incomingSource
+      }
+    }
   }
 
   private mergeComponents(
