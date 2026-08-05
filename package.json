@@ -37,6 +37,9 @@
     "registry": "https://registry.npmjs.org",
     "access": "public"
   },
+  "overrides": {
+    "brace-expansion": "5.0.9"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/AI-by-design/primitiv.git"
