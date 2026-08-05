@@ -322,11 +322,12 @@ describe("omittable args are declared optional", () => {
     expect(JSON.parse(content[0].text).count).toBe(1)
   })
 
-  test("get_inferred_rules with no args returns every rule", async () => {
+  test("get_inferred_rules uses the contract timestamp for newly written contracts", async () => {
+    const generatedAt = "2026-08-05T12:00:00.000Z"
     const c = await connect(
       writeContract({
+        generatedAt,
         inferredRules: {
-          generatedAt: new Date().toISOString(),
           rules: [
             { id: "spacing-scale", category: "spacing", rule: "4px base scale", confidence: "high", evidence: [] }
           ]
@@ -336,7 +337,26 @@ describe("omittable args are declared optional", () => {
     const result = await c.callTool({ name: "get_inferred_rules", arguments: {} })
     expect(result.isError).toBeFalsy()
     const content = result.content as Array<{ type: string; text: string }>
-    expect(JSON.parse(content[0].text).count).toBe(1)
+    expect(JSON.parse(content[0].text)).toMatchObject({ count: 1, generatedAt })
+  })
+
+  test("get_inferred_rules keeps older contracts with a nested timestamp readable", async () => {
+    const generatedAt = "2026-08-05T12:00:00.000Z"
+    const c = await connect(
+      writeContract({
+        generatedAt,
+        inferredRules: {
+          generatedAt: "2026-01-01T00:00:00.000Z",
+          rules: [
+            { id: "spacing-scale", category: "spacing", rule: "4px base scale", confidence: "high", evidence: [] }
+          ]
+        }
+      })
+    )
+    const result = await c.callTool({ name: "get_inferred_rules", arguments: { category: "spacing" } })
+    expect(result.isError).toBeFalsy()
+    const content = result.content as Array<{ type: string; text: string }>
+    expect(JSON.parse(content[0].text)).toMatchObject({ count: 1, generatedAt })
   })
 
   test("get_violations with no args returns all violations", async () => {

@@ -49,6 +49,14 @@ describe("inferRules — category vocabulary", () => {
       expect(rule.category).not.toBe("border-radius")
     }
   })
+
+  test("returns identical rule data for unchanged inputs", () => {
+    const first = inferRules(tokenMap, {})
+    const second = inferRules(tokenMap, {})
+
+    expect(first).toEqual(second)
+    expect(first).not.toHaveProperty("generatedAt")
+  })
 })
 
 describe("inferRules — dark mode via token modes", () => {
