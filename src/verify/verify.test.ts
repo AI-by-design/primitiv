@@ -137,6 +137,26 @@ describe("verify", () => {
     expect(result.drift.changes).toContain("token mode changed: colors.color-bg (dark: #111111 → #000000)")
   })
 
+  test("equivalent default and mode spellings do not make a contract stale", async () => {
+    fs.writeFileSync(
+      path.join(tempDir, "styles.css"),
+      `:root { --color-brand: #ffffff; } .dark { --color-brand: #000000; }`
+    )
+    writeConfig(tempDir)
+    const tokens = emptyTokenMap()
+    tokens.colors["color-brand"] = {
+      name: "color-brand",
+      value: "#fff",
+      modes: { dark: "#000" },
+      source: { adapter: "codebase", file: "styles.css", line: 1 }
+    }
+    writeContract(tempDir, { tokens })
+
+    const result = await verify(undefined, { cwd: tempDir })
+    expect(result.status).toBe("clean")
+    expect(result.drift.changes).toEqual([])
+  })
+
   test("--strict escalates stale from exit 1 to exit 2", async () => {
     fs.writeFileSync(path.join(tempDir, "styles.css"), ":root { --color-primary: oklch(0.5 0.2 260); }")
     writeConfig(tempDir)

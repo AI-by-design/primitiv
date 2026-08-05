@@ -1,6 +1,16 @@
 import * as fs from "node:fs"
 import { inferRules } from "../inferrer"
-import type { ComponentMap, Conflict, PrimitivConfig, PrimitivContract, TokenMap, TokenRedefinition } from "../types"
+import { valuesEquivalent } from "../normalize/value"
+import type {
+  ComponentMap,
+  Conflict,
+  PrimitivConfig,
+  PrimitivContract,
+  SourceProvenance,
+  Token,
+  TokenMap,
+  TokenRedefinition
+} from "../types"
 import { emptyTokenMap } from "../types"
 
 export class ContractBuilder {
@@ -63,7 +73,7 @@ export class ContractBuilder {
 
         for (const [name, token] of Object.entries(tokens)) {
           if (seen[category][name]) {
-            if (seen[category][name].value !== token.value) {
+            if (!valuesEquivalent(seen[category][name].value, token.value, category)) {
               const existingConflict = conflicts.find((c) => c.type === "token" && c.name === `${category}.${name}`)
 
               if (existingConflict) {
