@@ -18,6 +18,8 @@ interface StorybookManifest {
 }
 
 export class StorybookAdapter implements Source {
+  private requestTimeoutMs = 30_000
+
   constructor(private config: StorybookSource) {}
 
   async scan(): Promise<{ tokens: TokenMap; components: ComponentMap }> {
@@ -99,14 +101,18 @@ export class StorybookAdapter implements Source {
     const endpoints = ["/index.json", "/stories.json"]
 
     for (const endpoint of endpoints) {
+      const signal = AbortSignal.timeout(this.requestTimeoutMs)
       try {
-        const res = await fetch(`${base}${endpoint}`)
+        const res = await fetch(`${base}${endpoint}`, { signal })
         if (res.ok) return (await res.json()) as StorybookManifest
-      } catch {}
+      } catch {
+        // Try the legacy manifest endpoint independently. The final error is deliberately
+        // sanitised because it is persisted in sourceStatuses.
+      }
     }
 
     throw new Error(
-      `Could not reach Storybook at ${this.config.url}. ` +
+      `Could not reach Storybook within ${this.requestTimeoutMs}ms. ` +
         `Make sure Storybook is running (npx storybook dev) and the URL is correct in primitiv.config.js.`
     )
   }
