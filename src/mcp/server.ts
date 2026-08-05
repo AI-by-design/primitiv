@@ -241,6 +241,7 @@ export class PrimitivMCPServer {
           "Get the resolved design system context before building UI. Read-only, no side effects. Default (no category) returns a JSON summary of token counts, component names, conflict counts, and contract metadata. Pass category: 'all' | 'tokens' | 'components' | 'conflicts' to get full detail. Pass tokenCategory to filter tokens: " +
           `${TOKEN_CATEGORIES.join(", ")} (unknown/aliased categories return an actionable error, not a silent empty result). ` +
           "Use this as the first call to understand what exists. For lookups by name, use get_token or get_component instead.",
+        annotations: { readOnlyHint: true },
         inputSchema: {
           category: z.string().optional(),
           tokenCategory: z.string().optional()
@@ -351,6 +352,7 @@ export class PrimitivMCPServer {
           "Look up a specific design token by name. Read-only, no side effects. Returns the token's name, value, and category, or an error if not found. Pass category to narrow search: " +
           `${TOKEN_CATEGORIES.join(", ")} (aliases like 'color'/'radius'/'z-index' are normalized). ` +
           "Omit category to search all. Use this when you know the token name. For a broad overview of all tokens, use get_design_context with category 'tokens' instead.",
+        annotations: { readOnlyHint: true },
         inputSchema: {
           name: z.string(),
           category: z.string().optional()
@@ -378,6 +380,7 @@ export class PrimitivMCPServer {
       {
         description:
           "Look up a component by name or id. Read-only, no side effects. Pass context (your current working file or directory) so same-name components resolve by path scope. Returns the component JSON (with its id) when the lookup resolves to exactly one component, or an error listing available names if not found. When several components share the name and neither governance nor scope decides, returns { ambiguous, matches, instruction } — follow the instruction: match each candidate's rationale.when against the user's intent, and if that doesn't decide, ask the user; never pick arbitrarily. Use this when you need implementation details for a known component to reuse it rather than recreate it. For a list of all components, use get_design_context with category 'components' instead.",
+        annotations: { readOnlyHint: true },
         inputSchema: {
           name: z.string(),
           // Optional by design: a name-only lookup must keep working (and fall through to
@@ -448,6 +451,7 @@ export class PrimitivMCPServer {
       {
         description:
           "Get conflicts between design sources. Read-only, no side effects. Returns JSON with conflict count, actionable count, and a list of conflicts with type, name, resolution status, and suggested fixes. Pass type: 'all' | 'token' | 'component' (default 'all'). Pass status: 'all' | 'pending' | 'resolved' (default 'pending'). Use this to audit disagreements between sources (e.g. Figma vs codebase). For resolved design values, use get_token or get_component instead.",
+        annotations: { readOnlyHint: true },
         inputSchema: {
           type: z.string().optional(),
           status: z.string().optional()
@@ -486,6 +490,7 @@ export class PrimitivMCPServer {
       {
         description:
           "Get the design rules inferred from your codebase patterns. Read-only, no side effects. Returns JSON with a list of rules including category, pattern, and confidence, or an error if no rules have been generated yet. Pass category to filter: spacing, colors, typography, borderRadius, naming, components. Omit category to get all. Use this to understand implicit conventions the codebase follows. For explicit design token values, use get_token. For source conflicts, use get_conflicts.",
+        annotations: { readOnlyHint: true },
         inputSchema: {
           category: z.string().optional()
         }
@@ -521,6 +526,7 @@ export class PrimitivMCPServer {
           "Get hardcoded token values: literals in source code typed inline instead of referencing a design token, bypassing the contract. Read-only, no side effects. Returns JSON with a count, suggestion-coverage stats, and a list with file:line:column, the captured literal, the surrounding utility (e.g. 'bg-[#ff0000]'), and an optional smart-match suggestion when a contract token has the same value. " +
           `Pass category to filter: 'all' | ${LINT_CATEGORIES.map((c) => `'${c}'`).join(" | ")} (hardcoded values are only detected for these). ` +
           "Call this BEFORE generating UI with literal values — prefer the suggested token over a hardcoded literal. For available tokens to use instead, use get_design_context or get_token.",
+        annotations: { readOnlyHint: true },
         inputSchema: {
           category: z.string().optional()
         }
