@@ -6,7 +6,7 @@ Retrieval gives you data. Reconciliation gives you truth.
 
 <video src="https://github.com/user-attachments/assets/deb63812-72ea-4651-b248-31d817725d10" controls muted></video>
 
-Primitiv sits above your design sources — Figma, codebase, Storybook, token files — scans them, reconciles conflicts between them, and exposes a single machine-readable contract via MCP. Any agent that connects gets one authoritative answer before it builds. Your code never leaves your machine.
+Primitiv scans the configured codebase, Figma, and Storybook sources, reconciles their conflicts, and exposes one machine-readable contract via MCP. Your code never leaves your machine.
 
 ## Quick start
 
@@ -16,11 +16,11 @@ npx @ai-by-design/primitiv build    # scan sources, resolve conflicts, write the
 npx @ai-by-design/primitiv serve    # start the MCP server
 ```
 
-`init` writes a `.mcp.json` to your project root, so Cursor, Claude Code, Codex, Windsurf, and any other MCP-compatible tool pick up the server without manual config. `primitiv init` is safe to re-run — it keeps your `primitiv.config.js` and refreshes the other wiring (MCP config, agent instructions, skill files, CI workflow).
+`init` writes project-scoped MCP configuration and optional project files. `primitiv init` is safe to re-run — it keeps your `primitiv.config.js` and refreshes its managed project wiring (MCP config, agent instructions, skill files, and CI workflow).
 
 If your project is on GitHub, `init` also installs `.github/workflows/primitiv-verify.yml` — a workflow that runs `primitiv verify --strict` on every PR and push. Pair it with branch protection on your default branch and the merge is blocked when an agent ships UI that breaks the contract or sneaks a hardcoded value past it.
 
-From here, every agent that builds UI calls `get_design_context` first, then `get_violations` before generating any literal value — and gets your resolved design contract back.
+Agents connected to the MCP server can query the resolved contract with `get_design_context` and inspect detected token misuse with `get_violations`.
 
 ## The problem
 
@@ -36,11 +36,9 @@ Any source                      Primitiv                    Your agent
 Figma           ──┐
 Codebase        ──┤──► scan ──► reconcile ──► contract ──► MCP ──► Cursor / Claude Code / Codex / Windsurf / any MCP-compatible tool
 Storybook       ──┤
-Tokens file     ──┤
-Any adapter     ──┘
 ```
 
-1. **Scan** — Primitiv ingests from every configured source via adapters — codebase, Figma, Storybook, token files — capturing tokens, components, their variants, and theme modes
+1. **Scan** — Primitiv ingests configured codebase, Figma, and Storybook sources, capturing tokens, components, their variants, and theme modes
 2. **Reconcile** — Conflicts between sources are surfaced and resolved according to your governance configuration
 3. **Infer** — Design rules are extracted from actual codebase patterns and written into the contract
 4. **Contract** — A single `primitiv.contract.json` is written as the canonical reference
@@ -233,7 +231,7 @@ Bug reports, feature ideas, and PRs are welcome. See [CONTRIBUTING.md](./CONTRIB
 
 ## Design principles
 
-**Source-agnostic** — Primitiv does not assume any particular toolchain. Sources are configured via adapters, and new adapters can be added for any system that holds design-relevant information. Works with Figma, Storybook, token files, raw codebase — or any combination.
+**Source-aware** — Primitiv ships adapters for codebase, Figma, and Storybook sources. Configure any combination of those sources and reconcile their design information into one contract.
 
 **Contract over documentation** — The output is a machine-readable contract, not human-readable documentation. It is designed to be consumed by agents, not read by people.
 
@@ -243,7 +241,7 @@ Bug reports, feature ideas, and PRs are welcome. See [CONTRIBUTING.md](./CONTRIB
 
 **Governance is explicit** — When sources conflict, the resolution is not silent. Conflicts are surfaced, logged, and resolved according to rules you define. Nothing is resolved by guessing.
 
-**Local-first and private** — Primitiv runs entirely on your machine. Your codebase is never sent to an external service. The contract is a local file; the MCP server is a local process.
+**Local-first** — Primitiv runs its contract builder and MCP server locally. Figma and Storybook adapters make requests only when you configure them; your codebase is read from the local filesystem.
 
 **Incrementally adoptable** — Start with a single source. Add more as needed. The contract remains valid at any level of completeness.
 
