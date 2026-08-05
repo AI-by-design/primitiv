@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.8.0](https://github.com/AI-by-design/primitiv/compare/v2.7.0...v2.8.0) (2026-08-05)
+
+
+### Features
+
+* **figma:** support explicit stable-key mappings ([#101](https://github.com/AI-by-design/primitiv/issues/101)) ([dac1887](https://github.com/AI-by-design/primitiv/commit/dac1887e41420ae2791e2c5b6a13a164123376b9))
+
+
+### Bug Fixes
+
+* **contract:** stabilise inferred rule metadata ([#102](https://github.com/AI-by-design/primitiv/issues/102)) ([03268b3](https://github.com/AI-by-design/primitiv/commit/03268b3766fa4937226f226b1d2adb5c09a808da))
+* **init:** keep setup project-scoped ([#98](https://github.com/AI-by-design/primitiv/issues/98)) ([de944b9](https://github.com/AI-by-design/primitiv/commit/de944b9c1c3600a1bd50b23571929b0bbcc3bc24))
+* **mcp:** mark query tools read-only ([#103](https://github.com/AI-by-design/primitiv/issues/103)) ([51ceb23](https://github.com/AI-by-design/primitiv/commit/51ceb230db5ea0d57dbd4e05c7ec27327dde5dca))
+* **storybook:** bound manifest requests ([#97](https://github.com/AI-by-design/primitiv/issues/97)) ([fbdb5d8](https://github.com/AI-by-design/primitiv/commit/fbdb5d858fe7a070e1c7a8f904bf48f92393ae29))
+
 ## [2.7.0](https://github.com/AI-by-design/primitiv/compare/v2.6.0...v2.7.0) (2026-08-05)
 
 
