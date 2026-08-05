@@ -211,4 +211,187 @@ describe("FigmaAdapter — theme modes", () => {
       globalThis.fetch = originalFetch
     }
   })
+
+  test("uses only explicit stable-key mappings for units, tokens, and modes", async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : input.toString()
+      if (url.endsWith("/variables/local")) {
+        return Response.json({
+          meta: {
+            variables: {
+              spacing: {
+                id: "spacing",
+                key: "stable-spacing-key",
+                name: "legacy/space",
+                resolvedType: "FLOAT",
+                variableCollectionId: "collection",
+                valuesByMode: { light: 8, night: 12 }
+              },
+              brand: {
+                id: "brand",
+                key: "stable-brand-key",
+                name: "legacy/brand",
+                resolvedType: "COLOR",
+                variableCollectionId: "collection",
+                valuesByMode: {
+                  light: { r: 1, g: 1, b: 1, a: 1 },
+                  night: { r: 0, g: 0, b: 0, a: 1 }
+                }
+              }
+            },
+            variableCollections: {
+              collection: {
+                defaultModeId: "light",
+                modes: [
+                  { modeId: "light", name: "Light" },
+                  { modeId: "night", name: "Night" }
+                ]
+              }
+            }
+          }
+        })
+      }
+      return Response.json({ meta: { components: [] } })
+    }) as typeof fetch
+
+    try {
+      const { tokens } = await new FigmaAdapter({
+        token: "test-token",
+        fileId: "file123",
+        numericUnits: { "stable-spacing-key": "px" },
+        tokenAliases: { "stable-brand-key": "color/brand-primary" },
+        modeAliases: { night: "dark" }
+      }).scan()
+
+      const spacing = tokens.spacing["legacy-space"]
+      expect(spacing?.value).toBe("8px")
+      expect(spacing?.modes).toEqual({ dark: "12px" })
+
+      const brand = tokens.colors["color-brand-primary"]
+      expect(brand?.value).toBe("#ffffff")
+      expect(brand?.modes).toEqual({ dark: "#000000" })
+      // Aliasing the display key does not discard Figma's original provenance.
+      expect(brand?.modeSources?.dark?.metadata).toMatchObject({ modeId: "night", modeName: "Night" })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+})
+
+describe("FigmaAdapter — explicit mapping safety", () => {
+  function mockFigmaVariables(variables: object, variableCollections: object): () => void {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : input.toString()
+      if (url.endsWith("/variables/local")) return Response.json({ meta: { variables, variableCollections } })
+      return Response.json({ meta: { components: [] } })
+    }) as typeof fetch
+    return () => {
+      globalThis.fetch = originalFetch
+    }
+  }
+
+  test("fails instead of silently overwriting tokens whose aliases collide", async () => {
+    const restore = mockFigmaVariables(
+      {
+        first: {
+          id: "first",
+          key: "KEY_A",
+          name: "color/first",
+          resolvedType: "COLOR",
+          variableCollectionId: "collection",
+          valuesByMode: { default: { r: 1, g: 0, b: 0, a: 1 } }
+        },
+        second: {
+          id: "second",
+          key: "KEY_B",
+          name: "color/second",
+          resolvedType: "COLOR",
+          variableCollectionId: "collection",
+          valuesByMode: { default: { r: 0, g: 0, b: 1, a: 1 } }
+        }
+      },
+      { collection: { defaultModeId: "default" } }
+    )
+
+    try {
+      await expect(
+        new FigmaAdapter({
+          token: "test-token",
+          fileId: "file123",
+          tokenAliases: { KEY_A: "colors/shared", KEY_B: "colors/shared" }
+        }).scan()
+      ).rejects.toThrow("Figma token mapping collision")
+    } finally {
+      restore()
+    }
+  })
+
+  test("fails instead of dropping mode values whose aliases collide", async () => {
+    const restore = mockFigmaVariables(
+      {
+        brand: {
+          id: "brand",
+          key: "KEY_A",
+          name: "color/brand",
+          resolvedType: "COLOR",
+          variableCollectionId: "collection",
+          valuesByMode: {
+            light: { r: 1, g: 1, b: 1, a: 1 },
+            night: { r: 0.1, g: 0.1, b: 0.1, a: 1 },
+            midnight: { r: 0, g: 0, b: 0, a: 1 }
+          }
+        }
+      },
+      {
+        collection: {
+          defaultModeId: "light",
+          modes: [
+            { modeId: "light", name: "Light" },
+            { modeId: "night", name: "Night" },
+            { modeId: "midnight", name: "Midnight" }
+          ]
+        }
+      }
+    )
+
+    try {
+      await expect(
+        new FigmaAdapter({
+          token: "test-token",
+          fileId: "file123",
+          modeAliases: { night: "dark", midnight: "dark" }
+        }).scan()
+      ).rejects.toThrow("Figma mode mapping collision")
+    } finally {
+      restore()
+    }
+  })
+
+  test("does not treat an empty numeric-unit key as a wildcard for keyless variables", async () => {
+    const restore = mockFigmaVariables(
+      {
+        spacing: {
+          id: "spacing",
+          name: "spacing/md",
+          resolvedType: "FLOAT",
+          variableCollectionId: "collection",
+          valuesByMode: { default: 16 }
+        }
+      },
+      { collection: { defaultModeId: "default" } }
+    )
+
+    try {
+      const { tokens } = await new FigmaAdapter({
+        token: "test-token",
+        fileId: "file123",
+        numericUnits: { "": "px" }
+      }).scan()
+      expect(tokens.spacing["spacing-md"]?.value).toBe("16")
+    } finally {
+      restore()
+    }
+  })
 })

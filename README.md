@@ -201,7 +201,13 @@ module.exports = {
     },
     // figma: {
     //   token: process.env.FIGMA_ACCESS_TOKEN,
-    //   fileId: "your-figma-file-id"
+    //   fileId: "your-figma-file-id",
+    //   // Explicit Figma mappings, keyed by publish-stable variable keys and mode IDs.
+    //   // No units or semantic aliases are inferred from token or mode names.
+    //   // Keys and mapped names must be non-empty; aliases must not collide.
+    //   numericUnits: { "<variable-key>": "px" },
+    //   tokenAliases: { "<variable-key>": "spacing/page-gutter" },
+    //   modeAliases: { "<mode-id>": "dark" },
     //   // optional: false, // fail the build when this source can't be scanned
     // },
     // storybook: {
