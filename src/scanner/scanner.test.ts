@@ -120,6 +120,14 @@ describe("CSS selector scope (global vs component-internal)", () => {
 })
 
 describe("token redefinition capture", () => {
+  test("does not treat equivalent spelling as a same-source redefinition", async () => {
+    writeFixture("a.css", `:root { --space-sm: 0; }`)
+    writeFixture("b.css", `:root { --space-sm: 0px; }`)
+    const { redefinitions, tokens } = await new CodebaseScanner(source()).scan()
+    expect(redefinitions).toEqual([])
+    expect(tokens.spacing["space-sm"]?.value).toBe("0")
+  })
+
   test("same name defined twice with different values → first wins + a redefinition record", async () => {
     writeFixture(
       "tokens.css",

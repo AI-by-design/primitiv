@@ -3,6 +3,7 @@ import * as path from "node:path"
 import { parse } from "@babel/parser"
 import type * as t from "@babel/types"
 import { glob } from "glob"
+import { valuesEquivalent } from "../normalize/value"
 import type {
   CodebaseSource,
   ComponentKind,
@@ -247,7 +248,7 @@ export class CodebaseScanner {
       return
     }
 
-    if (existing.value === value || conditional) return
+    if (valuesEquivalent(existing.value, value, category) || conditional) return
 
     const redef = capture.redefs.get(key)
     if (redef) {

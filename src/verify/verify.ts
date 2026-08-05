@@ -2,6 +2,7 @@ import * as fs from "node:fs"
 import * as path from "node:path"
 import { glob } from "glob"
 import { buildContract, loadConfig } from "../index"
+import { valuesEquivalent } from "../normalize/value"
 import type { Conflict, PrimitivConfig, PrimitivContract, Violation } from "../types"
 import { primitivContractSchema, summarizeValidationIssues } from "../types"
 
@@ -294,7 +295,12 @@ function diffContracts(committed: PrimitivContract, fresh: PrimitivContract, fai
 
   const allCategories = new Set([...Object.keys(committed.tokens), ...Object.keys(fresh.tokens)])
   for (const category of allCategories) {
-    type DiffToken = { value: string; source?: { adapter?: string }; modes?: Record<string, string> }
+    type DiffToken = {
+      value: string
+      source?: { adapter?: string }
+      modes?: Record<string, string>
+      modeSources?: Record<string, { adapter?: string }>
+    }
     const committedTokens = (committed.tokens as Record<string, Record<string, DiffToken>>)[category] || {}
     const freshTokens = (fresh.tokens as Record<string, Record<string, DiffToken>>)[category] || {}
     const allNames = new Set([...Object.keys(committedTokens), ...Object.keys(freshTokens)])
@@ -306,7 +312,7 @@ function diffContracts(committed: PrimitivContract, fresh: PrimitivContract, fai
       } else if (!f) {
         if (!failed.has(c.source?.adapter ?? "")) changes.push(`token removed: ${category}.${name}`)
       } else {
-        if (c.value !== f.value) {
+        if (!valuesEquivalent(c.value, f.value, category)) {
           changes.push(`token value changed: ${category}.${name} (${c.value} → ${f.value})`)
         }
         // Theme-mode drift is real drift even when the default value is unchanged.
@@ -316,8 +322,12 @@ function diffContracts(committed: PrimitivContract, fresh: PrimitivContract, fai
           const cv = cModes[mode]
           const fv = fModes[mode]
           if (cv === undefined) changes.push(`token mode added: ${category}.${name} (${mode}: ${fv})`)
-          else if (fv === undefined) changes.push(`token mode removed: ${category}.${name} (${mode}: ${cv})`)
-          else if (cv !== fv) changes.push(`token mode changed: ${category}.${name} (${mode}: ${cv} → ${fv})`)
+          else if (fv === undefined) {
+            const modeSource = c.modeSources?.[mode]?.adapter ?? c.source?.adapter ?? ""
+            if (!failed.has(modeSource)) changes.push(`token mode removed: ${category}.${name} (${mode}: ${cv})`)
+          } else if (!valuesEquivalent(cv, fv, category)) {
+            changes.push(`token mode changed: ${category}.${name} (${mode}: ${cv} → ${fv})`)
+          }
         }
       }
     }
