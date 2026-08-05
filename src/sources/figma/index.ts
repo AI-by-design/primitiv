@@ -44,6 +44,10 @@ interface FigmaComponentsResponse {
 
 export class FigmaAdapter implements Source {
   private baseUrl = "https://api.figma.com/v1"
+  // Per-request, rather than per scan: variables and components are independent Figma
+  // endpoints and either one may stall. Keep this internal until a demonstrated project
+  // need calls for a configurable policy.
+  private requestTimeoutMs = 30_000
 
   constructor(private config: FigmaSource) {}
 
@@ -53,9 +57,23 @@ export class FigmaAdapter implements Source {
   }
 
   private async fetchFigma<T>(endpoint: string): Promise<T> {
-    const res = await fetch(`${this.baseUrl}${endpoint}`, {
-      headers: { "X-Figma-Token": this.config.token }
-    })
+    const signal = AbortSignal.timeout(this.requestTimeoutMs)
+    let res: Response
+    try {
+      res = await fetch(`${this.baseUrl}${endpoint}`, {
+        headers: { "X-Figma-Token": this.config.token },
+        signal
+      })
+    } catch (err) {
+      if (signal.aborted) {
+        // This error is persisted in sourceStatuses, so keep it actionable but never
+        // include the endpoint, response body, or authentication details.
+        throw new Error(
+          `Figma API request timed out after ${this.requestTimeoutMs}ms. Check your network connection and try again.`
+        )
+      }
+      throw err
+    }
     if (!res.ok) {
       // Status code + statusText only — never the response body. This message ends up in
       // the persisted contract's sourceStatuses, which gets committed and fed to LLMs.
@@ -146,7 +164,10 @@ export class FigmaAdapter implements Source {
       return this.rgbaToHex(raw.r, raw.g, raw.b, raw.a)
     }
     if (type === "FLOAT" && typeof raw === "number") {
-      return `${raw}px`
+      // Figma FLOAT has no CSS-unit semantics. Adding `px` turns valid opacity,
+      // weight, z-index, line-height, and motion values into a different value.
+      // Preserve the raw number until a user-declared unit mapping exists.
+      return String(raw)
     }
     if (type === "STRING" && typeof raw === "string") {
       return raw
