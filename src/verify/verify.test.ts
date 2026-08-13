@@ -44,6 +44,23 @@ function writeContract(root: string, overrides: Partial<PrimitivContract> = {}) 
   fs.writeFileSync(path.join(root, "primitiv.contract.json"), JSON.stringify(contract, null, 2))
 }
 
+function rawContract(root: string): Record<string, unknown> {
+  return {
+    version: "0.1.0",
+    generatedAt: new Date().toISOString(),
+    sources: ["codebase"],
+    sourceRoot: root,
+    configPath: path.join(root, "primitiv.config.js"),
+    tokens: emptyTokenMap(),
+    components: {},
+    conflicts: []
+  }
+}
+
+function writeRawContract(root: string, contract: unknown): void {
+  fs.writeFileSync(path.join(root, "primitiv.contract.json"), JSON.stringify(contract, null, 2))
+}
+
 function pendingConflict(name = "colors.primary"): Conflict {
   return {
     type: "token",
@@ -532,5 +549,216 @@ describe("verify — invalid contract", () => {
     const result = await verify(undefined, { cwd: tempDir })
     expect(result.status).toBe("invalid-contract")
     expect(result.exitCode).toBe(3)
+  })
+
+  test("shared malformed leaves refuse in default and --fast without throwing", async () => {
+    writeConfig(tempDir)
+    const sharedCases: Array<{
+      name: string
+      path: string
+      mutate: (contract: Record<string, unknown>) => void
+    }> = [
+      {
+        name: "timestamp",
+        path: "generatedAt",
+        mutate: (contract) => (contract.generatedAt = "not-a-timestamp")
+      },
+      {
+        name: "conflict entry",
+        path: "conflicts.0",
+        mutate: (contract) => (contract.conflicts = [null])
+      },
+      {
+        name: "pending conflict identity",
+        path: "conflicts.0.type",
+        mutate: (contract) => (contract.conflicts = [{ resolution: "pending", name: "colors.primary" }])
+      },
+      {
+        name: "pending conflict remediation",
+        path: "conflicts.0.suggestedFix",
+        mutate: (contract) =>
+          (contract.conflicts = [
+            { resolution: "pending", type: "token", name: "colors.primary", suggestedFix: ["rebuild"] }
+          ])
+      },
+      {
+        name: "component name index",
+        path: "componentNameIndex.Button",
+        mutate: (contract) => (contract.componentNameIndex = { Button: "components/Button" })
+      }
+    ]
+
+    for (const testCase of sharedCases) {
+      for (const fast of [false, true]) {
+        const contract = rawContract(tempDir)
+        testCase.mutate(contract)
+        writeRawContract(tempDir, contract)
+
+        const result = await verify(undefined, { cwd: tempDir, fast, strict: true, json: true })
+
+        expect(result.status, `${testCase.name} (${fast ? "fast" : "default"})`).toBe("invalid-contract")
+        expect(result.exitCode).toBe(3)
+        expect(result.messages.join("\n")).toContain(testCase.path)
+        expect(result.messages.join("\n")).toContain("primitiv build")
+      }
+    }
+  })
+
+  test("default verification refuses malformed structural-comparison leaves", async () => {
+    writeConfig(tempDir)
+    const defaultCases: Array<{
+      path: string
+      mutate: (contract: Record<string, unknown>) => void
+    }> = [
+      {
+        path: "tokens.custom",
+        mutate: (contract) => (contract.tokens = { custom: null })
+      },
+      {
+        path: "tokens.custom.brand",
+        mutate: (contract) => (contract.tokens = { custom: { brand: null } })
+      },
+      {
+        path: "tokens.custom.brand.value",
+        mutate: (contract) => (contract.tokens = { custom: { brand: { value: 42, source: { adapter: "codebase" } } } })
+      },
+      {
+        path: "tokens.custom.brand.modes",
+        mutate: (contract) =>
+          (contract.tokens = {
+            custom: { brand: { value: "#fff", source: { adapter: "codebase" }, modes: "dark" } }
+          })
+      },
+      {
+        path: "tokens.custom.brand.source",
+        mutate: (contract) => (contract.tokens = { custom: { brand: { value: "#fff", source: "codebase" } } })
+      },
+      {
+        path: "components.Button.source",
+        mutate: (contract) => (contract.components = { Button: { name: "Button", source: null } })
+      }
+    ]
+
+    for (const testCase of defaultCases) {
+      const contract = rawContract(tempDir)
+      testCase.mutate(contract)
+      writeRawContract(tempDir, contract)
+
+      const result = await verify(undefined, { cwd: tempDir })
+
+      expect(result.status).toBe("invalid-contract")
+      expect(result.exitCode).toBe(3)
+      expect(result.messages.join("\n")).toContain(testCase.path)
+    }
+  })
+
+  test("--fast does not impose default-only deep token/component validation", async () => {
+    writeConfig(tempDir)
+    const contract = rawContract(tempDir)
+    contract.tokens = { custom: { brand: null } }
+    contract.components = { Button: null }
+    writeRawContract(tempDir, contract)
+
+    const result = await verify(undefined, { cwd: tempDir, fast: true })
+
+    expect(result.status).toBe("clean")
+    expect(result.exitCode).toBe(0)
+  })
+
+  test("--fast refuses malformed committed scan health and violations", async () => {
+    writeConfig(tempDir)
+    const fastCases: Array<{
+      path: string
+      mutate: (contract: Record<string, unknown>) => void
+    }> = [
+      {
+        path: "sourceStatuses.codebase.status",
+        mutate: (contract) => (contract.sourceStatuses = { codebase: { status: "partial" } })
+      },
+      {
+        path: "sourceStatuses.codebase.error",
+        mutate: (contract) => (contract.sourceStatuses = { codebase: { status: "failed", error: ["down"] } })
+      },
+      {
+        path: "violations.0.context",
+        mutate: (contract) =>
+          (contract.violations = [
+            {
+              type: "token-misuse",
+              category: "colors",
+              found: "#fff",
+              context: 42,
+              source: { file: "Button.tsx", line: 1, column: 1 }
+            }
+          ])
+      },
+      {
+        path: "violations.0.suggestion.token",
+        mutate: (contract) =>
+          (contract.violations = [
+            {
+              type: "token-misuse",
+              category: "colors",
+              found: "#fff",
+              context: "bg-[#fff]",
+              source: { file: "Button.tsx", line: 1, column: 1 },
+              suggestion: { token: null, category: "colors", value: "#fff" }
+            }
+          ])
+      }
+    ]
+
+    for (const testCase of fastCases) {
+      const contract = rawContract(tempDir)
+      testCase.mutate(contract)
+      writeRawContract(tempDir, contract)
+
+      const result = await verify(undefined, { cwd: tempDir, fast: true })
+
+      expect(result.status).toBe("invalid-contract")
+      expect(result.exitCode).toBe(3)
+      expect(result.messages.join("\n")).toContain(testCase.path)
+    }
+  })
+
+  test("default verification ignores malformed fast-only fields because it rebuilds them", async () => {
+    writeConfig(tempDir)
+    const contract = rawContract(tempDir)
+    contract.sourceStatuses = { codebase: { status: "partial" } }
+    contract.violations = [{ context: 42 }]
+    writeRawContract(tempDir, contract)
+
+    const result = await verify(undefined, { cwd: tempDir })
+
+    expect(result.status).toBe("clean")
+    expect(result.exitCode).toBe(0)
+    expect(result.violations.reported).toEqual([])
+  })
+
+  test("default verification keeps token provenance optional but validates it when present", async () => {
+    writeConfig(tempDir)
+    const withoutSource = rawContract(tempDir)
+    withoutSource.tokens = { custom: { brand: { value: "#fff" } } }
+    writeRawContract(tempDir, withoutSource)
+    expect((await verify(undefined, { cwd: tempDir })).status).not.toBe("invalid-contract")
+
+    const malformedSource = rawContract(tempDir)
+    malformedSource.tokens = { custom: { brand: { value: "#fff", source: { adapter: "future" } } } }
+    writeRawContract(tempDir, malformedSource)
+    const result = await verify(undefined, { cwd: tempDir })
+    expect(result.status).toBe("invalid-contract")
+    expect(result.messages.join("\n")).toContain("tokens.custom.brand.source.adapter")
+  })
+
+  test("non-pending conflict identity fields stay opaque because verify never renders them", async () => {
+    writeConfig(tempDir)
+    const contract = rawContract(tempDir)
+    contract.conflicts = [{ resolution: "manual", type: 42, name: null, suggestedFix: ["unused"] }]
+    writeRawContract(tempDir, contract)
+
+    const result = await verify(undefined, { cwd: tempDir, fast: true })
+
+    expect(result.status).toBe("clean")
+    expect(result.conflicts).toEqual({ total: 1, pending: 0 })
   })
 })
