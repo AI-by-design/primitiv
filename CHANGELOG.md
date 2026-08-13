@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.8.1](https://github.com/AI-by-design/primitiv/compare/v2.8.0...v2.8.1) (2026-08-13)
+
+
+### Bug Fixes
+
+* harden verify contract boundary ([#106](https://github.com/AI-by-design/primitiv/issues/106)) ([b4abbd9](https://github.com/AI-by-design/primitiv/commit/b4abbd993a5b878cb26b1f29bc8f2a3b5ca658e8))
+
 ## [2.8.0](https://github.com/AI-by-design/primitiv/compare/v2.7.0...v2.8.0) (2026-08-05)
 
 
