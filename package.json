@@ -10,7 +10,8 @@
     "dist/",
     "skills/",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "scripts": {
     "build": "tsc",
