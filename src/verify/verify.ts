@@ -5,6 +5,7 @@ import { buildContract, loadConfig } from "../index"
 import { valuesEquivalent } from "../normalize/value"
 import type { Conflict, PrimitivConfig, PrimitivContract, Violation } from "../types"
 import { primitivContractSchema, summarizeValidationIssues } from "../types"
+import { verifyDefaultContractSchema, verifyFastContractSchema, verifySharedContractSchema } from "./contract-schema"
 
 export interface VerifyOptions {
   strict?: boolean
@@ -108,7 +109,17 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
   if (!validatedContract.success) {
     return invalidContract(contractPath, summarizeValidationIssues(validatedContract.error))
   }
-  // Validated at the boundary (rule 12) — trust the shape from here on.
+  const sharedContract = verifySharedContractSchema.safeParse(parsedContract)
+  if (!sharedContract.success) {
+    return invalidContract(contractPath, summarizeValidationIssues(sharedContract.error))
+  }
+  const modeContract = (options.fast ? verifyFastContractSchema : verifyDefaultContractSchema).safeParse(parsedContract)
+  if (!modeContract.success) {
+    return invalidContract(contractPath, summarizeValidationIssues(modeContract.error))
+  }
+  // The public envelope plus shared and selected-mode proofs cover every committed
+  // leaf this execution dereferences. Keep the original loose object so unrelated
+  // and future artifact fields are not stripped or reconstructed.
   const contract = parsedContract as PrimitivContract
   const generatedAt = new Date(contract.generatedAt)
   const ageHours = (Date.now() - generatedAt.getTime()) / (1000 * 60 * 60)

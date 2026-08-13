@@ -201,6 +201,19 @@ describe("package root — public type surface", () => {
     }
     expect(primitivContractSchema.safeParse(contract).success).toBe(true)
   })
+
+  test("primitivContractSchema remains deliberately shallow for external consumers", () => {
+    const opaqueNestedValues = {
+      version: "0.3.0",
+      generatedAt: new Date().toISOString(),
+      sources: ["codebase"],
+      tokens: { custom: { malformedButOpaqueHere: null } },
+      components: { malformedButOpaqueHere: null },
+      conflicts: [null]
+    }
+
+    expect(primitivContractSchema.safeParse(opaqueNestedValues).success).toBe(true)
+  })
 })
 
 describe("buildContract — source scan statuses", () => {
