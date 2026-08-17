@@ -10,6 +10,7 @@ import { StorybookAdapter } from "./sources/storybook"
 import type { PrimitivConfig, PrimitivContract, SourceStatus, TokenMap } from "./types"
 import { primitivConfigSchema, summarizeValidationIssues } from "./types"
 
+export { valuesEquivalent } from "./normalize/value"
 // Public type surface for external consumers of the package (rule 2: every
 // export is a maintained contract). Curated, not `export *` — config internals
 // (Source, FigmaSource, …) stay private until a consumer needs them.
