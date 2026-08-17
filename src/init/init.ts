@@ -319,17 +319,35 @@ ${AGENT_BLOCK_END_MARKER}
 `
 }
 
-export function writeAgentInstructions(root: string, runner: Runner = detectRunner(root)): void {
-  // Write to every existing agent-instruction file. Claude Code reads CLAUDE.md;
-  // Codex/Cursor/others read AGENTS.md. If both exist we need both, otherwise
-  // one tool sees the Primitiv block and the other doesn't. If neither exists,
-  // create AGENTS.md as the cross-tool default.
-  const candidates = ["AGENTS.md", "CLAUDE.md"]
-  const existing = candidates.filter((c) => fs.existsSync(path.join(root, c)))
-  const targets = existing.length > 0 ? existing : ["AGENTS.md"]
+function buildAgentReference(): string {
+  return `
+${AGENT_BLOCK_MARKER}
+Primitiv design-system instructions are maintained in @AGENTS.md.
+${AGENT_BLOCK_END_MARKER}
+`
+}
 
-  const block = buildAgentBlock(runner)
-  for (const filename of targets) {
+export function writeAgentInstructions(root: string, runner: Runner = detectRunner(root)): void {
+  // Prefer AGENTS.md as the shared source when it exists. Claude Code can import
+  // that file from CLAUDE.md, avoiding a second copy of the full instructions.
+  // A project with only CLAUDE.md keeps the full block there, and a project with
+  // neither file gets AGENTS.md as the cross-tool default.
+  const hasAgents = fs.existsSync(path.join(root, "AGENTS.md"))
+  const hasClaude = fs.existsSync(path.join(root, "CLAUDE.md"))
+  const targets = hasAgents
+    ? [
+        { filename: "AGENTS.md", block: buildAgentBlock(runner), label: "Primitiv block" },
+        ...(hasClaude ? [{ filename: "CLAUDE.md", block: buildAgentReference(), label: "Primitiv reference" }] : [])
+      ]
+    : [
+        {
+          filename: hasClaude ? "CLAUDE.md" : "AGENTS.md",
+          block: buildAgentBlock(runner),
+          label: "Primitiv block"
+        }
+      ]
+
+  for (const { filename, block, label } of targets) {
     const p = path.join(root, filename)
     const content = fs.existsSync(p) ? fs.readFileSync(p, "utf-8") : ""
     const hadBlock = content.includes(AGENT_BLOCK_MARKER)
@@ -337,7 +355,7 @@ export function writeAgentInstructions(root: string, runner: Runner = detectRunn
 
     fs.writeFileSync(p, next, "utf-8")
     const action = hadBlock ? "Refreshed" : "Added"
-    console.log(`✅ ${action} Primitiv block in ${filename}`)
+    console.log(`✅ ${action} ${label} in ${filename}`)
   }
 }
 
@@ -533,7 +551,7 @@ Mode: SETUP. One-time install for Primitiv in this project. Idempotent — safe 
 \`primitiv init\` writes or refreshes:
 - **Project config + contract** — \`primitiv.config.js\`, \`primitiv.contract.json\`
 - **Claude Code wiring** — \`/build-component\` skill at \`.claude/commands/build-component.md\`
-- **Agent instructions** — Primitiv block in \`AGENTS.md\` or \`CLAUDE.md\`
+- **Agent instructions** — Primitiv block in \`AGENTS.md\` or \`CLAUDE.md\`; when both exist, \`CLAUDE.md\` references \`AGENTS.md\`
 
 Also adds an entry to \`.mcp.json\` or \`.cursor/mcp.json\`. Takes ~30 seconds.
 

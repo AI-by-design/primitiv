@@ -189,7 +189,7 @@ export class PrimitivMCPServer {
         },
         {
           group: "Agent instructions",
-          files: ["AGENTS.md or CLAUDE.md (appends a Primitiv block)"]
+          files: ["AGENTS.md or CLAUDE.md (adds Primitiv instructions; CLAUDE.md references AGENTS.md when both exist)"]
         }
       ],
       willModify: ["MCP config (.mcp.json or .cursor/mcp.json)"],

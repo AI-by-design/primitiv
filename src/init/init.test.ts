@@ -173,6 +173,8 @@ describe("writeAgentInstructions target selection", () => {
 
     const claude = fs.readFileSync(path.join(tempDir, "CLAUDE.md"), "utf-8")
     expect(claude).toContain("<!-- primitiv -->")
+    expect(claude).toContain("## Primitiv — Design System")
+    expect(claude).not.toContain("@AGENTS.md")
     expect(claude).toContain("# Project notes")
     expect(fs.existsSync(path.join(tempDir, "AGENTS.md"))).toBe(false)
   })
@@ -183,11 +185,12 @@ describe("writeAgentInstructions target selection", () => {
 
     const agents = fs.readFileSync(path.join(tempDir, "AGENTS.md"), "utf-8")
     expect(agents).toContain("<!-- primitiv -->")
+    expect(agents).toContain("## Primitiv — Design System")
     expect(agents).toContain("# Project notes")
     expect(fs.existsSync(path.join(tempDir, "CLAUDE.md"))).toBe(false)
   })
 
-  test("writes to BOTH when AGENTS.md and CLAUDE.md both exist", () => {
+  test("writes to AGENTS.md and references it from CLAUDE.md when both exist", () => {
     fs.writeFileSync(path.join(tempDir, "AGENTS.md"), "# Agents notes\n")
     fs.writeFileSync(path.join(tempDir, "CLAUDE.md"), "# Claude notes\n")
     writeAgentInstructions(tempDir)
@@ -195,9 +198,28 @@ describe("writeAgentInstructions target selection", () => {
     const agents = fs.readFileSync(path.join(tempDir, "AGENTS.md"), "utf-8")
     const claude = fs.readFileSync(path.join(tempDir, "CLAUDE.md"), "utf-8")
     expect(agents).toContain("<!-- primitiv -->")
+    expect(agents).toContain("## Primitiv — Design System")
     expect(claude).toContain("<!-- primitiv -->")
+    expect(claude).toContain("@AGENTS.md")
+    expect(claude).not.toContain("## Primitiv — Design System")
+    expect(claude).not.toContain("get_design_context")
     expect(agents).toContain("# Agents notes")
     expect(claude).toContain("# Claude notes")
+  })
+
+  test("replaces a legacy full CLAUDE.md block with the AGENTS.md reference", () => {
+    fs.writeFileSync(path.join(tempDir, "CLAUDE.md"), "# Claude notes\n")
+    writeAgentInstructions(tempDir)
+    expect(fs.readFileSync(path.join(tempDir, "CLAUDE.md"), "utf-8")).toContain("get_design_context")
+
+    fs.writeFileSync(path.join(tempDir, "AGENTS.md"), "# Agents notes\n")
+    writeAgentInstructions(tempDir)
+
+    const claude = fs.readFileSync(path.join(tempDir, "CLAUDE.md"), "utf-8")
+    expect(claude).toContain("# Claude notes")
+    expect(claude).toContain("@AGENTS.md")
+    expect(claude).not.toContain("get_design_context")
+    expect((claude.match(/<!-- primitiv -->/g) || []).length).toBe(1)
   })
 
   test("creates AGENTS.md when neither file exists", () => {
