@@ -3,7 +3,15 @@ import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import type { PrimitivContract, Token } from "./index"
-import { build, buildContract, emptyTokenMap, loadConfig, primitivContractSchema, TOKEN_CATEGORIES } from "./index"
+import {
+  build,
+  buildContract,
+  emptyTokenMap,
+  loadConfig,
+  primitivContractSchema,
+  TOKEN_CATEGORIES,
+  valuesEquivalent
+} from "./index"
 import { verify } from "./verify/verify"
 
 let tempDir: string
@@ -213,6 +221,11 @@ describe("package root — public type surface", () => {
     }
 
     expect(primitivContractSchema.safeParse(opaqueNestedValues).success).toBe(true)
+  })
+
+  test("valuesEquivalent is importable from the root with its conservative comparison behavior", () => {
+    expect(valuesEquivalent("#fff", "#ffffff", "colors")).toBe(true)
+    expect(valuesEquivalent("#fff", "#eeeeee", "colors")).toBe(false)
   })
 })
 
