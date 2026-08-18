@@ -58,7 +58,7 @@ bun add @ai-by-design/primitiv
 
 | Command | Description |
 |---------|-------------|
-| `primitiv init [dir]` | Detect your project (framework, TypeScript, Tailwind, Figma, Storybook, package manager) and generate `primitiv.config.js`. Also writes a project-scoped MCP config, refreshes a Primitiv block in `AGENTS.md` and `CLAUDE.md`, installs a `verify --strict` GitHub Actions workflow, and drops a `/build-component` skill for Claude Code. |
+| `primitiv init [dir]` | Detect your project (framework, TypeScript, Tailwind, Figma, Storybook, package manager) and generate `primitiv.config.js`. Also writes a project-scoped MCP config, refreshes Primitiv instructions in `AGENTS.md` or `CLAUDE.md` (`CLAUDE.md` references `AGENTS.md` when both exist), installs a `verify --strict` GitHub Actions workflow, and drops a `/build-component` skill for Claude Code. |
 | `primitiv build [config]` | Scan sources, resolve conflicts, lint for token misuse, write the contract. With `governance.onConflict: "error"`, exits `2` when pending conflicts remain (the contract is still written). |
 | `primitiv serve [config]` | Start the MCP server against the built contract. Hot-reloads when the contract file changes. |
 | `primitiv verify [config]` | Re-run `build` and exit non-zero if conflicts are unresolved, token misuse is detected, or the contract is stale. Flags: `--strict`, `--json`, `--fast`. Intended for CI. |
