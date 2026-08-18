@@ -76,7 +76,7 @@ function normalizeHex(value: string): string | undefined {
 function normalizeOpaqueRgb(value: string): string | undefined {
   const match = value
     .trim()
-    .match(/^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*([+-]?(?:\d+\.?\d*|\.\d+)))?\s*\)$/i)
+    .match(/^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+)))?\s*\)$/i)
   if (!match) return undefined
 
   const channels = match.slice(1, 4).map(Number)
@@ -90,7 +90,7 @@ function normalizeOpaqueRgb(value: string): string | undefined {
 }
 
 function normalizeNumeric(value: string, category: string): string | undefined {
-  const match = value.trim().match(/^([+-]?(?:\d+\.?\d*|\.\d+))([a-z]+|%)?$/i)
+  const match = value.trim().match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+))([a-z]+|%)?$/i)
   if (!match) return undefined
 
   const number = canonicalDecimal(match[1])
@@ -113,7 +113,10 @@ function canonicalDecimal(value: string): string | undefined {
 
   const sign = match[1] === "+" ? "" : match[1]
   const whole = (match[2] || "0").replace(/^0+(?=\d)/, "")
-  const fraction = (match[3] ?? "").replace(/0+$/, "")
+  const rawFraction = match[3] ?? ""
+  let fractionEnd = rawFraction.length
+  while (fractionEnd > 0 && rawFraction.charCodeAt(fractionEnd - 1) === 48) fractionEnd--
+  const fraction = rawFraction.slice(0, fractionEnd)
   return fraction ? `${sign}${whole}.${fraction}` : `${sign}${whole}`
 }
 
