@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.9.0](https://github.com/AI-by-design/primitiv/compare/v2.8.1...v2.9.0) (2026-08-18)
+
+
+### Features
+
+* **api:** export token value equivalence ([#110](https://github.com/AI-by-design/primitiv/issues/110)) ([71bb178](https://github.com/AI-by-design/primitiv/commit/71bb178fac9df76dc158f0c217d8d3ff64779ea0))
+
 ## [2.8.1](https://github.com/AI-by-design/primitiv/compare/v2.8.0...v2.8.1) (2026-08-13)
 
 
