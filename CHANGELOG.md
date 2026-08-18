@@ -7,6 +7,11 @@
 
 * **api:** export token value equivalence ([#110](https://github.com/AI-by-design/primitiv/issues/110)) ([71bb178](https://github.com/AI-by-design/primitiv/commit/71bb178fac9df76dc158f0c217d8d3ff64779ea0))
 
+
+### Bug Fixes
+
+* remove polynomial regex backtracking ([#113](https://github.com/AI-by-design/primitiv/issues/113)) ([b498a61](https://github.com/AI-by-design/primitiv/commit/b498a6142b899bcf045811d83b367a737232c0a5))
+
 ## [2.8.1](https://github.com/AI-by-design/primitiv/compare/v2.8.0...v2.8.1) (2026-08-13)
 
 
