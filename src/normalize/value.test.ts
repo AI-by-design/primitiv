@@ -21,6 +21,18 @@ describe("valuesEquivalent", () => {
     expect(valuesEquivalent("1.0px", "1px", "sizes")).toBe(true)
   })
 
+  test("handles long adversarial numeric inputs without changing their meaning", () => {
+    const digits = "9".repeat(8_192)
+    const zeros = "0".repeat(8_192)
+    const malformedRgb = `rgba(1,1,1,${digits}!)`
+    const malformedNumeric = `${digits}!`
+    const validFraction = `1.${zeros}1`
+
+    expect(normalizeForComparison(malformedRgb, "colors")).toBe(`raw:${malformedRgb}`)
+    expect(normalizeForComparison(malformedNumeric, "typography")).toBe(`raw:${malformedNumeric}`)
+    expect(normalizeForComparison(validFraction, "typography")).toBe(`numeric:${validFraction}`)
+  })
+
   test("does not manufacture equivalence for context-dependent or unsupported values", () => {
     expect(valuesEquivalent("1rem", "16px", "spacing")).toBe(false)
     expect(valuesEquivalent("0%", "0px", "spacing")).toBe(false)
