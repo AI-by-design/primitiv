@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
-import type { PrimitivContract, Token } from "./index"
+import type { Component, PrimitivContract, Token } from "./index"
 import {
   build,
   buildContract,
@@ -221,6 +221,20 @@ describe("package root — public type surface", () => {
     }
 
     expect(primitivContractSchema.safeParse(opaqueNestedValues).success).toBe(true)
+  })
+
+  test("Component exposes optional static relationship facts from the package root", () => {
+    const uses: NonNullable<Component["uses"]> = { "components/Icon": 2 }
+    const usage: NonNullable<Component["usage"]> = { sites: 4 }
+    const component: Component = {
+      name: "Button",
+      source: { adapter: "codebase", file: "components/Button.tsx" },
+      uses,
+      usage
+    }
+
+    expect(component.uses?.["components/Icon"]).toBe(2)
+    expect(component.usage?.sites).toBe(4)
   })
 
   test("valuesEquivalent is importable from the root with its conservative comparison behavior", () => {

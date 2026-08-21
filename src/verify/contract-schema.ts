@@ -1,5 +1,6 @@
 import { z } from "zod"
 
+// Internal schema dependencies precede the exported schemas they initialize eagerly at module load.
 const sourceAdapterSchema = z.enum(["codebase", "figma", "storybook"])
 
 const validTimestampSchema = z.string().refine((value) => Number.isFinite(new Date(value).getTime()), {
@@ -57,13 +58,17 @@ const verifyTokenSchema = z.looseObject({
   modeSources: z.record(z.string(), optionalTokenProvenanceSchema).optional()
 })
 
+const positiveRelationshipCountSchema = z.number().int().positive()
+
 const verifyComponentSchema = z.looseObject({
   name: z.string(),
   displayName: z.string().optional(),
   source: z.looseObject({
     adapter: sourceAdapterSchema,
     file: z.string().optional()
-  })
+  }),
+  uses: z.record(z.string(), positiveRelationshipCountSchema).optional(),
+  usage: z.looseObject({ sites: positiveRelationshipCountSchema }).optional()
 })
 
 // Reached only by default verification's structural comparison with a fresh build.
