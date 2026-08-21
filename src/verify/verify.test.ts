@@ -17,10 +17,10 @@ afterEach(() => {
   fs.rmSync(tempDir, { recursive: true, force: true })
 })
 
-function writeConfig(root: string) {
+function writeConfig(root: string, patterns: string[] = ["**/*.css"]) {
   const body = `module.exports = {
   sources: {
-    codebase: { root: ".", patterns: ["**/*.css"], ignore: ["node_modules/**"] }
+    codebase: { root: ".", patterns: ${JSON.stringify(patterns)}, ignore: ["node_modules/**"] }
   },
   governance: { sourceOfTruth: "codebase", onConflict: "warn" },
   output: { path: "./primitiv.contract.json" }
@@ -650,6 +650,126 @@ describe("verify — invalid contract", () => {
       expect(result.exitCode).toBe(3)
       expect(result.messages.join("\n")).toContain(testCase.path)
     }
+  })
+
+  test("default verification accepts valid static relationship counts", async () => {
+    writeConfig(tempDir)
+    const contract = rawContract(tempDir)
+    contract.components = {
+      "ui/Button": {
+        name: "Button",
+        source: { adapter: "codebase", file: "ui/Button.tsx" },
+        uses: { "ui/Icon": 2 },
+        usage: { sites: 1 }
+      }
+    }
+    writeRawContract(tempDir, contract)
+
+    const result = await verify(undefined, { cwd: tempDir })
+
+    expect(result.status).not.toBe("invalid-contract")
+    expect(result.exitCode).not.toBe(3)
+  })
+
+  test("default verification accepts legacy components without relationship facts", async () => {
+    fs.mkdirSync(path.join(tempDir, "ui"))
+    fs.writeFileSync(path.join(tempDir, "ui/Button.tsx"), `export function Button() { return <button /> }`)
+    writeConfig(tempDir, ["**/*.tsx"])
+    const contract = await buildContract(undefined, { cwd: tempDir, silent: true })
+    expect(contract.components["ui/Button"]?.uses).toBeUndefined()
+    expect(contract.components["ui/Button"]?.usage).toBeUndefined()
+    writeRawContract(tempDir, contract)
+
+    const result = await verify(undefined, { cwd: tempDir })
+
+    expect(result.status).toBe("clean")
+    expect(result.exitCode).toBe(0)
+    expect(result.drift.isStale).toBe(false)
+    expect(result.drift.changes).toEqual([])
+  })
+
+  test("default verification accepts an empty uses map for compatibility", async () => {
+    writeConfig(tempDir)
+    const contract = rawContract(tempDir)
+    contract.components = {
+      "ui/Button": {
+        name: "Button",
+        source: { adapter: "codebase", file: "ui/Button.tsx" },
+        uses: {}
+      }
+    }
+    writeRawContract(tempDir, contract)
+
+    const result = await verify(undefined, { cwd: tempDir })
+
+    expect(result.status).not.toBe("invalid-contract")
+    expect(result.exitCode).not.toBe(3)
+  })
+
+  test("default verification refuses malformed static relationship counts", async () => {
+    writeConfig(tempDir)
+    const invalidCounts: Array<{ name: string; value: unknown }> = [
+      { name: "zero", value: 0 },
+      { name: "negative", value: -1 },
+      { name: "fractional", value: 1.5 },
+      { name: "numeric string", value: "2" },
+      { name: "null", value: null },
+      { name: "object", value: {} },
+      { name: "array", value: [] }
+    ]
+    const relationshipLeaves: Array<{
+      path: string
+      fields: (value: unknown) => Record<string, unknown>
+    }> = [
+      {
+        path: "components.ui/Button.uses.ui/Icon",
+        fields: (value) => ({ uses: { "ui/Icon": value } })
+      },
+      {
+        path: "components.ui/Button.usage.sites",
+        fields: (value) => ({ usage: { sites: value } })
+      }
+    ]
+
+    for (const invalidCount of invalidCounts) {
+      for (const leaf of relationshipLeaves) {
+        const contract = rawContract(tempDir)
+        contract.components = {
+          "ui/Button": {
+            name: "Button",
+            source: { adapter: "codebase", file: "ui/Button.tsx" },
+            ...leaf.fields(invalidCount.value)
+          }
+        }
+        writeRawContract(tempDir, contract)
+
+        const result = await verify(undefined, { cwd: tempDir })
+
+        expect(result.status, `${leaf.path} (${invalidCount.name})`).toBe("invalid-contract")
+        expect(result.exitCode).toBe(3)
+        expect(result.messages.join("\n")).toContain(leaf.path)
+        expect(result.messages.join("\n")).toContain("primitiv build")
+      }
+    }
+  })
+
+  test("default verification refuses usage without a site count", async () => {
+    writeConfig(tempDir)
+    const contract = rawContract(tempDir)
+    contract.components = {
+      "ui/Button": {
+        name: "Button",
+        source: { adapter: "codebase", file: "ui/Button.tsx" },
+        usage: {}
+      }
+    }
+    writeRawContract(tempDir, contract)
+
+    const result = await verify(undefined, { cwd: tempDir })
+
+    expect(result.status).toBe("invalid-contract")
+    expect(result.exitCode).toBe(3)
+    expect(result.messages.join("\n")).toContain("components.ui/Button.usage.sites")
   })
 
   test("--fast does not impose default-only deep token/component validation", async () => {

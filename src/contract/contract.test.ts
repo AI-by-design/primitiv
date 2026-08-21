@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test"
-import type { Component, ComponentMap, PrimitivConfig } from "../types"
+import * as fs from "node:fs"
+import * as os from "node:os"
+import * as path from "node:path"
+import type { Component, ComponentMap, PrimitivConfig, PrimitivContract } from "../types"
 import { emptyTokenMap, TOKEN_CATEGORIES } from "../types"
 import { ContractBuilder } from "./contract"
 
@@ -59,6 +62,48 @@ describe("component merge (path-qualified identity)", () => {
     ])
     expect(contract.componentNameIndex?.Item).toEqual(["list/Item", "menu/Item"])
     expect(contract.componentNameIndex?.Card).toEqual(["Card"])
+  })
+
+  test("relationship facts survive construction and serialization without creating a conflict", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "primitiv-contract-relationships-"))
+    const outputPath = path.join(tempDir, "primitiv.contract.json")
+    const builder = new ContractBuilder({ ...config(), output: { path: outputPath } })
+    const button: Component = {
+      ...codebaseComponent("Button", "components/Button.tsx"),
+      uses: {
+        "components/Icon": 2,
+        "components/Spinner": 1
+      },
+      usage: { sites: 3 }
+    }
+
+    try {
+      const contract = builder.build([
+        {
+          name: "codebase",
+          tokens: emptyTokenMap(),
+          components: { "components/Button": button }
+        }
+      ])
+
+      expect(contract.version).toBe("0.3.0")
+      expect(contract.components["components/Button"]?.uses).toEqual({
+        "components/Icon": 2,
+        "components/Spinner": 1
+      })
+      expect(contract.components["components/Button"]?.usage).toEqual({ sites: 3 })
+      expect(contract.conflicts).toHaveLength(0)
+
+      builder.save(contract)
+      const serialized = JSON.parse(fs.readFileSync(outputPath, "utf-8")) as PrimitivContract
+      expect(serialized.components["components/Button"].uses).toEqual({
+        "components/Icon": 2,
+        "components/Spinner": 1
+      })
+      expect(serialized.components["components/Button"].usage).toEqual({ sites: 3 })
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
   })
 
   test("cross-source same-name is a conflict via displayName grouping, both stay in the map", () => {

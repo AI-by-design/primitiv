@@ -221,6 +221,14 @@ export interface Component {
   source: SourceProvenance
   variants?: string[]
   props?: Record<string, PropDefinition>
+  // Qualified target component id → statically resolved local JSX opening-site count.
+  // Static source evidence only, never runtime frequency. Omitted when no edges exist.
+  uses?: Record<string, number>
+  // Statically resolved local JSX sites that target this component. Presence means at
+  // least one site; zero is represented by absence.
+  usage?: {
+    sites: number
+  }
   rationale?: Rationale
   [key: string]: unknown
 }
