@@ -385,6 +385,119 @@ describe("verify — component identity migration (0.2 → 0.3)", () => {
   })
 })
 
+describe("verify — component relationship drift", () => {
+  function writeTsxConfig(root: string) {
+    const body = `module.exports = {
+  sources: {
+    codebase: { root: ".", patterns: ["**/*.tsx"], ignore: ["node_modules/**"] }
+  },
+  governance: { sourceOfTruth: "codebase", onConflict: "warn" },
+  output: { path: "./primitiv.contract.json" }
+}
+`
+    fs.writeFileSync(path.join(root, "primitiv.config.js"), body)
+  }
+
+  async function commitCurrentBuild(): Promise<PrimitivContract> {
+    const contract = await buildContract(undefined, { cwd: tempDir, silent: true })
+    fs.writeFileSync(path.join(tempDir, "primitiv.contract.json"), JSON.stringify(contract, null, 2))
+    return contract
+  }
+
+  test("reports added, removed, and count-changed component uses", async () => {
+    writeTsxConfig(tempDir)
+    fs.writeFileSync(path.join(tempDir, "Child.tsx"), `export function Child() { return <span /> }`)
+    fs.writeFileSync(
+      path.join(tempDir, "Parent.tsx"),
+      `import { Child } from "./Child"; export function Parent() { return <Child /> }`
+    )
+    await commitCurrentBuild()
+
+    fs.writeFileSync(
+      path.join(tempDir, "Parent.tsx"),
+      `import { Child } from "./Child"; export function Parent() { return <><Child /><Child /></> }`
+    )
+    let result = await verify(undefined, { cwd: tempDir })
+    expect(result.drift.changes).toContain("component use count changed: Parent → Child (1 → 2)")
+    expect(result.status).toBe("stale")
+
+    fs.writeFileSync(
+      path.join(tempDir, "Parent.tsx"),
+      `import { Child } from "./Child"; export function Parent() { return <span /> }`
+    )
+    result = await verify(undefined, { cwd: tempDir })
+    expect(result.drift.changes).toContain("component use removed: Parent → Child")
+  })
+
+  test("reports an added edge and usage-only changes independently", async () => {
+    writeTsxConfig(tempDir)
+    fs.writeFileSync(path.join(tempDir, "Child.tsx"), `export function Child() { return <span /> }`)
+    fs.writeFileSync(path.join(tempDir, "Parent.tsx"), `export function Parent() { return <span /> }`)
+    await commitCurrentBuild()
+
+    fs.writeFileSync(
+      path.join(tempDir, "Parent.tsx"),
+      `import { Child } from "./Child"; export function Parent() { return <Child /> }`
+    )
+    let result = await verify(undefined, { cwd: tempDir })
+    expect(result.drift.changes).toContain("component use added: Parent → Child (1 site)")
+    expect(result.drift.changes).toContain("component usage changed: Child (0 → 1 sites)")
+
+    await commitCurrentBuild()
+    fs.writeFileSync(
+      path.join(tempDir, "Page.tsx"),
+      `import { Child } from "./Child"; export function Page() { return <Child /> }`
+    )
+    result = await verify(undefined, { cwd: tempDir })
+    expect(result.drift.changes).toContain("component usage changed: Child (1 → 2 sites)")
+    expect(result.drift.changes.some((change) => change.startsWith("component use "))).toBe(false)
+  })
+
+  test("treats absent and empty uses as equivalent and keeps fast mode mtime-only", async () => {
+    writeTsxConfig(tempDir)
+    fs.writeFileSync(path.join(tempDir, "Child.tsx"), `export function Child() { return <span /> }`)
+    fs.writeFileSync(path.join(tempDir, "Parent.tsx"), `export function Parent() { return <span /> }`)
+    const built = await commitCurrentBuild()
+    const committed = JSON.parse(JSON.stringify(built)) as PrimitivContract
+    const parent = committed.components.Parent
+    if (parent) parent.uses = {}
+    fs.writeFileSync(path.join(tempDir, "primitiv.contract.json"), JSON.stringify(committed, null, 2))
+
+    const result = await verify(undefined, { cwd: tempDir })
+    expect(result.status).toBe("clean")
+    expect(result.drift.changes).toEqual([])
+
+    if (parent) parent.uses = { Child: 99 }
+    fs.writeFileSync(path.join(tempDir, "primitiv.contract.json"), JSON.stringify(committed, null, 2))
+    const fast = await verify(undefined, { cwd: tempDir, fast: true })
+    expect(fast.drift.changes).toEqual([])
+  })
+
+  test("does not report relationship drift when both owner and target are re-keyed", async () => {
+    fs.mkdirSync(path.join(tempDir, "ui"))
+    writeTsxConfig(tempDir)
+    fs.writeFileSync(path.join(tempDir, "ui/Child.tsx"), `export function Child() { return <span /> }`)
+    fs.writeFileSync(
+      path.join(tempDir, "ui/Parent.tsx"),
+      `import { Child } from "./Child"; export function Parent() { return <Child /> }`
+    )
+    const fresh = await buildContract(undefined, { cwd: tempDir, silent: true })
+    const committed = JSON.parse(JSON.stringify(fresh)) as PrimitivContract
+    const oldComponents: PrimitivContract["components"] = {
+      Parent: { ...committed.components["ui/Parent"], uses: { Child: 1 } },
+      Child: { ...committed.components["ui/Child"] }
+    }
+    committed.components = oldComponents
+    fs.writeFileSync(path.join(tempDir, "primitiv.contract.json"), JSON.stringify(committed, null, 2))
+
+    const result = await verify(undefined, { cwd: tempDir })
+    expect(result.drift.changes).toContain("component re-keyed: Parent → ui/Parent")
+    expect(result.drift.changes).toContain("component re-keyed: Child → ui/Child")
+    expect(result.drift.changes.some((change) => change.startsWith("component use "))).toBe(false)
+    expect(result.drift.changes.some((change) => change.startsWith("component usage "))).toBe(false)
+  })
+})
+
 describe("verify — failed sources", () => {
   function unreachablePort(): number {
     const s = Bun.serve({ port: 0, fetch: () => new Response("") })
@@ -428,7 +541,9 @@ describe("verify — failed sources", () => {
         "storybook:Button": {
           name: "Button",
           displayName: "Button",
-          source: { adapter: "storybook", file: "./Button.stories.tsx" }
+          source: { adapter: "storybook", file: "./Button.stories.tsx" },
+          uses: { "storybook:Icon": 2 },
+          usage: { sites: 3 }
         }
       },
       componentNameIndex: { Button: ["storybook:Button"] },

@@ -295,6 +295,7 @@ function collectFailedSources(
 // Only the substantive parts of the contract are compared:
 //   - token additions / removals / value changes
 //   - component additions / removals
+//   - component relationship / usage changes
 // generatedAt timestamps and source provenance metadata are intentionally
 // ignored — drift is about the design surface, not when the file was written.
 // Entries whose provenance points at a source that failed during the fresh scan
@@ -344,30 +345,70 @@ function diffContracts(committed: PrimitivContract, fresh: PrimitivContract, fai
     }
   }
 
+  const identity = compareComponentIdentity({ committed, fresh, failedSources: failed })
+  changes.push(...identity.changes)
+  changes.push(
+    ...compareComponentRelationships({
+      committed,
+      fresh,
+      pairs: identity.pairs,
+      rekeys: identity.rekeys,
+      failedSources: failed
+    })
+  )
+
+  return changes
+}
+
+interface ComponentPair {
+  committedId: string
+  freshId: string
+}
+
+interface ComponentIdentityResult {
+  changes: string[]
+  pairs: ComponentPair[]
+  rekeys: Map<string, string>
+}
+
+function compareComponentIdentity(params: {
+  committed: PrimitivContract
+  fresh: PrimitivContract
+  failedSources: Set<string>
+}): ComponentIdentityResult {
+  const { committed, fresh, failedSources } = params
+  const pairs: ComponentPair[] = Object.keys(committed.components)
+    .filter((id) => fresh.components[id])
+    .map((id) => ({ committedId: id, freshId: id }))
+  const changes: string[] = []
+  const rekeys = new Map<string, string>()
   const removed = Object.keys(committed.components).filter(
-    (key) => !fresh.components[key] && !failed.has(committed.components[key].source.adapter)
+    (key) => !fresh.components[key] && !failedSources.has(committed.components[key].source.adapter)
   )
   const added = Object.keys(fresh.components).filter((key) => !committed.components[key])
 
-  // Re-key recognizer: the 0.2 → 0.3 migration renames every component key from bare name
-  // to qualified id in one build. A removed/added pair sharing display name, adapter, and
-  // file is the same component under a new key — reported as a re-key, not remove+add, so
-  // the one-time migration diff reads as what it is instead of a wall of churn.
+  // A removed/added pair sharing display name, adapter, and file is the same component
+  // under the 0.2 → 0.3 qualified-id migration. Keep this matching rule in one place so
+  // relationship comparisons can use the same logical component pair.
   const consumed = new Set<string>()
   for (const oldKey of removed) {
-    const c = committed.components[oldKey]
+    const committedComponent = committed.components[oldKey]
     const matches = added.filter((newKey) => {
       if (consumed.has(newKey)) return false
-      const f = fresh.components[newKey]
+      const freshComponent = fresh.components[newKey]
       return (
-        (f.displayName ?? f.name) === (c.displayName ?? c.name) &&
-        f.source.adapter === c.source.adapter &&
-        (f.source.file ?? "") === (c.source.file ?? "")
+        (freshComponent.displayName ?? freshComponent.name) ===
+          (committedComponent.displayName ?? committedComponent.name) &&
+        freshComponent.source.adapter === committedComponent.source.adapter &&
+        (freshComponent.source.file ?? "") === (committedComponent.source.file ?? "")
       )
     })
     if (matches.length === 1) {
-      consumed.add(matches[0])
-      changes.push(`component re-keyed: ${oldKey} → ${matches[0]}`)
+      const newKey = matches[0]
+      consumed.add(newKey)
+      rekeys.set(oldKey, newKey)
+      pairs.push({ committedId: oldKey, freshId: newKey })
+      changes.push(`component re-keyed: ${oldKey} → ${newKey}`)
     } else {
       changes.push(`component removed: ${oldKey}`)
     }
@@ -376,7 +417,66 @@ function diffContracts(committed: PrimitivContract, fresh: PrimitivContract, fai
     if (!consumed.has(newKey)) changes.push(`component added: ${newKey}`)
   }
 
+  return { changes, pairs, rekeys }
+}
+
+function compareComponentRelationships(params: {
+  committed: PrimitivContract
+  fresh: PrimitivContract
+  pairs: ComponentPair[]
+  rekeys: Map<string, string>
+  failedSources: Set<string>
+}): string[] {
+  const { committed, fresh, pairs, rekeys, failedSources } = params
+  const changes: string[] = []
+  const sortedPairs = [...pairs].sort((a, b) => compareIds(a.freshId, b.freshId))
+  for (const pair of sortedPairs) {
+    const committedComponent = committed.components[pair.committedId]
+    const freshComponent = fresh.components[pair.freshId]
+    if (failedSources.has(committedComponent.source.adapter) || failedSources.has(freshComponent.source.adapter)) {
+      continue
+    }
+
+    const committedUses = canonicalizeUses(committedComponent.uses, rekeys)
+    const freshUses = freshComponent.uses ?? {}
+    const targetIds = [...new Set([...Object.keys(committedUses), ...Object.keys(freshUses)])].sort(compareIds)
+    for (const targetId of targetIds) {
+      const committedCount = committedUses[targetId]
+      const freshCount = freshUses[targetId]
+      if (committedCount === undefined && freshCount !== undefined) {
+        changes.push(
+          `component use added: ${pair.freshId} → ${targetId} (${freshCount} site${freshCount === 1 ? "" : "s"})`
+        )
+      } else if (committedCount !== undefined && freshCount === undefined) {
+        changes.push(`component use removed: ${pair.freshId} → ${targetId}`)
+      } else if (committedCount !== undefined && freshCount !== undefined && committedCount !== freshCount) {
+        changes.push(`component use count changed: ${pair.freshId} → ${targetId} (${committedCount} → ${freshCount})`)
+      }
+    }
+
+    const committedSites = committedComponent.usage?.sites ?? 0
+    const freshSites = freshComponent.usage?.sites ?? 0
+    if (committedSites !== freshSites) {
+      changes.push(`component usage changed: ${pair.freshId} (${committedSites} → ${freshSites} sites)`)
+    }
+  }
   return changes
+}
+
+function canonicalizeUses(
+  uses: Record<string, number> | undefined,
+  rekeys: Map<string, string>
+): Record<string, number> {
+  const canonical: Record<string, number> = {}
+  for (const [targetId, count] of Object.entries(uses ?? {})) {
+    const canonicalId = rekeys.get(targetId) ?? targetId
+    canonical[canonicalId] = (canonical[canonicalId] ?? 0) + count
+  }
+  return canonical
+}
+
+function compareIds(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0
 }
 
 // Legacy drift detection (--fast): compares file mtimes against contract.generatedAt.
