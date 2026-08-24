@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.10.0](https://github.com/AI-by-design/primitiv/compare/v2.9.0...v2.10.0) (2026-08-22)
+
+
+### Features
+
+* add component relationship facts ([#119](https://github.com/AI-by-design/primitiv/issues/119)) ([fe68a7a](https://github.com/AI-by-design/primitiv/commit/fe68a7aa5f196c8886992b32c437921e217e98a0))
+
 ## [2.9.0](https://github.com/AI-by-design/primitiv/compare/v2.8.1...v2.9.0) (2026-08-18)
 
 
