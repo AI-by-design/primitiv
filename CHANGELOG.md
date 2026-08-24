@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.12.0](https://github.com/AI-by-design/primitiv/compare/v2.11.0...v2.12.0) (2026-08-24)
+
+
+### Features
+
+* extract component prop values and defaults ([#125](https://github.com/AI-by-design/primitiv/issues/125)) ([0892b3c](https://github.com/AI-by-design/primitiv/commit/0892b3c3a5017fb640bbe1bb9157e0cdca3ab890))
+
 ## [2.11.0](https://github.com/AI-by-design/primitiv/compare/v2.10.0...v2.11.0) (2026-08-24)
 
 
