@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.11.0](https://github.com/AI-by-design/primitiv/compare/v2.10.0...v2.11.0) (2026-08-24)
+
+
+### Features
+
+* detect component relationship drift ([#123](https://github.com/AI-by-design/primitiv/issues/123)) ([9cf7e32](https://github.com/AI-by-design/primitiv/commit/9cf7e32e5afba4646bbc238344bbc7a7e06ea8dc))
+* expose MCP relationship projections ([#124](https://github.com/AI-by-design/primitiv/issues/124)) ([f8aee90](https://github.com/AI-by-design/primitiv/commit/f8aee90cb2767471bb895a3afa51bf3e0c972e1c))
+
 ## [2.10.0](https://github.com/AI-by-design/primitiv/compare/v2.9.0...v2.10.0) (2026-08-22)
 
 
