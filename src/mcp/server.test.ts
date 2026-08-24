@@ -50,10 +50,20 @@ async function connect(contractPath: string): Promise<Client> {
   return client
 }
 
-async function getComponent(c: Client, args: { name: string; context?: string }) {
+async function getComponent(
+  c: Client,
+  args: { name: string; context?: string; detail?: "usage" | "relationships" | "all" }
+) {
   const result = await c.callTool({ name: "get_component", arguments: args })
   const content = result.content as Array<{ type: string; text: string }>
   return { isError: result.isError === true, text: content[0].text }
+}
+
+async function disconnect(): Promise<void> {
+  await client?.close()
+  await server?.stop()
+  client = null
+  server = null
 }
 
 const twoCards: PrimitivContract["components"] = {
@@ -213,6 +223,192 @@ describe("get_component resolution", () => {
   })
 })
 
+describe("get_component relationship projections", () => {
+  const componentsWithRelationships: PrimitivContract["components"] = {
+    "ui/Button": {
+      name: "Button",
+      displayName: "Button",
+      source: { adapter: "codebase", file: "ui/Button.tsx" },
+      uses: { "ui/Zebra": 1, "ui/Icon": 2 },
+      usage: { sites: 3 }
+    },
+    "forms/Input": {
+      name: "Input",
+      displayName: "Input",
+      source: { adapter: "codebase", file: "forms/Input.tsx" },
+      uses: { "ui/Icon": 1 }
+    },
+    "ui/Icon": {
+      name: "Icon",
+      displayName: "Icon",
+      source: { adapter: "codebase", file: "ui/Icon.tsx" },
+      usage: { sites: 3 }
+    },
+    "ui/Zebra": {
+      name: "Zebra",
+      displayName: "Zebra",
+      source: { adapter: "codebase", file: "ui/Zebra.tsx" },
+      usage: { sites: 1 }
+    }
+  }
+
+  test("no-detail calls preserve the legacy payload and omit relationship facts", async () => {
+    const generatedAt = new Date().toISOString()
+    const baseComponent = {
+      name: "Button",
+      displayName: "Button",
+      source: { adapter: "codebase" as const, file: "ui/Button.tsx" }
+    }
+    let c = await connect(
+      writeContract({
+        generatedAt,
+        components: { "ui/Button": baseComponent },
+        componentNameIndex: { Button: ["ui/Button"] }
+      })
+    )
+    const withoutFacts = await getComponent(c, { name: "Button" })
+    await disconnect()
+
+    c = await connect(
+      writeContract({
+        generatedAt,
+        components: { "ui/Button": { ...baseComponent, uses: { "ui/Icon": 2 }, usage: { sites: 4 } } },
+        componentNameIndex: { Button: ["ui/Button"] }
+      })
+    )
+    const withFacts = await getComponent(c, { name: "Button" })
+
+    expect(withFacts.text).toBe(withoutFacts.text)
+    expect(JSON.parse(withFacts.text).uses).toBeUndefined()
+    expect(JSON.parse(withFacts.text).usage).toBeUndefined()
+  })
+
+  test("usage, relationships, and all expose only the requested deterministic projections", async () => {
+    const c = await connect(
+      writeContract({
+        components: componentsWithRelationships,
+        componentNameIndex: { Button: ["ui/Button"], Icon: ["ui/Icon"], Input: ["forms/Input"], Zebra: ["ui/Zebra"] }
+      })
+    )
+
+    const usage = JSON.parse((await getComponent(c, { name: "ui/Button", detail: "usage" })).text)
+    expect(usage.usage).toEqual({ sites: 3 })
+    expect(usage.relationships).toBeUndefined()
+
+    const relationships = JSON.parse((await getComponent(c, { name: "ui/Button", detail: "relationships" })).text)
+    expect(relationships.usage).toBeUndefined()
+    expect(relationships.relationships).toEqual({ uses: { "ui/Icon": 2, "ui/Zebra": 1 }, usedBy: {} })
+    expect(Object.keys(relationships.relationships.uses)).toEqual(["ui/Icon", "ui/Zebra"])
+
+    const all = JSON.parse((await getComponent(c, { name: "ui/Icon", detail: "all" })).text)
+    expect(all.usage).toEqual({ sites: 3 })
+    expect(all.relationships).toEqual({ uses: {}, usedBy: { "forms/Input": 1, "ui/Button": 2 } })
+    expect(Object.keys(all.relationships.usedBy)).toEqual(["forms/Input", "ui/Button"])
+  })
+
+  test("pre-P0 contracts return zero and empty projections", async () => {
+    const c = await connect(
+      writeContract({
+        version: "0.2.0",
+        components: { Card: { name: "Card", source: { adapter: "codebase", file: "Card.tsx" } } }
+      })
+    )
+
+    const payload = JSON.parse((await getComponent(c, { name: "Card", detail: "all" })).text)
+    expect(payload.usage).toEqual({ sites: 0 })
+    expect(payload.relationships).toEqual({ uses: {}, usedBy: {} })
+  })
+
+  test("ambiguity is resolved before projection and never exposes a candidate graph", async () => {
+    const c = await connect(
+      writeContract({
+        components: {
+          ...twoCards,
+          "marketing/Card": { ...twoCards["marketing/Card"], uses: { "ui/Icon": 1 } }
+        },
+        componentNameIndex: { Card: ["marketing/Card", "product/Card"] }
+      })
+    )
+
+    const payload = JSON.parse((await getComponent(c, { name: "Card", detail: "all" })).text)
+    expect(payload.ambiguous).toBe(true)
+    expect(payload.usage).toBeUndefined()
+    expect(payload.relationships).toBeUndefined()
+  })
+
+  test("scope resolution projects the resolved qualified component", async () => {
+    const c = await connect(
+      writeContract({
+        components: {
+          ...twoCards,
+          "marketing/Card": { ...twoCards["marketing/Card"], uses: { "ui/Icon": 1 } },
+          "ui/Icon": { name: "Icon", source: { adapter: "codebase", file: "ui/Icon.tsx" }, usage: { sites: 1 } }
+        },
+        componentNameIndex: { Card: ["marketing/Card", "product/Card"], Icon: ["ui/Icon"] }
+      })
+    )
+
+    const payload = JSON.parse(
+      (await getComponent(c, { name: "Card", context: "src/marketing/Home.tsx", detail: "relationships" })).text
+    )
+    expect(payload.id).toBe("marketing/Card")
+    expect(payload.resolvedBy).toBe("scope")
+    expect(payload.relationships.uses).toEqual({ "ui/Icon": 1 })
+  })
+
+  test("usedBy is derived without mutating the persisted contract", async () => {
+    const contractPath = writeContract({ components: componentsWithRelationships })
+    const before = fs.readFileSync(contractPath, "utf-8")
+    const c = await connect(contractPath)
+
+    await getComponent(c, { name: "ui/Icon", detail: "relationships" })
+
+    expect(fs.readFileSync(contractPath, "utf-8")).toBe(before)
+    expect(before).not.toContain("usedBy")
+  })
+
+  test("a successful contract reload invalidates the cached reverse index", async () => {
+    const contractPath = writeContract({
+      components: {
+        "ui/Button": { name: "Button", source: { adapter: "codebase" }, uses: { "ui/Icon": 1 } },
+        "ui/Icon": { name: "Icon", source: { adapter: "codebase" }, usage: { sites: 1 } }
+      }
+    })
+    const c = await connect(contractPath)
+    const initial = JSON.parse((await getComponent(c, { name: "ui/Icon", detail: "relationships" })).text)
+    expect(initial.relationships.usedBy).toEqual({ "ui/Button": 1 })
+
+    writeContract({
+      components: {
+        "forms/Input": { name: "Input", source: { adapter: "codebase" }, uses: { "ui/Icon": 2 } },
+        "ui/Icon": { name: "Icon", source: { adapter: "codebase" }, usage: { sites: 2 } }
+      }
+    })
+    // Hot reload calls this same successful-load boundary. Invoke it directly so
+    // this cache invariant does not depend on platform-specific fs.watch delivery.
+    ;(server as unknown as { loadContract: () => void }).loadContract()
+
+    const reloaded = JSON.parse((await getComponent(c, { name: "ui/Icon", detail: "relationships" })).text)
+    expect(reloaded.relationships.usedBy).toEqual({ "forms/Input": 2 })
+  })
+
+  test("malformed present relationship facts error only when projection is requested", async () => {
+    const contractPath = writeContract({
+      components: { "ui/Button": { name: "Button", source: { adapter: "codebase" } } }
+    })
+    const raw = JSON.parse(fs.readFileSync(contractPath, "utf-8"))
+    raw.components["ui/Button"].uses = { "ui/Icon": 0 }
+    fs.writeFileSync(contractPath, JSON.stringify(raw, null, 2))
+    const c = await connect(contractPath)
+
+    expect((await getComponent(c, { name: "ui/Button" })).isError).toBe(false)
+    const projected = await getComponent(c, { name: "ui/Button", detail: "relationships" })
+    expect(projected.isError).toBe(true)
+    expect(projected.text).toContain("malformed")
+    expect(projected.text).toContain("primitiv build")
+  })
+})
+
 describe("get_design_context", () => {
   test("summary surfaces the contract schema version", async () => {
     const c = await connect(writeContract({ version: "0.3.0" }))
@@ -261,6 +457,30 @@ describe("get_design_context", () => {
     const content = result.content as Array<{ type: string; text: string }>
     const payload = JSON.parse(content[0].text)
     expect(payload.tokens.colors["color-bg"].modes).toEqual({ dark: "#000000" })
+  })
+
+  test("the no-argument summary is byte-equivalent with and without relationship facts", async () => {
+    const generatedAt = new Date().toISOString()
+    const baseComponent = {
+      name: "Button",
+      displayName: "Button",
+      source: { adapter: "codebase" as const, file: "ui/Button.tsx" }
+    }
+    let c = await connect(writeContract({ generatedAt, components: { "ui/Button": baseComponent } }))
+    const before = await c.callTool({ name: "get_design_context", arguments: {} })
+    const beforeText = (before.content as Array<{ type: string; text: string }>)[0].text
+    await disconnect()
+
+    c = await connect(
+      writeContract({
+        generatedAt,
+        components: { "ui/Button": { ...baseComponent, uses: { "ui/Icon": 2 }, usage: { sites: 4 } } }
+      })
+    )
+    const after = await c.callTool({ name: "get_design_context", arguments: {} })
+    const afterText = (after.content as Array<{ type: string; text: string }>)[0].text
+
+    expect(afterText).toBe(beforeText)
   })
 })
 

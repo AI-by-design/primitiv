@@ -71,12 +71,19 @@ bun add @ai-by-design/primitiv
 |------|-------------|
 | `get_design_context` | Get tokens, components, conflicts, inferred rules, and violation count. Default (no category) returns a summary with counts. Pass `category: "all" \| "tokens" \| "components" \| "conflicts"` for full detail. Filter tokens with `tokenCategory`: `colors`, `spacing`, `sizes`, `typography`, `borderRadius`, `shadows`, `zIndex`, `breakpoints`, `motion`. |
 | `get_token` | Look up a specific token by name. Pass `category` to narrow search (e.g. `"colors"`, `"spacing"`, `"borderRadius"`); aliases like `"radius"` / `"z-index"` are normalized. |
-| `get_component` | Look up a specific component by name. Returns props, variants, source provenance, and `kind` — `component`, `screen`, `provider`, `icon`, or `other`, so agents reuse real UI and skip screens/providers/icons. |
+| `get_component` | Look up a specific component by name or qualified ID. Returns props, variants, source provenance, and `kind` — `component`, `screen`, `provider`, `icon`, or `other`. Pass `detail: "usage" \| "relationships" \| "all"` to opt into static JSX site counts, sorted outgoing `uses`, and derived incoming `usedBy` relationships. |
 | `get_conflicts` | Get conflicts between sources. Pass `type: "all" \| "token" \| "component"` and `status: "all" \| "pending" \| "resolved"`. Returns `actionableCount` and `pendingDecisionCount` alongside the list. |
 | `get_inferred_rules` | Get the design rules Primitiv has extracted from your codebase patterns. Pass `category` to filter. |
 | `get_violations` | List token-misuse violations — hardcoded literals in source that bypass the contract, with a suggested token when one fits. Pass `category: "all" \| "colors" \| "spacing"` to filter. |
 
 All tools are read-only — they never modify your code or contract. Primitiv works with any tool that speaks MCP — it is not tied to a specific editor or agent ecosystem.
+
+Component relationship counts are static source evidence, not runtime frequency, traffic, or
+popularity. Primitiv records only JSX sites it can resolve deterministically: direct relative named,
+aliased named, default, and same-file component references. Dynamic components, external packages,
+namespace/member JSX, barrels, path aliases, shadowed bindings, and ambiguous or unsupported syntax
+are omitted rather than guessed. `usedBy` is derived on demand from outgoing `uses`; it is never
+stored in the contract.
 
 ### Using Primitiv across multiple projects
 

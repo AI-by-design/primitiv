@@ -111,6 +111,7 @@ describe("init", () => {
     expect(buildComponent.startsWith("---\n")).toBe(true)
     expect(buildComponent).toContain("name: build-component")
     expect(buildComponent).toContain("description:")
+    expect(buildComponent).toContain('detail: "relationships"')
 
     const setup = fs.readFileSync(path.join(tempDir, ".claude/commands/primitiv-setup.md"), "utf-8")
     expect(setup.startsWith("---\n")).toBe(true)
@@ -174,6 +175,7 @@ describe("writeAgentInstructions target selection", () => {
     const claude = fs.readFileSync(path.join(tempDir, "CLAUDE.md"), "utf-8")
     expect(claude).toContain("<!-- primitiv -->")
     expect(claude).toContain("## Primitiv — Design System")
+    expect(claude).toContain('detail: "usage" | "relationships" | "all"')
     expect(claude).not.toContain("@AGENTS.md")
     expect(claude).toContain("# Project notes")
     expect(fs.existsSync(path.join(tempDir, "AGENTS.md"))).toBe(false)
