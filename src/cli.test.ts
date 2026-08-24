@@ -90,4 +90,72 @@ export function SplitButton() {
       fs.rmSync(tempDir, { recursive: true, force: true })
     }
   })
+
+  test("extracts typed prop values and safe defaults through the CLI", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "primitiv-cli-prop-values-e2e-"))
+    const contractPath = path.join(tempDir, "primitiv.contract.json")
+
+    try {
+      fs.writeFileSync(
+        path.join(tempDir, "Button.tsx"),
+        `interface ButtonProps {
+  tone?: "quiet" | "loud" | "quiet"
+  count?: 3 | 1 | 3
+  disabled?: true | false
+  mixed?: 1 | "1"
+  broad?: "one" | string
+  dynamic?: "x" | "y"
+  label: string
+}
+
+const dynamicDefault = "x"
+
+export function Button({
+  tone = "quiet",
+  count = 1,
+  disabled = false,
+  mixed = 1,
+  broad = "one",
+  dynamic = dynamicDefault,
+  undeclared = "ignored",
+  label = "button"
+}: ButtonProps) {
+  return <button>{tone}{count}{disabled}{mixed}{broad}{dynamic}{undeclared}{label}</button>
+}`
+      )
+      fs.writeFileSync(
+        path.join(tempDir, "primitiv.config.js"),
+        `module.exports = {
+  sources: { codebase: { root: ".", patterns: ["**/*.tsx"], ignore: ["node_modules/**"] } },
+  governance: { sourceOfTruth: "codebase", onConflict: "error" },
+  output: { path: "./primitiv.contract.json" }
+}`
+      )
+
+      execFileSync("bun", [CLI, "build"], { cwd: tempDir, encoding: "utf-8" })
+      const firstContract = JSON.parse(fs.readFileSync(contractPath, "utf-8"))
+      const firstButton = firstContract.components.Button
+
+      expect(firstContract.version).toBe("0.3.0")
+      expect(firstContract.sourceStatuses.codebase.status).toBe("ok")
+      expect(firstContract.conflicts).toEqual([])
+      expect(firstButton).toMatchObject({ name: "Button", displayName: "Button", kind: "component" })
+      expect(firstButton.props).toEqual({
+        tone: { type: '"quiet" | "loud" | "quiet"', required: false, values: ["loud", "quiet"], default: "quiet" },
+        count: { type: "3 | 1 | 3", required: false, values: [1, 3], default: "1" },
+        disabled: { type: "true | false", required: false, values: [false, true], default: "false" },
+        mixed: { type: '1 | "1"', required: false, values: [1, "1"] },
+        broad: { type: '"one" | string', required: false, default: "one" },
+        dynamic: { type: '"x" | "y"', required: false, values: ["x", "y"] },
+        label: { type: "string", required: true, default: "button" }
+      })
+      expect(firstButton.props.undeclared).toBeUndefined()
+
+      execFileSync("bun", [CLI, "build"], { cwd: tempDir, encoding: "utf-8" })
+      const secondContract = JSON.parse(fs.readFileSync(contractPath, "utf-8"))
+      expect(secondContract.components).toEqual(firstContract.components)
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
 })

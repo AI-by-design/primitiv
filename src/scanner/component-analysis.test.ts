@@ -237,3 +237,127 @@ let duplicate`
     expect(components.Broken?.uses).toBeUndefined()
   })
 })
+
+describe("component prop literal values and defaults", () => {
+  test("extracts complete primitive domains and direct destructured defaults", async () => {
+    writeFixture(
+      "Button.tsx",
+      `interface ButtonProps {
+  size?: "sm" | "md" | "sm"
+  elevation: -1 | 0 | 2
+  disabled?: false | true
+  mixed?: 1 | "1"
+  label: string
+  unsupported?: "x" | string
+}
+
+export function Button({
+  size: localSize = "md" as const,
+  elevation = -(1 as const),
+  disabled = false,
+  mixed = 1,
+  label = "button",
+  unsupported = "x",
+  ignored = "ignored"
+}: ButtonProps) {
+  return <button>{localSize}{elevation}{disabled}{mixed}{label}{unsupported}{ignored}</button>
+}`
+    )
+
+    const { components } = await new CodebaseScanner(source()).scan()
+
+    expect(components.Button?.props).toEqual({
+      size: { type: '"sm" | "md" | "sm"', required: false, values: ["md", "sm"], default: "md" },
+      elevation: { type: "-1 | 0 | 2", required: true, values: [-1, 0, 2], default: "-1" },
+      disabled: { type: "false | true", required: false, values: [false, true], default: "false" },
+      mixed: { type: '1 | "1"', required: false, values: [1, "1"] },
+      label: { type: "string", required: true, default: "button" },
+      unsupported: { type: '"x" | string', required: false, default: "x" }
+    })
+  })
+
+  test("keeps safe defaults through FC and forwardRef wrappers", async () => {
+    writeFixture(
+      "Wrapped.tsx",
+      `import { forwardRef, type FC } from "react"
+interface Props { tone?: "quiet" | "loud"; count?: 0 | 1 }
+export const Badge: FC<Props> = ({ tone = "quiet" as const, count = +1 }) => <span />
+export const Button = forwardRef<HTMLButtonElement, Props>(({ tone = "loud", count = 0 }, ref) => <button ref={ref} />)`
+    )
+
+    const { components } = await new CodebaseScanner(source()).scan()
+
+    expect(components["Wrapped#Badge"]?.props).toEqual({
+      tone: { type: '"quiet" | "loud"', required: false, values: ["loud", "quiet"], default: "quiet" },
+      count: { type: "0 | 1", required: false, values: [0, 1], default: "1" }
+    })
+    expect(components["Wrapped#Button"]?.props).toEqual({
+      tone: { type: '"quiet" | "loud"', required: false, values: ["loud", "quiet"], default: "loud" },
+      count: { type: "0 | 1", required: false, values: [0, 1], default: "0" }
+    })
+  })
+
+  test("omits incomplete domains and non-direct defaults", async () => {
+    writeFixture(
+      "Cases.tsx",
+      `interface Props {
+  single: "solo"
+  orderA?: "b" | "a"
+  orderB?: 2 | 1 | 2
+  dynamic?: "x" | "y"
+  nested?: "nested"
+  computed?: "computed"
+  rest?: "rest"
+  unsupported?: "ok" | undefined
+}
+
+const dynamicDefault = "x"
+const computedKey = "computed"
+export function Cases({
+  single = "solo",
+  orderA = "a",
+  orderB = 1,
+  dynamic = dynamicDefault,
+  nested: { value } = { value: "nested" },
+  [computedKey]: computedValue = "computed",
+  extra = "extra",
+  ...restProps
+}: Props) {
+  return <div />
+}`
+    )
+
+    const { components } = await new CodebaseScanner(source()).scan()
+
+    expect(components.Cases?.props).toEqual({
+      single: { type: '"solo"', required: true, values: ["solo"], default: "solo" },
+      orderA: { type: '"b" | "a"', required: false, values: ["a", "b"], default: "a" },
+      orderB: { type: "2 | 1 | 2", required: false, values: [1, 2], default: "1" },
+      dynamic: { type: '"x" | "y"', required: false, values: ["x", "y"] },
+      nested: { type: '"nested"', required: false, values: ["nested"] },
+      computed: { type: '"computed"', required: false, values: ["computed"] },
+      rest: { type: '"rest"', required: false, values: ["rest"] },
+      unsupported: { type: '"ok" | undefined', required: false }
+    })
+  })
+
+  test("omits defaults when a wrapper has multiple possible component callbacks", async () => {
+    writeFixture(
+      "Ambiguous.tsx",
+      `interface Props { tone?: "quiet" | "loud" }
+interface OtherProps { tone?: "wrong" }
+declare function wrapper<T>(...callbacks: Array<(props: T) => unknown>): (props: T) => unknown
+
+export const Ambiguous = wrapper<Props>(
+  ({ tone = "wrong" }: OtherProps) => <aside>{tone}</aside>,
+  ({ tone = "quiet" }: Props) => <button>{tone}</button>
+)`
+    )
+
+    const { components } = await new CodebaseScanner(source()).scan()
+
+    expect(components.Ambiguous?.props).toEqual({
+      tone: { type: '"quiet" | "loud"', required: false, values: ["loud", "quiet"] }
+    })
+  })
+})

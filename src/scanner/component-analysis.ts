@@ -522,35 +522,68 @@ function resolveProps(opts: {
   node: t.Node
   idType?: t.TSType
 }): Record<string, PropDefinition> {
-  const typeNode = propsTypeNode(opts.node, opts.idType)
-  if (!typeNode) return {}
-  const members = typeMembers(typeNode, opts.program)
-  return members ? membersToProps(members, opts.content) : {}
+  const resolved = propsInput(opts.node, opts.idType)
+  if (!resolved) return {}
+  const members = typeMembers(resolved.typeNode, opts.program)
+  return members ? membersToProps(members, opts.content, destructuredDefaults(resolved.parameter)) : {}
 }
 
-function propsTypeNode(node: t.Node, idType?: t.TSType): t.TSType | null {
+interface ResolvedPropsInput {
+  typeNode: t.TSType
+  parameter?: t.Node
+}
+
+function propsInput(node: t.Node, idType?: t.TSType): ResolvedPropsInput | null {
   if (idType) {
     const fromId = propsFromComponentType(idType)
-    if (fromId) return fromId
+    if (fromId) return { typeNode: fromId, parameter: componentParameter(node) }
   }
   if (
     node.type === "FunctionDeclaration" ||
     node.type === "FunctionExpression" ||
     node.type === "ArrowFunctionExpression"
   ) {
-    return firstParamType(node.params)
+    const parameter = node.params[0]
+    const typeNode = firstParamType(node.params)
+    return typeNode ? { typeNode, parameter } : null
   }
-  if (node.type === "ClassDeclaration") return typeArgParams(node, "super")?.[0] ?? null
+  if (node.type === "ClassDeclaration") {
+    const typeNode = typeArgParams(node, "super")?.[0]
+    return typeNode ? { typeNode } : null
+  }
   if (node.type === "CallExpression") {
     const params = typeArgParams(node, "type")
-    if (params && params.length > 0) return params[params.length === 1 ? 0 : 1]
-    for (const argument of node.arguments) {
-      if (argument.type === "ArrowFunctionExpression" || argument.type === "FunctionExpression") {
-        return firstParamType(argument.params)
-      }
+    const callback = componentCallback(node)
+    if (params && params.length > 0) {
+      const typeNode = params[params.length === 1 ? 0 : 1]
+      return { typeNode, parameter: callback?.params[0] }
+    }
+    if (callback) {
+      const typeNode = firstParamType(callback.params)
+      return typeNode ? { typeNode, parameter: callback.params[0] } : null
     }
   }
   return null
+}
+
+function componentParameter(node: t.Node): t.Node | undefined {
+  if (
+    node.type === "FunctionDeclaration" ||
+    node.type === "FunctionExpression" ||
+    node.type === "ArrowFunctionExpression"
+  ) {
+    return node.params[0]
+  }
+  if (node.type === "CallExpression") return componentCallback(node)?.params[0]
+  return undefined
+}
+
+function componentCallback(node: t.CallExpression): t.ArrowFunctionExpression | t.FunctionExpression | undefined {
+  const callbacks = node.arguments.filter(
+    (argument): argument is t.ArrowFunctionExpression | t.FunctionExpression =>
+      argument.type === "ArrowFunctionExpression" || argument.type === "FunctionExpression"
+  )
+  return callbacks.length === 1 ? callbacks[0] : undefined
 }
 
 function propsFromComponentType(idType: t.TSType): t.TSType | null {
@@ -570,6 +603,103 @@ function firstParamType(params: t.Node[]): t.TSType | null {
   if (!parameter) return null
   const annotation = "typeAnnotation" in parameter ? parameter.typeAnnotation : null
   return annotation?.type === "TSTypeAnnotation" ? annotation.typeAnnotation : null
+}
+
+type PropLiteral = string | number | boolean
+
+function unwrapLiteralWrapper(node: t.Node): t.Node {
+  let current = node
+  while (true) {
+    if (current.type === "TSAsExpression" || current.type === "TSSatisfiesExpression") {
+      current = current.expression
+      continue
+    }
+    if (current.type === "TSTypeAssertion" || current.type === "ParenthesizedExpression") {
+      current = current.expression
+      continue
+    }
+    if (current.type === "TSNonNullExpression") {
+      current = current.expression
+      continue
+    }
+    break
+  }
+  return current
+}
+
+function primitiveLiteral(node: t.Node): PropLiteral | undefined {
+  const current = unwrapLiteralWrapper(node)
+  if (current.type === "StringLiteral" || current.type === "BooleanLiteral") return current.value
+  if (current.type === "NumericLiteral") return finiteNumber(current.value)
+  if (current.type !== "UnaryExpression" || (current.operator !== "+" && current.operator !== "-")) return undefined
+
+  const operand = unwrapLiteralWrapper(current.argument)
+  if (operand.type !== "NumericLiteral") return undefined
+  const value = current.operator === "-" ? -operand.value : operand.value
+  return finiteNumber(value)
+}
+
+function finiteNumber(value: number): number | undefined {
+  if (!Number.isFinite(value)) return undefined
+  return value === 0 ? 0 : value
+}
+
+function literalValues(typeNode: t.TSType): PropLiteral[] | undefined {
+  let current = typeNode
+  while (current.type === "TSParenthesizedType") current = current.typeAnnotation
+
+  const members = current.type === "TSUnionType" ? current.types : [current]
+  const values: PropLiteral[] = []
+  for (const member of members) {
+    let literalType = member
+    while (literalType.type === "TSParenthesizedType") literalType = literalType.typeAnnotation
+    if (literalType.type !== "TSLiteralType") return undefined
+    const value = primitiveLiteral(literalType.literal)
+    if (value === undefined) return undefined
+    values.push(value)
+  }
+  if (values.length === 0) return undefined
+
+  const unique = new Map<string, PropLiteral>()
+  for (const value of values) unique.set(`${typeof value}:${String(value)}`, value)
+  return [...unique.values()].sort(comparePropLiterals)
+}
+
+function comparePropLiterals(a: PropLiteral, b: PropLiteral): number {
+  const rank = (value: PropLiteral): number => (typeof value === "boolean" ? 0 : typeof value === "number" ? 1 : 2)
+  const aRank = rank(a)
+  const bRank = rank(b)
+  if (aRank !== bRank) return aRank - bRank
+  if (typeof a === "boolean" && typeof b === "boolean") return Number(a) - Number(b)
+  if (typeof a === "number" && typeof b === "number") return a - b
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
+function destructuredDefaults(parameter?: t.Node): Map<string, PropLiteral> {
+  if (!parameter || parameter.type !== "ObjectPattern") return new Map()
+  const defaults = new Map<string, PropLiteral>()
+  for (const property of parameter.properties) {
+    if (property.type !== "ObjectProperty" || property.computed) continue
+    const name =
+      property.key.type === "Identifier"
+        ? property.key.name
+        : property.key.type === "StringLiteral"
+          ? property.key.value
+          : null
+    if (!name || property.value.type !== "AssignmentPattern" || property.value.left.type !== "Identifier") continue
+    const value = primitiveLiteral(property.value.right)
+    if (value !== undefined) defaults.set(name, value)
+  }
+  return defaults
+}
+
+function stringDefault(value: PropLiteral, values?: PropLiteral[]): string | undefined {
+  if (values) {
+    const text = String(value)
+    const collisions = values.filter((candidate) => String(candidate) === text)
+    if (collisions.some((candidate) => typeof candidate !== typeof value)) return undefined
+  }
+  return String(value)
 }
 
 function typeArgParams(node: t.Node, position: "type" | "super"): t.TSType[] | null {
@@ -613,7 +743,11 @@ function findTypeDeclMembers(program: t.Program, name: string): t.TSTypeElement[
   return null
 }
 
-function membersToProps(members: t.TSTypeElement[], content: string): Record<string, PropDefinition> {
+function membersToProps(
+  members: t.TSTypeElement[],
+  content: string,
+  defaults: Map<string, PropLiteral>
+): Record<string, PropDefinition> {
   const props: Record<string, PropDefinition> = {}
   for (const member of members) {
     if (member.type !== "TSPropertySignature") continue
@@ -624,7 +758,16 @@ function membersToProps(members: t.TSTypeElement[], content: string): Record<str
       member.typeAnnotation?.type === "TSTypeAnnotation"
         ? nodeText(content, member.typeAnnotation.typeAnnotation)
         : "unknown"
-    props[name] = { type, required: !member.optional }
+    const values =
+      member.typeAnnotation?.type === "TSTypeAnnotation"
+        ? literalValues(member.typeAnnotation.typeAnnotation)
+        : undefined
+    const definition: PropDefinition = { type, required: !member.optional }
+    if (values) definition.values = values
+    const defaultValue = defaults.get(name)
+    const normalizedDefault = defaultValue === undefined ? undefined : stringDefault(defaultValue, values)
+    if (normalizedDefault !== undefined) definition.default = normalizedDefault
+    props[name] = definition
   }
   return props
 }
