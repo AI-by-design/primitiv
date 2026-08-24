@@ -681,7 +681,11 @@ function destructuredDefaults(parameter?: t.Node): Map<string, PropLiteral> {
   for (const property of parameter.properties) {
     if (property.type !== "ObjectProperty" || property.computed) continue
     const name =
-      property.key.type === "Identifier" ? property.key.name : property.key.type === "StringLiteral" ? property.key.value : null
+      property.key.type === "Identifier"
+        ? property.key.name
+        : property.key.type === "StringLiteral"
+          ? property.key.value
+          : null
     if (!name || property.value.type !== "AssignmentPattern" || property.value.left.type !== "Identifier") continue
     const value = primitiveLiteral(property.value.right)
     if (value !== undefined) defaults.set(name, value)
@@ -754,7 +758,10 @@ function membersToProps(
       member.typeAnnotation?.type === "TSTypeAnnotation"
         ? nodeText(content, member.typeAnnotation.typeAnnotation)
         : "unknown"
-    const values = member.typeAnnotation?.type === "TSTypeAnnotation" ? literalValues(member.typeAnnotation.typeAnnotation) : undefined
+    const values =
+      member.typeAnnotation?.type === "TSTypeAnnotation"
+        ? literalValues(member.typeAnnotation.typeAnnotation)
+        : undefined
     const definition: PropDefinition = { type, required: !member.optional }
     if (values) definition.values = values
     const defaultValue = defaults.get(name)

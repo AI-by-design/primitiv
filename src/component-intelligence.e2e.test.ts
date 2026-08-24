@@ -115,9 +115,7 @@ export function Toolbar() {
       expect(drift.drift.changes).toContain(
         "component use count changed: components/Toolbar → components/Button (2 → 3)"
       )
-      expect(drift.drift.changes).toContain(
-        "component usage changed: components/Button (3 → 4 sites)"
-      )
+      expect(drift.drift.changes).toContain("component usage changed: components/Button (3 → 4 sites)")
 
       server = new PrimitivMCPServer(contractPath)
       const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
