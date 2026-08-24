@@ -3,6 +3,7 @@ import * as path from "node:path"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js"
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
 import { normalizeRuleCategory, RULE_CATEGORIES } from "../inferrer"
 import type { Component, LintCategory, PrimitivContract, Rationale, TokenCategory } from "../types"
@@ -14,6 +15,7 @@ export class PrimitivMCPServer {
   private watcher: fs.FSWatcher | null = null
   private derivedNameIndex: Record<string, string[]> | null = null
   private derivedUsedByIndex: Record<string, Record<string, number>> | null = null
+  private validatedRelationshipFacts: Record<string, RelationshipFacts> = {}
 
   constructor(private contractPath: string) {
     this.server = new McpServer({
@@ -54,6 +56,7 @@ export class PrimitivMCPServer {
       this.contract = parsed as PrimitivContract
       this.derivedNameIndex = null
       this.derivedUsedByIndex = null
+      this.validatedRelationshipFacts = {}
       this.warnIfMismatched()
     } catch {
       process.stderr.write(
@@ -79,19 +82,16 @@ export class PrimitivMCPServer {
     return this.derivedNameIndex
   }
 
-  private usedByIndex():
-    | { success: true; index: Record<string, Record<string, number>> }
-    | { success: false; error: string } {
-    if (!this.contract) return { success: true, index: {} }
-    if (this.derivedUsedByIndex) return { success: true, index: this.derivedUsedByIndex }
+  private usedByIndex(facts: Record<string, RelationshipFacts>): Record<string, Record<string, number>> {
+    if (!this.contract) return {}
+    if (this.derivedUsedByIndex) return this.derivedUsedByIndex
 
     const index: Record<string, Record<string, number>> = {}
     for (const ownerId of Object.keys(this.contract.components).sort(compareStrings)) {
-      const parsed = relationshipFactsSchema.safeParse(this.contract.components[ownerId])
-      if (!parsed.success) return { success: false, error: invalidRelationshipFacts(ownerId, parsed.error) }
-      for (const targetId of Object.keys(parsed.data.uses ?? {}).sort(compareStrings)) {
+      const ownerFacts = facts[ownerId]
+      for (const targetId of Object.keys(ownerFacts.uses ?? {}).sort(compareStrings)) {
         if (!index[targetId]) index[targetId] = {}
-        index[targetId][ownerId] = parsed.data.uses?.[targetId] ?? 0
+        index[targetId][ownerId] = ownerFacts.uses?.[targetId] ?? 0
       }
     }
 
@@ -100,7 +100,7 @@ export class PrimitivMCPServer {
         .sort(compareStrings)
         .map((targetId) => [targetId, sortCountMap(index[targetId])])
     )
-    return { success: true, index: this.derivedUsedByIndex }
+    return this.derivedUsedByIndex
   }
 
   private warnIfMismatched(): void {
@@ -594,7 +594,11 @@ export class PrimitivMCPServer {
     )
   }
 
-  private componentResponse(opts: { id: string; detail?: ComponentDetail; resolvedBy?: string }) {
+  private componentResponse(opts: {
+    id: string
+    detail?: ComponentDetail
+    resolvedBy?: ComponentResolution
+  }): CallToolResult {
     if (!this.contract) return this.noContract()
     const component = this.contract.components[opts.id]
     const base: Component = { ...component }
@@ -607,32 +611,56 @@ export class PrimitivMCPServer {
     }
     if (!opts.detail) return this.json(payload)
 
-    const parsed = relationshipFactsSchema.safeParse(component)
-    if (!parsed.success) return this.err(invalidRelationshipFacts(opts.id, parsed.error))
+    // Relationship leaves stay opaque at contract load for legacy compatibility. Validate
+    // exactly the facts this opt-in MCP response will expose, then trust them internally.
+    const idsToValidate = opts.detail === "usage" ? [opts.id] : Object.keys(this.contract.components)
+    const validated = this.validateRelationshipFacts(idsToValidate)
+    if (!validated.success) return this.err(validated.error)
+    const facts = validated.facts[opts.id]
 
     if (opts.detail === "usage" || opts.detail === "all") {
-      payload.usage = { sites: parsed.data.usage?.sites ?? 0 }
+      payload.usage = { sites: facts.usage?.sites ?? 0 }
     }
     if (opts.detail === "relationships" || opts.detail === "all") {
-      const usedBy = this.usedByIndex()
-      if (!usedBy.success) return this.err(usedBy.error)
+      const usedBy = this.usedByIndex(validated.facts)
       payload.relationships = {
-        uses: sortCountMap(parsed.data.uses ?? {}),
-        usedBy: usedBy.index[opts.id] ?? {}
+        uses: sortCountMap(facts.uses ?? {}),
+        usedBy: usedBy[opts.id] ?? {}
       }
     }
     return this.json(payload)
+  }
+
+  private validateRelationshipFacts(
+    ids: string[]
+  ): { success: true; facts: Record<string, RelationshipFacts> } | { success: false; error: string } {
+    if (!this.contract) return { success: true, facts: {} }
+    const facts: Record<string, RelationshipFacts> = {}
+    for (const id of ids.sort(compareStrings)) {
+      const cached = this.validatedRelationshipFacts[id]
+      if (cached) {
+        facts[id] = cached
+        continue
+      }
+      const parsed = relationshipFactsSchema.safeParse(this.contract.components[id])
+      if (!parsed.success) return { success: false, error: invalidRelationshipFacts(id, parsed.error) }
+      this.validatedRelationshipFacts[id] = parsed.data
+      facts[id] = parsed.data
+    }
+    return { success: true, facts }
   }
 }
 
 const componentDetailSchema = z.enum(["usage", "relationships", "all"])
 type ComponentDetail = z.infer<typeof componentDetailSchema>
+type ComponentResolution = "scope" | "governance.sourceOfTruth"
 
 const relationshipCountSchema = z.number().int().positive()
 const relationshipFactsSchema = z.looseObject({
   uses: z.record(z.string(), relationshipCountSchema).optional(),
   usage: z.looseObject({ sites: relationshipCountSchema }).optional()
 })
+type RelationshipFacts = z.infer<typeof relationshipFactsSchema>
 
 function invalidRelationshipFacts(id: string, error: z.ZodError): string {
   return (
