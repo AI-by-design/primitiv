@@ -1,3 +1,4 @@
+import type * as t from "@babel/types"
 import { z } from "zod"
 
 // Core types for Primitiv
@@ -47,6 +48,12 @@ export interface CodebaseSource {
   // Default (true/absent): a failed scan is recorded in sourceStatuses and the build
   // continues. The governance.sourceOfTruth is always required regardless of this flag.
   optional?: boolean
+}
+
+export interface ComponentAnalysisModule {
+  content: string
+  file: string
+  program: t.Program
 }
 
 export interface FigmaSource {
