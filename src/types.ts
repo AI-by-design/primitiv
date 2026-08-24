@@ -244,6 +244,8 @@ export interface PropDefinition {
   type: string
   required: boolean
   default?: string
+  // Complete finite literal values declared by the prop type, preserving primitive types.
+  values?: Array<string | number | boolean>
 }
 
 export interface Conflict {

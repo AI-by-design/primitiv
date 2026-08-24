@@ -106,6 +106,44 @@ describe("component merge (path-qualified identity)", () => {
     }
   })
 
+  test("typed prop values and string defaults survive construction and JSON serialization", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "primitiv-contract-prop-values-"))
+    const outputPath = path.join(tempDir, "primitiv.contract.json")
+    const builder = new ContractBuilder({ ...config(), output: { path: outputPath } })
+    const button: Component = {
+      ...codebaseComponent("Button", "components/Button.tsx"),
+      props: {
+        size: {
+          type: '"sm" | "md" | "lg"',
+          required: false,
+          default: "md",
+          values: ["lg", "md", "sm"]
+        },
+        elevation: { type: "0 | 1 | 2", required: false, default: "1", values: [0, 1, 2] },
+        disabled: { type: "true | false", required: false, default: "false", values: [false, true] },
+        legacy: { type: "string", required: true }
+      }
+    }
+
+    try {
+      const contract = builder.build([
+        { name: "codebase", tokens: emptyTokenMap(), components: { "components/Button": button } }
+      ])
+
+      expect(contract.version).toBe("0.3.0")
+      expect(contract.components["components/Button"]?.props).toEqual(button.props)
+      expect(contract.conflicts).toHaveLength(0)
+
+      builder.save(contract)
+      const serialized = JSON.parse(fs.readFileSync(outputPath, "utf-8")) as PrimitivContract
+      expect(serialized.version).toBe("0.3.0")
+      expect(serialized.components["components/Button"]?.props).toEqual(button.props)
+      expect(serialized.conflicts).toHaveLength(0)
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
   test("cross-source same-name is a conflict via displayName grouping, both stay in the map", () => {
     const figmaCard: Component = { name: "Card", displayName: "Card", source: { adapter: "figma" } }
     const contract = buildWith([

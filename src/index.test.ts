@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
-import type { Component, PrimitivContract, Token } from "./index"
+import type { Component, PrimitivContract, PropDefinition, Token } from "./index"
 import {
   build,
   buildContract,
@@ -235,6 +235,35 @@ describe("package root — public type surface", () => {
 
     expect(component.uses?.["components/Icon"]).toBe(2)
     expect(component.usage?.sites).toBe(4)
+  })
+
+  test("PropDefinition accepts typed literal values with a string default while preserving legacy props", () => {
+    const props: Record<string, PropDefinition> = {
+      size: {
+        type: '"sm" | "md" | "lg"',
+        required: false,
+        default: "md",
+        values: ["lg", "md", "sm"]
+      },
+      elevation: {
+        type: "0 | 1 | 2",
+        required: false,
+        default: "1",
+        values: [0, 1, 2]
+      },
+      disabled: {
+        type: "true | false",
+        required: false,
+        default: "false",
+        values: [false, true]
+      },
+      legacy: { type: "string", required: true }
+    }
+
+    expect(props.size.values).toEqual(["lg", "md", "sm"])
+    expect(props.elevation.values).toEqual([0, 1, 2])
+    expect(props.disabled.values).toEqual([false, true])
+    expect(props.legacy.default).toBeUndefined()
   })
 
   test("valuesEquivalent is importable from the root with its conservative comparison behavior", () => {
