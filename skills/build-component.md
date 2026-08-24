@@ -20,10 +20,14 @@ With the user: name, props, states, variants, composition, and project conventio
 ## 3. Reuse before you build (resolution ladder)
 Never recreate a component the contract already has. Components carry a `kind` (`component` | `screen` | `provider` | `icon` | `other`) — only `component` and `icon` are reusable UI; treat the rest as tagged noise, not reuse targets. Stop at the first rung that resolves:
 1. Look it up — `get_component { name, context: <your working file or directory> }`.
-2. One match → use it; load its full record (props, variants, states, rationale) and conform to its API, don't redesign it.
+2. One match → use it; load its full record (props, variants, states, rationale) and conform to its API, don't redesign it. When composition or impact matters, request `detail: "relationships"` (or `"all"` with usage) to inspect sorted `uses` and derived `usedBy` counts.
 3. Ambiguous → the response carries an `instruction`; follow it — resolve by **scope** (working path) → **rationale.when** vs the user's intent → if neither decides, **ask the user**. Never pick arbitrarily.
 4. No match but composable → assemble from existing contract primitives, not from scratch.
 5. Genuinely new → tell the user it's net-new, then build to the conventions from step 2.
+
+Relationship and usage counts are statically resolved JSX sites, not runtime frequency. Missing
+edges may be unresolved evidence: dynamic components, external packages, namespace/member JSX,
+barrels, path aliases, shadowed bindings, and ambiguous syntax are conservatively omitted.
 
 ## 4. Build (token ladder)
 Resolve every visual value through the contract, in order:

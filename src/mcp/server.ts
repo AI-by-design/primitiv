@@ -3,9 +3,10 @@ import * as path from "node:path"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js"
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
 import { normalizeRuleCategory, RULE_CATEGORIES } from "../inferrer"
-import type { LintCategory, PrimitivContract, Rationale, TokenCategory } from "../types"
+import type { Component, LintCategory, PrimitivContract, Rationale, TokenCategory } from "../types"
 import { LINT_CATEGORIES, primitivContractSchema, summarizeValidationIssues, TOKEN_CATEGORIES } from "../types"
 
 export class PrimitivMCPServer {
@@ -13,6 +14,8 @@ export class PrimitivMCPServer {
   private contract: PrimitivContract | null = null
   private watcher: fs.FSWatcher | null = null
   private derivedNameIndex: Record<string, string[]> | null = null
+  private derivedUsedByIndex: Record<string, Record<string, number>> | null = null
+  private validatedRelationshipFacts: Record<string, RelationshipFacts> = {}
 
   constructor(private contractPath: string) {
     this.server = new McpServer({
@@ -52,6 +55,8 @@ export class PrimitivMCPServer {
       }
       this.contract = parsed as PrimitivContract
       this.derivedNameIndex = null
+      this.derivedUsedByIndex = null
+      this.validatedRelationshipFacts = {}
       this.warnIfMismatched()
     } catch {
       process.stderr.write(
@@ -75,6 +80,27 @@ export class PrimitivMCPServer {
       this.derivedNameIndex = index
     }
     return this.derivedNameIndex
+  }
+
+  private usedByIndex(facts: Record<string, RelationshipFacts>): Record<string, Record<string, number>> {
+    if (!this.contract) return {}
+    if (this.derivedUsedByIndex) return this.derivedUsedByIndex
+
+    const index: Record<string, Record<string, number>> = {}
+    for (const ownerId of Object.keys(this.contract.components).sort(compareStrings)) {
+      const ownerFacts = facts[ownerId]
+      for (const targetId of Object.keys(ownerFacts.uses ?? {}).sort(compareStrings)) {
+        if (!index[targetId]) index[targetId] = {}
+        index[targetId][ownerId] = ownerFacts.uses?.[targetId] ?? 0
+      }
+    }
+
+    this.derivedUsedByIndex = Object.fromEntries(
+      Object.keys(index)
+        .sort(compareStrings)
+        .map((targetId) => [targetId, sortCountMap(index[targetId])])
+    )
+    return this.derivedUsedByIndex
   }
 
   private warnIfMismatched(): void {
@@ -379,13 +405,14 @@ export class PrimitivMCPServer {
       "get_component",
       {
         description:
-          "Look up a component by name or id. Read-only, no side effects. Pass context (your current working file or directory) so same-name components resolve by path scope. Returns the component JSON (with its id) when the lookup resolves to exactly one component, or an error listing available names if not found. When several components share the name and neither governance nor scope decides, returns { ambiguous, matches, instruction } — follow the instruction: match each candidate's rationale.when against the user's intent, and if that doesn't decide, ask the user; never pick arbitrarily. Use this when you need implementation details for a known component to reuse it rather than recreate it. For a list of all components, use get_design_context with category 'components' instead.",
+          "Look up a component by name or id. Read-only, no side effects. Pass context (your current working file or directory) so same-name components resolve by path scope. Returns the component JSON (with its id) when the lookup resolves to exactly one component, or an error listing available names if not found. Relationship facts are opt-in: pass detail: 'usage' for the total statically resolved local JSX sites targeting the component, 'relationships' for sorted outgoing uses and derived incoming usedBy counts, or 'all' for both. These are static source-site counts, never runtime frequency. When several components share the name and neither governance nor scope decides, returns { ambiguous, matches, instruction } — follow the instruction: match each candidate's rationale.when against the user's intent, and if that doesn't decide, ask the user; never pick arbitrarily. Use this when you need implementation details for a known component to reuse it rather than recreate it. For a list of all components, use get_design_context with category 'components' instead.",
         annotations: { readOnlyHint: true },
         inputSchema: {
           name: z.string(),
           // Optional by design: a name-only lookup must keep working (and fall through to
           // the ambiguous payload on multi-match), never fail validation.
-          context: z.string().optional()
+          context: z.string().optional(),
+          detail: componentDetailSchema.optional()
         }
       },
       async (args) => {
@@ -393,7 +420,7 @@ export class PrimitivMCPServer {
         const components = this.contract.components
 
         // Direct hit — `name` may already be a qualified id (`components/ui/Card`, `figma:Card`).
-        if (components[args.name]) return this.json({ id: args.name, ...components[args.name] })
+        if (components[args.name]) return this.componentResponse({ id: args.name, detail: args.detail })
 
         const ids = this.nameIndex()[args.name] ?? []
         if (ids.length === 0) {
@@ -402,7 +429,7 @@ export class PrimitivMCPServer {
             .join(", ")
           return this.err(`Component '${args.name}' not found. Available: ${available}`)
         }
-        if (ids.length === 1) return this.json({ id: ids[0], ...components[ids[0]] })
+        if (ids.length === 1) return this.componentResponse({ id: ids[0], detail: args.detail })
 
         // Resolution order: governance → scope → hand the decision to the agent's ladder
         // (rationale.when vs intent, then ask the user). The contract decides what it can;
@@ -412,7 +439,11 @@ export class PrimitivMCPServer {
         )
         if (governed?.resolved !== undefined) {
           const id = governed.resolved
-          return this.json({ id, resolvedBy: "governance.sourceOfTruth", ...components[id] })
+          return this.componentResponse({
+            id,
+            detail: args.detail,
+            resolvedBy: "governance.sourceOfTruth"
+          })
         }
 
         if (args.context) {
@@ -420,7 +451,7 @@ export class PrimitivMCPServer {
             ids.map((id) => ({ id, dir: components[id].scope ?? idDirectory(id) })),
             args.context
           )
-          if (scoped !== null) return this.json({ id: scoped, resolvedBy: "scope", ...components[scoped] })
+          if (scoped !== null) return this.componentResponse({ id: scoped, detail: args.detail, resolvedBy: "scope" })
         }
 
         // Ambiguous is a governed payload, not an error — the instruction ships in the
@@ -562,6 +593,88 @@ export class PrimitivMCPServer {
       }
     )
   }
+
+  private componentResponse(opts: {
+    id: string
+    detail?: ComponentDetail
+    resolvedBy?: ComponentResolution
+  }): CallToolResult {
+    if (!this.contract) return this.noContract()
+    const component = this.contract.components[opts.id]
+    const base: Component = { ...component }
+    delete base.uses
+    delete base.usage
+    const payload: Record<string, unknown> = {
+      id: opts.id,
+      ...(opts.resolvedBy ? { resolvedBy: opts.resolvedBy } : {}),
+      ...base
+    }
+    if (!opts.detail) return this.json(payload)
+
+    // Relationship leaves stay opaque at contract load for legacy compatibility. Validate
+    // exactly the facts this opt-in MCP response will expose, then trust them internally.
+    const idsToValidate = opts.detail === "usage" ? [opts.id] : Object.keys(this.contract.components)
+    const validated = this.validateRelationshipFacts(idsToValidate)
+    if (!validated.success) return this.err(validated.error)
+    const facts = validated.facts[opts.id]
+
+    if (opts.detail === "usage" || opts.detail === "all") {
+      payload.usage = { sites: facts.usage?.sites ?? 0 }
+    }
+    if (opts.detail === "relationships" || opts.detail === "all") {
+      const usedBy = this.usedByIndex(validated.facts)
+      payload.relationships = {
+        uses: sortCountMap(facts.uses ?? {}),
+        usedBy: usedBy[opts.id] ?? {}
+      }
+    }
+    return this.json(payload)
+  }
+
+  private validateRelationshipFacts(
+    ids: string[]
+  ): { success: true; facts: Record<string, RelationshipFacts> } | { success: false; error: string } {
+    if (!this.contract) return { success: true, facts: {} }
+    const facts: Record<string, RelationshipFacts> = {}
+    for (const id of ids.sort(compareStrings)) {
+      const cached = this.validatedRelationshipFacts[id]
+      if (cached) {
+        facts[id] = cached
+        continue
+      }
+      const parsed = relationshipFactsSchema.safeParse(this.contract.components[id])
+      if (!parsed.success) return { success: false, error: invalidRelationshipFacts(id, parsed.error) }
+      this.validatedRelationshipFacts[id] = parsed.data
+      facts[id] = parsed.data
+    }
+    return { success: true, facts }
+  }
+}
+
+const componentDetailSchema = z.enum(["usage", "relationships", "all"])
+type ComponentDetail = z.infer<typeof componentDetailSchema>
+type ComponentResolution = "scope" | "governance.sourceOfTruth"
+
+const relationshipCountSchema = z.number().int().positive()
+const relationshipFactsSchema = z.looseObject({
+  uses: z.record(z.string(), relationshipCountSchema).optional(),
+  usage: z.looseObject({ sites: relationshipCountSchema }).optional()
+})
+type RelationshipFacts = z.infer<typeof relationshipFactsSchema>
+
+function invalidRelationshipFacts(id: string, error: z.ZodError): string {
+  return (
+    `Relationship facts for component '${id}' are malformed (${summarizeValidationIssues(error)}). ` +
+    "Run `primitiv build` to regenerate the contract."
+  )
+}
+
+function sortCountMap(counts: Record<string, number>): Record<string, number> {
+  return Object.fromEntries(Object.entries(counts).sort(([a], [b]) => compareStrings(a, b)))
+}
+
+function compareStrings(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0
 }
 
 // Pick the candidate whose directory (or explicit scope) most specifically contains the
