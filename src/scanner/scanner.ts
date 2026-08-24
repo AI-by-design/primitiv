@@ -4,16 +4,9 @@ import { parse } from "@babel/parser"
 import type * as t from "@babel/types"
 import { glob } from "glob"
 import { valuesEquivalent } from "../normalize/value"
-import type {
-  CodebaseSource,
-  ComponentKind,
-  ComponentMap,
-  PropDefinition,
-  TokenCategory,
-  TokenMap,
-  TokenRedefinition
-} from "../types"
+import type { CodebaseSource, ComponentMap, TokenCategory, TokenMap, TokenRedefinition } from "../types"
 import { emptyTokenMap } from "../types"
+import { ComponentAnalyzer } from "./component-analysis"
 
 export class CodebaseScanner {
   constructor(private config: CodebaseSource) {}
@@ -25,8 +18,9 @@ export class CodebaseScanner {
     redefinitions: TokenRedefinition[]
   }> {
     const files = await this.getFiles()
-    const { tokens, internalCssVars, redefinitions } = await this.extractTokens(files)
-    const components = await this.extractComponents(files)
+    const componentAnalyzer = new ComponentAnalyzer()
+    const { tokens, internalCssVars, redefinitions } = await this.extractTokens(files, componentAnalyzer)
+    const components = componentAnalyzer.finish()
     return { tokens, components, internalCssVars, redefinitions }
   }
 
@@ -46,10 +40,13 @@ export class CodebaseScanner {
     // glob returns filesystem enumeration order, which varies across machines. Scan order
     // decides which definition "first write wins" keeps — sort so the kept value (and the
     // contract as a whole) is deterministic everywhere, not per-platform.
-    return files.sort()
+    return [...new Set(files)].sort()
   }
 
-  private async extractTokens(files: string[]): Promise<{
+  private async extractTokens(
+    files: string[],
+    componentAnalyzer: ComponentAnalyzer
+  ): Promise<{
     tokens: TokenMap
     internalCssVars: number
     redefinitions: TokenRedefinition[]
@@ -73,8 +70,13 @@ export class CodebaseScanner {
       if (ext === ".css") {
         internalCssVars += this.extractCSSTokens({ content, file, tokens, capture })
       } else if (ext === ".ts" || ext === ".tsx" || ext === ".jsx") {
-        const program = parseProgram(content)
-        if (program) this.extractTSTokens(program, file, tokens, registry, pending, capture)
+        const parsed = parseProgram(content)
+        if (parsed) {
+          this.extractTSTokens(parsed.program, file, tokens, registry, pending, capture)
+          if ((ext === ".tsx" || ext === ".jsx") && !parsed.recovered) {
+            componentAnalyzer.addModule({ content, file, program: parsed.program })
+          }
+        }
       }
     }
 
@@ -349,35 +351,6 @@ export class CodebaseScanner {
       return "spacing"
     return "other"
   }
-
-  private async extractComponents(files: string[]): Promise<ComponentMap> {
-    const components: ComponentMap = {}
-    const componentFiles = files.filter((f) => f.endsWith(".tsx") || f.endsWith(".jsx"))
-
-    for (const file of componentFiles) {
-      const content = fs.readFileSync(path.resolve(this.config.root, file), "utf-8")
-      for (const found of componentsInFile(content, file)) {
-        // Path-qualified id: same-name components in different files coexist instead of
-        // first-wins. Same-file siblings get distinct ids via the #Name qualifier.
-        components[componentId(file, found.name)] = {
-          name: found.name,
-          displayName: found.name,
-          kind: found.kind,
-          source: { adapter: "codebase", file, line: found.line },
-          props: found.props
-        }
-      }
-    }
-
-    return components
-  }
-}
-
-interface FoundComponent {
-  name: string
-  line: number
-  kind: ComponentKind
-  props: Record<string, PropDefinition>
 }
 
 // Scan-scoped state for the shared token write path: redefinitions found so far (keyed by
@@ -389,322 +362,14 @@ interface WriteCapture {
   promotedKeys: Set<string>
 }
 
-// Path-qualified component id: the file's path relative to the scan root, sans extension,
-// with `#Name` appended only when the component's name doesn't match its filename — so
-// `Card` in `components/ui/Card.tsx` keeps the clean id `components/ui/Card` while compound
-// siblings in the same file get `components/ui/Card#CardHeader`. The match is normalized
-// (case/separator-insensitive: `card-header.tsx` ↔ `CardHeader`) and `index.*` files match
-// their folder name. Qualification depends only on the component's own name vs its file,
-// never on what else lives there, so adding a sibling can't re-key an existing component.
-function componentId(file: string, name: string): string {
-  const posixFile = file.split(path.sep).join("/")
-  const id = posixFile.replace(/\.[^/.]+$/, "")
-  const segments = id.split("/")
-  const base = segments[segments.length - 1]
-  const effectiveBase = /^index$/i.test(base) && segments.length >= 2 ? segments[segments.length - 2] : base
-  return normalizeForIdMatch(name) === normalizeForIdMatch(effectiveBase) ? id : `${id}#${name}`
-}
-
-function normalizeForIdMatch(s: string): string {
-  return s.replace(/[^a-z0-9]/gi, "").toLowerCase()
-}
-
-// Parse a TS/JSX file and return the components it DEFINES and EXPORTS (definition-site only).
-// Bare `export { X } from "..."` re-exports are ignored — the definition is found at its source,
-// which also avoids barrel-file false collisions. Local `export { X }` (no source) is followed
-// to the in-file declaration.
-function componentsInFile(content: string, file: string): FoundComponent[] {
-  const program = parseProgram(content)
-  if (!program) return []
-
-  const localInit = new Map<string, { node: t.Node; line: number; idType?: t.TSType }>()
-  const exported = new Set<string>()
-  const found: FoundComponent[] = []
-
-  const add = (name: string, node: t.Node, line: number, idType?: t.TSType): void => {
-    found.push({
-      name,
-      line,
-      kind: classifyComponent(name, file),
-      props: resolveProps({ program, content, node, idType })
-    })
-  }
-
-  const remember = (decl: t.Declaration): string[] => {
-    const names: string[] = []
-    if ((decl.type === "FunctionDeclaration" || decl.type === "ClassDeclaration") && decl.id) {
-      localInit.set(decl.id.name, { node: decl, line: lineOf(decl) })
-      names.push(decl.id.name)
-    } else if (decl.type === "VariableDeclaration") {
-      for (const d of decl.declarations) {
-        if (d.id.type === "Identifier" && d.init) {
-          // Capture the declarator's own type annotation (`const C: React.FC<Props> = …`) so the
-          // props generic survives even though the init node carries no parameter type.
-          const ann = d.id.typeAnnotation?.type === "TSTypeAnnotation" ? d.id.typeAnnotation.typeAnnotation : undefined
-          localInit.set(d.id.name, { node: d.init, line: lineOf(d), idType: ann })
-          names.push(d.id.name)
-        }
-      }
-    }
-    return names
-  }
-
-  for (const stmt of program.body) {
-    if (
-      stmt.type === "FunctionDeclaration" ||
-      stmt.type === "ClassDeclaration" ||
-      stmt.type === "VariableDeclaration"
-    ) {
-      remember(stmt)
-    } else if (stmt.type === "ExportNamedDeclaration") {
-      if (stmt.declaration) {
-        for (const name of remember(stmt.declaration)) exported.add(name)
-      } else if (!stmt.source) {
-        for (const spec of stmt.specifiers) {
-          if (spec.type === "ExportSpecifier" && spec.local.type === "Identifier") exported.add(spec.local.name)
-        }
-      }
-      // `export { X } from "..."` (stmt.source set) is a re-export — ignored.
-    } else if (stmt.type === "ExportDefaultDeclaration") {
-      const d = stmt.declaration
-      if ((d.type === "FunctionDeclaration" || d.type === "ClassDeclaration") && d.id) {
-        if (isComponentNode(d)) add(d.id.name, d, lineOf(d))
-      } else if (isComponentNode(d)) {
-        const name = path.basename(file, path.extname(file))
-        if (/^[A-Z]/.test(name)) add(name, d, lineOf(d))
-      }
-    }
-  }
-
-  for (const name of exported) {
-    if (!/^[A-Z]/.test(name) || found.some((f) => f.name === name)) continue
-    const decl = localInit.get(name)
-    if (decl && isComponentNode(decl.node)) add(name, decl.node, decl.line, decl.idType)
-  }
-
-  return found
-}
-
-// Resolve a component's props from the AST: its first-parameter type annotation (or the
-// `forwardRef<_, P>` / `FC<P>` generic), looked up to that type's interface/type-alias members
-// in the SAME file. Per-component by construction — each call reads that component's own node,
-// never a shared first match. Cross-file imported prop types and unmodelled shapes (intersections,
-// Pick/Omit, qualified refs) degrade to {} — an honest "unresolved" beats reporting wrong props.
-function resolveProps(opts: {
-  program: t.Program
-  content: string
-  node: t.Node
-  idType?: t.TSType
-}): Record<string, PropDefinition> {
-  const typeNode = propsTypeNode(opts.node, opts.idType)
-  if (!typeNode) return {}
-  const members = typeMembers(typeNode, opts.program)
-  return members ? membersToProps(members, opts.content) : {}
-}
-
-// The TSType describing a component's props, by component shape.
-function propsTypeNode(node: t.Node, idType?: t.TSType): t.TSType | null {
-  // `const C: React.FC<Props> = …` — props is the component-type generic on the variable.
-  if (idType) {
-    const fromId = propsFromComponentType(idType)
-    if (fromId) return fromId
-  }
-  if (
-    node.type === "FunctionDeclaration" ||
-    node.type === "FunctionExpression" ||
-    node.type === "ArrowFunctionExpression"
-  ) {
-    return firstParamType(node.params)
-  }
-  if (node.type === "ClassDeclaration") {
-    // `class C extends React.Component<Props>` — props is the superclass generic.
-    return typeArgParams(node, "super")?.[0] ?? null
-  }
-  if (node.type === "CallExpression") {
-    // `forwardRef<Ref, Props>(…)` → 2nd type arg; `memo<Props>(…)` → 1st. Otherwise read the
-    // wrapped render function's first parameter (`forwardRef((p: Props, ref) => …)`).
-    const params = typeArgParams(node, "type")
-    if (params && params.length > 0) {
-      return params[params.length === 1 ? 0 : 1]
-    }
-    for (const arg of node.arguments) {
-      if (arg.type === "ArrowFunctionExpression" || arg.type === "FunctionExpression") return firstParamType(arg.params)
-    }
-  }
-  return null
-}
-
-// The props generic of a React component type annotation: `FC<P>` / `FunctionComponent<P>`
-// (bare or `React.`-qualified). Returns the `P` node, or null for anything else.
-function propsFromComponentType(idType: t.TSType): t.TSType | null {
-  if (idType.type !== "TSTypeReference") return null
-  const name =
-    idType.typeName.type === "Identifier"
-      ? idType.typeName.name
-      : idType.typeName.type === "TSQualifiedName"
-        ? idType.typeName.right.name
-        : null
-  if (name !== "FC" && name !== "FunctionComponent") return null
-  return typeArgParams(idType, "type")?.[0] ?? null
-}
-
-function firstParamType(params: t.Node[]): t.TSType | null {
-  const p = params[0]
-  if (!p) return null
-  const ann = "typeAnnotation" in p ? p.typeAnnotation : null
-  return ann && ann.type === "TSTypeAnnotation" ? ann.typeAnnotation : null
-}
-
-// Babel 8 renamed the type-argument containers babel 7 exposes as `typeParameters` /
-// `superTypeParameters` (on call, super, and type-reference positions) to `typeArguments` /
-// `superTypeArguments`. Read whichever name the installed major actually emits so the scanner
-// compiles and resolves component props on both 7 and 8. The container keeps its `params`
-// array under either name; the runtime guard also skips `Noop`/empty placeholders.
-function typeArgParams(node: t.Node, position: "type" | "super"): t.TSType[] | null {
-  const keys =
-    position === "super"
-      ? (["superTypeArguments", "superTypeParameters"] as const)
-      : (["typeArguments", "typeParameters"] as const)
-  const record = node as unknown as Record<string, unknown>
-  for (const key of keys) {
-    const container = record[key]
-    if (isTypeArgContainer(container)) return container.params
-  }
-  return null
-}
-
-function isTypeArgContainer(value: unknown): value is { params: t.TSType[] } {
-  return typeof value === "object" && value !== null && "params" in value && Array.isArray(value.params)
-}
-
-// Resolve a TSType to its property members: an inline `{ … }` directly, or a named reference
-// looked up to a same-file interface / type-alias. Unresolvable references (imported, computed)
-// return null so the caller degrades to {}.
-function typeMembers(typeNode: t.TSType, program: t.Program): t.TSTypeElement[] | null {
-  if (typeNode.type === "TSTypeLiteral") return typeNode.members
-  if (typeNode.type === "TSTypeReference" && typeNode.typeName.type === "Identifier") {
-    return findTypeDeclMembers(program, typeNode.typeName.name)
-  }
-  return null
-}
-
-function findTypeDeclMembers(program: t.Program, name: string): t.TSTypeElement[] | null {
-  for (const stmt of program.body) {
-    const decl = stmt.type === "ExportNamedDeclaration" && stmt.declaration ? stmt.declaration : stmt
-    if (decl.type === "TSInterfaceDeclaration" && decl.id.name === name) return decl.body.body
-    if (
-      decl.type === "TSTypeAliasDeclaration" &&
-      decl.id.name === name &&
-      decl.typeAnnotation.type === "TSTypeLiteral"
-    ) {
-      return decl.typeAnnotation.members
-    }
-  }
-  return null
-}
-
-function membersToProps(members: t.TSTypeElement[], content: string): Record<string, PropDefinition> {
-  const props: Record<string, PropDefinition> = {}
-  for (const m of members) {
-    if (m.type !== "TSPropertySignature") continue
-    const name = m.key.type === "Identifier" ? m.key.name : m.key.type === "StringLiteral" ? m.key.value : null
-    if (!name) continue
-    const type =
-      m.typeAnnotation?.type === "TSTypeAnnotation" ? nodeText(content, m.typeAnnotation.typeAnnotation) : "unknown"
-    props[name] = { type, required: !m.optional }
-  }
-  return props
-}
-
-function nodeText(content: string, node: t.Node): string {
-  return typeof node.start === "number" && typeof node.end === "number"
-    ? content.slice(node.start, node.end).trim()
-    : "unknown"
-}
-
-// A node is a component if it is (or wraps) a function/class that returns JSX, or a styled() factory.
-function isComponentNode(node: t.Node): boolean {
-  switch (node.type) {
-    case "FunctionDeclaration":
-    case "FunctionExpression":
-    case "ArrowFunctionExpression":
-      return containsJSX(node.body)
-    case "ClassDeclaration":
-    case "ClassExpression":
-      return containsJSX(node.body)
-    case "CallExpression":
-      return isWrappedComponent(node)
-    case "TaggedTemplateExpression":
-      return isStyledTag(node.tag)
-    default:
-      return false
-  }
-}
-
-// A factory/HOC call that produces a component: `styled(...)`, or any wrapper whose argument is a
-// JSX-returning function — forwardRef, memo, Mantine's factory()/polymorphicFactory(), observer(), etc.
-// Detected by shape (a JSX-returning argument), not a hard-coded wrapper name, so it doesn't rot.
-function isWrappedComponent(call: t.CallExpression): boolean {
-  const callee = call.callee
-  const name =
-    callee.type === "Identifier"
-      ? callee.name
-      : callee.type === "MemberExpression" && callee.property.type === "Identifier"
-        ? callee.property.name
-        : ""
-  if (name === "styled") return true
-  return call.arguments.some(
-    (a) => a.type !== "SpreadElement" && a.type !== "ArgumentPlaceholder" && isComponentNode(a)
-  )
-}
-
-// `styled.div\`...\`` or `styled(Base)\`...\``
-function isStyledTag(tag: t.Expression): boolean {
-  if (tag.type === "MemberExpression" && tag.object.type === "Identifier" && tag.object.name === "styled") return true
-  return tag.type === "CallExpression" && tag.callee.type === "Identifier" && tag.callee.name === "styled"
-}
-
-// Does this subtree contain a JSX element/fragment anywhere?
-function containsJSX(node: t.Node): boolean {
-  if (node.type === "JSXElement" || node.type === "JSXFragment") return true
-  const record = node as unknown as Record<string, unknown>
-  for (const key of Object.keys(record)) {
-    if (key === "loc" || key === "start" || key === "end" || key === "leadingComments" || key === "trailingComments") {
-      continue
-    }
-    const value = record[key]
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        if (isNode(item) && containsJSX(item)) return true
-      }
-    } else if (isNode(value) && containsJSX(value)) {
-      return true
-    }
-  }
-  return false
-}
-
-function isNode(value: unknown): value is t.Node {
-  return typeof value === "object" && value !== null && typeof (value as { type?: unknown }).type === "string"
-}
-
-function classifyComponent(name: string, file: string): ComponentKind {
-  const lowerFile = file.toLowerCase()
-  if (/icon$/i.test(name) || lowerFile.includes("/icons/")) return "icon"
-  if (/(provider|context)$/i.test(name)) return "provider"
-  if (/(screen|page)$/i.test(name) || lowerFile.includes("/pages/") || /(^|\/)page\.[jt]sx$/.test(lowerFile)) {
-    return "screen"
-  }
-  return "component"
-}
-
 function lineOf(node: t.Node): number {
   return node.loc?.start.line ?? 1
 }
 
-function parseProgram(content: string): t.Program | null {
+function parseProgram(content: string): { program: t.Program; recovered: boolean } | null {
   try {
-    return parse(content, { sourceType: "module", plugins: ["typescript", "jsx"], errorRecovery: true }).program
+    const result = parse(content, { sourceType: "module", plugins: ["typescript", "jsx"], errorRecovery: true })
+    return { program: result.program, recovered: result.errors.length > 0 }
   } catch {
     return null
   }
