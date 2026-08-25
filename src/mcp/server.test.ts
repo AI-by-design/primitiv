@@ -52,7 +52,7 @@ async function connect(contractPath: string): Promise<Client> {
 
 async function getComponent(
   c: Client,
-  args: { name: string; context?: string; detail?: "usage" | "relationships" | "all" }
+  args: { name: string; context?: string; detail?: "api" | "usage" | "relationships" | "all" }
 ) {
   const result = await c.callTool({ name: "get_component", arguments: args })
   const content = result.content as Array<{ type: string; text: string }>
@@ -306,6 +306,109 @@ describe("get_component relationship projections", () => {
     expect(Object.keys(all.relationships.usedBy)).toEqual(["forms/Input", "ui/Button"])
   })
 
+  test("api and usage projections normalize their nested facts", async () => {
+    const components = {
+      "ui/Panel": {
+        name: "Panel",
+        displayName: "Panel",
+        source: { adapter: "codebase", file: "ui/Panel.tsx" },
+        props: {
+          zebra: {
+            type: '"a" | "z"',
+            required: false,
+            default: "z",
+            values: ["z", "a", "a"],
+            source: "omit"
+          },
+          count: { type: "0 | 1", required: true, values: [1, 0, 1] },
+          flag: { type: "false | true", required: false, values: [true, false, true] }
+        },
+        usage: {
+          sites: 4,
+          props: {
+            zebra: ["z", "a", "z"],
+            flag: [true, false, true]
+          },
+          truncatedProps: ["zebra", "flag", "zebra"]
+        }
+      }
+    } as unknown as PrimitivContract["components"]
+    const c = await connect(writeContract({ components, componentNameIndex: { Panel: ["ui/Panel"] } }))
+
+    const api = JSON.parse((await getComponent(c, { name: "Panel", detail: "api" })).text)
+    expect(api.api).toEqual({
+      propCount: 3,
+      propNames: ["count", "flag", "zebra"],
+      props: {
+        count: { type: "0 | 1", required: true, values: [0, 1] },
+        flag: { type: "false | true", required: false, values: [false, true] },
+        zebra: { type: '"a" | "z"', required: false, default: "z", values: ["a", "z"] }
+      }
+    })
+    expect(api.api.props.zebra.source).toBeUndefined()
+    expect(api.usage).toBeUndefined()
+    expect(api.relationships).toBeUndefined()
+
+    const usage = JSON.parse((await getComponent(c, { name: "Panel", detail: "usage" })).text)
+    expect(usage.usage).toEqual({
+      sites: 4,
+      props: { flag: [false, true], zebra: ["a", "z"] },
+      truncatedProps: ["flag", "zebra"]
+    })
+    expect(usage.api).toBeUndefined()
+    expect(usage.relationships).toBeUndefined()
+
+    const all = JSON.parse((await getComponent(c, { name: "Panel", detail: "all" })).text)
+    expect(all.api).toEqual(api.api)
+    expect(all.usage).toEqual(usage.usage)
+    expect(all.relationships).toEqual({ uses: {}, usedBy: {} })
+  })
+
+  test("detail selectors validate only the facts they expose", async () => {
+    const components = {
+      "ui/Panel": {
+        name: "Panel",
+        source: { adapter: "codebase", file: "ui/Panel.tsx" },
+        // Deliberately malformed API facts. The loose contract boundary keeps this
+        // readable until the API projection is requested.
+        props: { label: { type: "string", required: "sometimes" } },
+        usage: { sites: 2 }
+      },
+      "ui/Card": {
+        name: "Card",
+        source: { adapter: "codebase", file: "ui/Card.tsx" },
+        uses: { "ui/Panel": 1 }
+      }
+    } as unknown as PrimitivContract["components"]
+    const c = await connect(
+      writeContract({ components, componentNameIndex: { Panel: ["ui/Panel"], Card: ["ui/Card"] } })
+    )
+
+    expect((await getComponent(c, { name: "Panel" })).isError).toBe(false)
+    expect((await getComponent(c, { name: "Panel", detail: "usage" })).isError).toBe(false)
+    expect((await getComponent(c, { name: "Panel", detail: "api" })).text).toContain("malformed")
+
+    const malformedUsage = {
+      ...components,
+      "ui/Panel": { ...components["ui/Panel"], props: {}, usage: { sites: 0 } }
+    } as unknown as PrimitivContract["components"]
+    await disconnect()
+    const usageClient = await connect(writeContract({ components: malformedUsage }))
+    expect((await getComponent(usageClient, { name: "Panel", detail: "api" })).isError).toBe(false)
+    expect((await getComponent(usageClient, { name: "Panel", detail: "usage" })).text).toContain("malformed")
+
+    const malformedRelationships = {
+      ...malformedUsage,
+      "ui/Card": { ...malformedUsage["ui/Card"], uses: { "ui/Panel": 0 } }
+    } as unknown as PrimitivContract["components"]
+    await disconnect()
+    const relationshipClient = await connect(writeContract({ components: malformedRelationships }))
+    expect((await getComponent(relationshipClient, { name: "Panel", detail: "api" })).isError).toBe(false)
+    expect((await getComponent(relationshipClient, { name: "Panel", detail: "relationships" })).text).toContain(
+      "malformed"
+    )
+  })
+
   test("pre-P0 contracts return zero and empty projections", async () => {
     const c = await connect(
       writeContract({
@@ -317,6 +420,7 @@ describe("get_component relationship projections", () => {
     const payload = JSON.parse((await getComponent(c, { name: "Card", detail: "all" })).text)
     expect(payload.usage).toEqual({ sites: 0 })
     expect(payload.relationships).toEqual({ uses: {}, usedBy: {} })
+    expect(payload.api).toEqual({ propCount: 0, propNames: [] })
   })
 
   test("ambiguity is resolved before projection and never exposes a candidate graph", async () => {
@@ -459,13 +563,49 @@ describe("get_design_context", () => {
     expect(payload.tokens.colors["color-bg"].modes).toEqual({ dark: "#000000" })
   })
 
-  test("the no-argument summary is byte-equivalent with and without relationship facts", async () => {
+  test("components category adds sorted prop names without exposing the full API", async () => {
+    const c = await connect(
+      writeContract({
+        components: {
+          "ui/Panel": {
+            name: "Panel",
+            source: { adapter: "codebase", file: "ui/Panel.tsx" },
+            props: {
+              zebra: { type: "string", required: false },
+              alpha: { type: "boolean", required: true },
+              middle: { type: "number", required: false }
+            }
+          }
+        }
+      })
+    )
+    const result = await c.callTool({ name: "get_design_context", arguments: { category: "components" } })
+    const content = result.content as Array<{ type: string; text: string }>
+    const payload = JSON.parse(content[0].text)
+    expect(payload.components["ui/Panel"].propCount).toBe(3)
+    expect(payload.components["ui/Panel"].propNames).toEqual(["alpha", "middle", "zebra"])
+    expect(payload.components["ui/Panel"].props).toBeUndefined()
+  })
+
+  test("the no-argument summary is byte-equivalent with and without large API, usage, and relationship facts", async () => {
     const generatedAt = new Date().toISOString()
     const baseComponent = {
       name: "Button",
       displayName: "Button",
       source: { adapter: "codebase" as const, file: "ui/Button.tsx" }
     }
+    const props = Object.fromEntries(
+      Array.from({ length: 200 }, (_, index) => [
+        `prop${String(index).padStart(3, "0")}`,
+        { type: '"a" | "b"', required: false, values: ["a", "b"] }
+      ])
+    )
+    const observedProps = Object.fromEntries(
+      Array.from({ length: 200 }, (_, index) => [
+        `prop${String(index).padStart(3, "0")}`,
+        Array.from({ length: 20 }, (__, valueIndex) => valueIndex)
+      ])
+    )
     let c = await connect(writeContract({ generatedAt, components: { "ui/Button": baseComponent } }))
     const before = await c.callTool({ name: "get_design_context", arguments: {} })
     const beforeText = (before.content as Array<{ type: string; text: string }>)[0].text
@@ -474,7 +614,14 @@ describe("get_design_context", () => {
     c = await connect(
       writeContract({
         generatedAt,
-        components: { "ui/Button": { ...baseComponent, uses: { "ui/Icon": 2 }, usage: { sites: 4 } } }
+        components: {
+          "ui/Button": {
+            ...baseComponent,
+            props,
+            uses: { "ui/Icon": 2 },
+            usage: { sites: 4, props: observedProps, truncatedProps: Object.keys(observedProps) }
+          }
+        }
       })
     )
     const after = await c.callTool({ name: "get_design_context", arguments: {} })
