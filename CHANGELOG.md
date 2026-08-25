@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.14.0](https://github.com/AI-by-design/primitiv/compare/v2.13.0...v2.14.0) (2026-08-25)
+
+
+### Features
+
+* capture observed component props ([#130](https://github.com/AI-by-design/primitiv/issues/130)) ([4d3c22e](https://github.com/AI-by-design/primitiv/commit/4d3c22e54463be036ebf8d3463e54c8eb8df2175))
+
 ## [2.13.0](https://github.com/AI-by-design/primitiv/compare/v2.12.0...v2.13.0) (2026-08-25)
 
 
