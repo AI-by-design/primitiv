@@ -355,6 +355,7 @@ export class PrimitivMCPServer {
                 ...(c.kind ? { kind: c.kind } : {}),
                 source: c.source,
                 propCount: Object.keys(c.props ?? {}).length,
+                propNames: Object.keys(c.props ?? {}).sort(compareStrings),
                 ...(c.rationale ? { rationale: c.rationale } : {})
               }
             ])
@@ -405,7 +406,7 @@ export class PrimitivMCPServer {
       "get_component",
       {
         description:
-          "Look up a component by name or id. Read-only, no side effects. Pass context (your current working file or directory) so same-name components resolve by path scope. Returns the component JSON (with its id) when the lookup resolves to exactly one component, or an error listing available names if not found. Relationship facts are opt-in: pass detail: 'usage' for the total statically resolved local JSX sites targeting the component, 'relationships' for sorted outgoing uses and derived incoming usedBy counts, or 'all' for both. These are static source-site counts, never runtime frequency. When several components share the name and neither governance nor scope decides, returns { ambiguous, matches, instruction } — follow the instruction: match each candidate's rationale.when against the user's intent, and if that doesn't decide, ask the user; never pick arbitrarily. Use this when you need implementation details for a known component to reuse it rather than recreate it. For a list of all components, use get_design_context with category 'components' instead.",
+          "Look up a component by name or id. Read-only, no side effects. Pass context (your current working file or directory) so same-name components resolve by path scope. Returns the component JSON (with its id) when the lookup resolves to exactly one component, or an error listing available names if not found. Detail is opt-in: pass 'api' for the component's declared prop contract, 'usage' for static JSX-site counts and observed prop values, 'relationships' for sorted outgoing uses and derived incoming usedBy counts, or 'all' for every projection. These are static source-site facts, never runtime frequency. When several components share the name and neither governance nor scope decides, returns { ambiguous, matches, instruction } — follow the instruction: match each candidate's rationale.when against the user's intent, and if that doesn't decide, ask the user; never pick arbitrarily. Use this when you need implementation details for a known component to reuse it rather than recreate it. For a list of all components, use get_design_context with category 'components' instead.",
         annotations: { readOnlyHint: true },
         inputSchema: {
           name: z.string(),
@@ -611,17 +612,25 @@ export class PrimitivMCPServer {
     }
     if (!opts.detail) return this.json(payload)
 
-    // Relationship leaves stay opaque at contract load for legacy compatibility. Validate
-    // exactly the facts this opt-in MCP response will expose, then trust them internally.
-    const idsToValidate = opts.detail === "usage" ? [opts.id] : Object.keys(this.contract.components)
-    const validated = this.validateRelationshipFacts(idsToValidate)
-    if (!validated.success) return this.err(validated.error)
-    const facts = validated.facts[opts.id]
+    // Contract leaves stay opaque at load for legacy compatibility. Validate exactly the
+    // facts each opt-in projection will expose; malformed unrelated leaves must not make a
+    // narrower selector fail.
+    if (opts.detail === "api" || opts.detail === "all") {
+      const api = this.validateApiFacts(opts.id)
+      if (!api.success) return this.err(api.error)
+      payload.api = projectApiFacts(api.facts)
+    }
 
     if (opts.detail === "usage" || opts.detail === "all") {
-      payload.usage = { sites: facts.usage?.sites ?? 0 }
+      const usage = this.validateUsageFacts(opts.id)
+      if (!usage.success) return this.err(usage.error)
+      payload.usage = projectUsageFacts(usage.facts)
     }
+
     if (opts.detail === "relationships" || opts.detail === "all") {
+      const validated = this.validateRelationshipFacts(Object.keys(this.contract.components))
+      if (!validated.success) return this.err(validated.error)
+      const facts = validated.facts[opts.id]
       const usedBy = this.usedByIndex(validated.facts)
       payload.relationships = {
         uses: sortCountMap(facts.uses ?? {}),
@@ -649,24 +658,128 @@ export class PrimitivMCPServer {
     }
     return { success: true, facts }
   }
+
+  private validateApiFacts(id: string): { success: true; facts: ApiFacts } | { success: false; error: string } {
+    if (!this.contract) return { success: true, facts: {} }
+    const parsed = apiFactsSchema.safeParse(this.contract.components[id])
+    if (!parsed.success) return { success: false, error: invalidApiFacts(id, parsed.error) }
+    return { success: true, facts: parsed.data.props ?? {} }
+  }
+
+  private validateUsageFacts(id: string): { success: true; facts: UsageFacts } | { success: false; error: string } {
+    if (!this.contract) return { success: true, facts: { sites: 0 } }
+    const parsed = usageFactsSchema.safeParse(this.contract.components[id])
+    if (!parsed.success) return { success: false, error: invalidUsageFacts(id, parsed.error) }
+    return { success: true, facts: parsed.data.usage ?? { sites: 0 } }
+  }
 }
 
-const componentDetailSchema = z.enum(["usage", "relationships", "all"])
+const componentDetailSchema = z.enum(["api", "usage", "relationships", "all"])
 type ComponentDetail = z.infer<typeof componentDetailSchema>
 type ComponentResolution = "scope" | "governance.sourceOfTruth"
 
 const relationshipCountSchema = z.number().int().positive()
+const propValueSchema = z.union([z.string(), z.number().finite(), z.boolean()])
+const observedPropValueSchema = z.union([z.string(), z.number().finite(), z.boolean(), z.null()])
+const propDefinitionSchema = z.object({
+  type: z.string(),
+  required: z.boolean(),
+  default: z.string().optional(),
+  values: z.array(propValueSchema).optional()
+})
+const apiFactsSchema = z.looseObject({
+  props: z.record(z.string(), propDefinitionSchema).optional()
+})
+const usageProjectionSchema = z.looseObject({
+  sites: relationshipCountSchema,
+  props: z.record(z.string(), z.array(observedPropValueSchema)).optional(),
+  truncatedProps: z.array(z.string()).optional()
+})
+const usageFactsSchema = z.looseObject({ usage: usageProjectionSchema.optional() })
 const relationshipFactsSchema = z.looseObject({
-  uses: z.record(z.string(), relationshipCountSchema).optional(),
-  usage: z.looseObject({ sites: relationshipCountSchema }).optional()
+  uses: z.record(z.string(), relationshipCountSchema).optional()
 })
 type RelationshipFacts = z.infer<typeof relationshipFactsSchema>
+type ApiFacts = Record<string, z.infer<typeof propDefinitionSchema>>
+type UsageFacts = z.infer<typeof usageProjectionSchema>
+
+function invalidApiFacts(id: string, error: z.ZodError): string {
+  return (
+    `API facts for component '${id}' are malformed (${summarizeValidationIssues(error)}). ` +
+    "Run `primitiv build` to regenerate the contract."
+  )
+}
+
+function invalidUsageFacts(id: string, error: z.ZodError): string {
+  return (
+    `Observed usage facts for component '${id}' are malformed (${summarizeValidationIssues(error)}). ` +
+    "Run `primitiv build` to regenerate the contract."
+  )
+}
 
 function invalidRelationshipFacts(id: string, error: z.ZodError): string {
   return (
     `Relationship facts for component '${id}' are malformed (${summarizeValidationIssues(error)}). ` +
     "Run `primitiv build` to regenerate the contract."
   )
+}
+
+function projectApiFacts(props: ApiFacts): Record<string, unknown> {
+  const projected: Record<string, unknown> = {
+    propCount: Object.keys(props).length,
+    propNames: Object.keys(props).sort(compareStrings)
+  }
+  if (Object.keys(props).length > 0) {
+    projected.props = Object.fromEntries(
+      Object.entries(props)
+        .sort(([a], [b]) => compareStrings(a, b))
+        .map(([name, definition]) => [name, projectPropDefinition(definition)])
+    )
+  }
+  return projected
+}
+
+function projectPropDefinition(definition: z.infer<typeof propDefinitionSchema>): Record<string, unknown> {
+  return {
+    type: definition.type,
+    required: definition.required,
+    ...(definition.default !== undefined ? { default: definition.default } : {}),
+    ...(definition.values !== undefined ? { values: sortPrimitiveValues(definition.values) } : {})
+  }
+}
+
+function projectUsageFacts(usage: UsageFacts): Record<string, unknown> {
+  const projected: Record<string, unknown> = { sites: usage.sites }
+  if (usage.props !== undefined) {
+    projected.props = Object.fromEntries(
+      Object.entries(usage.props)
+        .sort(([a], [b]) => compareStrings(a, b))
+        .map(([name, values]) => [name, sortPrimitiveValues(values)])
+    )
+  }
+  if (usage.truncatedProps !== undefined) {
+    projected.truncatedProps = [...new Set(usage.truncatedProps)].sort(compareStrings)
+  }
+  return projected
+}
+
+function sortPrimitiveValues<T extends string | number | boolean | null>(values: T[]): T[] {
+  const unique = new Map<string, T>()
+  for (const value of values) unique.set(value === null ? "null" : `${typeof value}:${String(value)}`, value)
+  return [...unique.values()].sort(comparePrimitiveValues)
+}
+
+function comparePrimitiveValues(a: string | number | boolean | null, b: string | number | boolean | null): number {
+  if (a === null) return b === null ? 0 : 1
+  if (b === null) return -1
+  const rank = (value: string | number | boolean): number =>
+    typeof value === "boolean" ? 0 : typeof value === "number" ? 1 : 2
+  const aRank = rank(a)
+  const bRank = rank(b)
+  if (aRank !== bRank) return aRank - bRank
+  if (typeof a === "boolean" && typeof b === "boolean") return Number(a) - Number(b)
+  if (typeof a === "number" && typeof b === "number") return a - b
+  return a < b ? -1 : a > b ? 1 : 0
 }
 
 function sortCountMap(counts: Record<string, number>): Record<string, number> {

@@ -111,7 +111,8 @@ describe("init", () => {
     expect(buildComponent.startsWith("---\n")).toBe(true)
     expect(buildComponent).toContain("name: build-component")
     expect(buildComponent).toContain("description:")
-    expect(buildComponent).toContain('detail: "relationships"')
+    expect(buildComponent).toContain('detail: "api"')
+    expect(buildComponent).toContain('`"relationships"` for sorted `uses`')
 
     const setup = fs.readFileSync(path.join(tempDir, ".claude/commands/primitiv-setup.md"), "utf-8")
     expect(setup.startsWith("---\n")).toBe(true)
@@ -147,6 +148,15 @@ describe("init", () => {
 })
 
 describe("writeAgentInstructions idempotency", () => {
+  test("generated instructions describe opt-in component API and observed usage evidence", async () => {
+    await init(tempDir)
+    const contents = fs.readFileSync(path.join(tempDir, "AGENTS.md"), "utf-8")
+
+    expect(contents).toContain('detail: "api"')
+    expect(contents).toContain('`"usage"` for bounded literal values observed at static JSX sites')
+    expect(contents).toContain("never runtime popularity")
+  })
+
   test("second call replaces the Primitiv block without duplicating", async () => {
     await init(tempDir)
     const firstContents = fs.readFileSync(path.join(tempDir, "AGENTS.md"), "utf-8")
@@ -175,7 +185,8 @@ describe("writeAgentInstructions target selection", () => {
     const claude = fs.readFileSync(path.join(tempDir, "CLAUDE.md"), "utf-8")
     expect(claude).toContain("<!-- primitiv -->")
     expect(claude).toContain("## Primitiv — Design System")
-    expect(claude).toContain('detail: "usage" | "relationships" | "all"')
+    expect(claude).toContain('detail: "api"')
+    expect(claude).toContain('`"relationships"` for composition counts')
     expect(claude).not.toContain("@AGENTS.md")
     expect(claude).toContain("# Project notes")
     expect(fs.existsSync(path.join(tempDir, "AGENTS.md"))).toBe(false)
