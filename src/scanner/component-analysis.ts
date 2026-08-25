@@ -48,7 +48,7 @@ export class ComponentAnalyzer {
     for (const pending of context.pendingSites) {
       const binding = lookupBinding(pending.scope, pending.name)
       if (binding !== undefined && binding !== OTHER_BINDING) {
-        this.sites.push({ ownerId: pending.ownerId, reference: binding.reference })
+        this.sites.push({ ownerId: pending.ownerId, reference: binding.reference, props: pending.props })
       }
     }
 
@@ -58,12 +58,14 @@ export class ComponentAnalyzer {
   finish(): ComponentMap {
     const outgoing = new Map<string, Map<string, number>>()
     const usage = new Map<string, number>()
+    const observedProps = new Map<string, Map<string, ObservedPropAccumulator>>()
 
     for (const site of this.sites) {
       const targetId = this.resolveReference(site.reference)
       if (!targetId || !this.components.has(targetId)) continue
 
       usage.set(targetId, (usage.get(targetId) ?? 0) + 1)
+      for (const prop of site.props) addObservedProp(observedProps, targetId, prop)
       if (!site.ownerId) continue
       let ownerUses = outgoing.get(site.ownerId)
       if (!ownerUses) {
@@ -86,7 +88,23 @@ export class ComponentAnalyzer {
         component.uses = Object.fromEntries([...ownerUses.entries()].sort(([a], [b]) => compareStrings(a, b)))
       }
       const sites = usage.get(id)
-      if (sites !== undefined && sites > 0) component.usage = { sites }
+      if (sites !== undefined && sites > 0) {
+        const componentUsage: NonNullable<Component["usage"]> = { sites }
+        const props = observedProps.get(id)
+        if (props && props.size > 0) {
+          componentUsage.props = Object.fromEntries(
+            [...props.entries()]
+              .sort(([a], [b]) => compareStrings(a, b))
+              .map(([name, observed]) => [name, [...observed.values.values()].sort(compareObservedPropValues)])
+          )
+          const truncatedProps = [...props.entries()]
+            .filter(([, observed]) => observed.truncated)
+            .map(([name]) => name)
+            .sort(compareStrings)
+          if (truncatedProps.length > 0) componentUsage.truncatedProps = truncatedProps
+        }
+        component.usage = componentUsage
+      }
       result[id] = component
     }
     return result
@@ -137,6 +155,7 @@ interface ComponentModule {
 
 interface RelationshipSite {
   ownerId?: string
+  props: ObservedProp[]
   reference: ComponentReference
 }
 
@@ -151,6 +170,7 @@ interface Scope {
 interface PendingSite {
   name: string
   ownerId?: string
+  props: ObservedProp[]
   scope: Scope
 }
 
@@ -347,7 +367,12 @@ function visitNode(node: t.Node | null | undefined, scope: Scope, ownerId: strin
       return
     case "JSXOpeningElement":
       if (node.name.type === "JSXIdentifier" && /^[A-Z]/.test(node.name.name)) {
-        ctx.pendingSites.push({ name: node.name.name, ownerId: owner, scope })
+        ctx.pendingSites.push({
+          name: node.name.name,
+          ownerId: owner,
+          props: observedJsxProps(node.attributes),
+          scope
+        })
       }
       visitChildren(node, scope, owner, ctx)
       return
@@ -610,6 +635,19 @@ function firstParamType(params: t.Node[]): t.TSType | null {
 }
 
 type PropLiteral = string | number | boolean
+type ObservedPropValue = PropLiteral | null
+
+interface ObservedProp {
+  name: string
+  value: ObservedPropValue
+}
+
+interface ObservedPropAccumulator {
+  truncated: boolean
+  values: Map<string, ObservedPropValue>
+}
+
+const MAX_OBSERVED_VALUES_PER_PROP = 20
 
 function unwrapLiteralWrapper(node: t.Node): t.Node {
   let current = node
@@ -641,6 +679,81 @@ function primitiveLiteral(node: t.Node): PropLiteral | undefined {
   if (operand.type !== "NumericLiteral") return undefined
   const value = current.operator === "-" ? -operand.value : operand.value
   return finiteNumber(value)
+}
+
+function observedPrimitiveLiteral(node: t.Node): ObservedPropValue | undefined {
+  const current = unwrapLiteralWrapper(node)
+  if (current.type === "NullLiteral") return null
+  if (current.type === "TemplateLiteral" && current.expressions.length === 0 && current.quasis.length === 1) {
+    return current.quasis[0].value.cooked ?? undefined
+  }
+  return primitiveLiteral(current)
+}
+
+function observedJsxProps(attributes: Array<t.JSXAttribute | t.JSXSpreadAttribute>): ObservedProp[] {
+  const props: ObservedProp[] = []
+  for (const attribute of attributes) {
+    if (attribute.type !== "JSXAttribute" || attribute.name.type !== "JSXIdentifier") continue
+    const attributeValue = attribute.value
+    if (attributeValue == null) {
+      props.push({ name: attribute.name.name, value: true })
+      continue
+    }
+    if (attributeValue.type === "StringLiteral") {
+      props.push({ name: attribute.name.name, value: attributeValue.value })
+      continue
+    }
+    if (attributeValue.type !== "JSXExpressionContainer" || attributeValue.expression.type === "JSXEmptyExpression") {
+      continue
+    }
+    const value = observedPrimitiveLiteral(attributeValue.expression)
+    if (value !== undefined) props.push({ name: attribute.name.name, value })
+  }
+  return props
+}
+
+function addObservedProp(
+  observedProps: Map<string, Map<string, ObservedPropAccumulator>>,
+  componentId: string,
+  prop: ObservedProp
+): void {
+  let componentProps = observedProps.get(componentId)
+  if (!componentProps) {
+    componentProps = new Map()
+    observedProps.set(componentId, componentProps)
+  }
+  let observed = componentProps.get(prop.name)
+  if (!observed) {
+    observed = { truncated: false, values: new Map() }
+    componentProps.set(prop.name, observed)
+  }
+
+  const key = observedPropValueKey(prop.value)
+  if (observed.values.has(key)) return
+  if (observed.values.size < MAX_OBSERVED_VALUES_PER_PROP) {
+    observed.values.set(key, prop.value)
+    return
+  }
+
+  observed.truncated = true
+  let greatest: [string, ObservedPropValue] | undefined
+  for (const entry of observed.values) {
+    if (!greatest || compareObservedPropValues(entry[1], greatest[1]) > 0) greatest = entry
+  }
+  if (greatest && compareObservedPropValues(prop.value, greatest[1]) < 0) {
+    observed.values.delete(greatest[0])
+    observed.values.set(key, prop.value)
+  }
+}
+
+function observedPropValueKey(value: ObservedPropValue): string {
+  return value === null ? "null" : `${typeof value}:${String(value)}`
+}
+
+function compareObservedPropValues(a: ObservedPropValue, b: ObservedPropValue): number {
+  if (a === null) return b === null ? 0 : 1
+  if (b === null) return -1
+  return comparePropLiterals(a, b)
 }
 
 function finiteNumber(value: number): number | undefined {
