@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.13.0](https://github.com/AI-by-design/primitiv/compare/v2.12.0...v2.13.0) (2026-08-25)
+
+
+### Features
+
+* resolve imported and composed component props ([#127](https://github.com/AI-by-design/primitiv/issues/127)) ([2f20394](https://github.com/AI-by-design/primitiv/commit/2f203948b55b1d7b46373f94ab76b6a86c4c22ae))
+
 ## [2.12.0](https://github.com/AI-by-design/primitiv/compare/v2.11.0...v2.12.0) (2026-08-24)
 
 
