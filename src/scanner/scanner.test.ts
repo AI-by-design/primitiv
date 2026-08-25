@@ -462,16 +462,48 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>((props, ref) =>
     expect(components.Button?.props).toEqual({ variant: { type: "string", required: true } })
   })
 
-  test("a props type imported from another module degrades to empty (honest, not wrong)", async () => {
+  test("a props type imported from a local .ts module resolves like a local declaration", async () => {
+    writeFixture(
+      "props.ts",
+      `export interface WidgetProps {
+  size?: "sm" | "lg"
+  count: 1 | 2
+  label: string
+}`
+    )
     writeFixture(
       "Widget.tsx",
       `import type { WidgetProps } from "./props"
-export function Widget(props: WidgetProps) {
+export function Widget({ size = "sm", count = 1, label = "widget" }: WidgetProps) {
+  return <div>{size}{count}{label}</div>
+}`
+    )
+    const { components } = await new CodebaseScanner(source()).scan()
+    expect(components.Widget?.props).toEqual({
+      size: { type: '"sm" | "lg"', required: false, values: ["lg", "sm"], default: "sm" },
+      count: { type: "1 | 2", required: true, values: [1, 2], default: "1" },
+      label: { type: "string", required: true, default: "widget" }
+    })
+  })
+
+  test("package and tsconfig-style alias prop imports stay unresolved without dropping components", async () => {
+    writeFixture(
+      "PackageWidget.tsx",
+      `import type { WidgetProps } from "@shared/props"
+export function PackageWidget(props: WidgetProps) {
+  return <div />
+}`
+    )
+    writeFixture(
+      "AliasWidget.tsx",
+      `import type { WidgetProps } from "@/props"
+export function AliasWidget(props: WidgetProps) {
   return <div />
 }`
     )
     const { components } = await new CodebaseScanner(source()).scan()
-    expect(components.Widget?.props).toEqual({})
+    expect(components.PackageWidget?.props).toEqual({})
+    expect(components.AliasWidget?.props).toEqual({})
   })
 })
 

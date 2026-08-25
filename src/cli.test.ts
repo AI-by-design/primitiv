@@ -158,4 +158,48 @@ export function Button({
       fs.rmSync(tempDir, { recursive: true, force: true })
     }
   })
+
+  test("preserves imported prop facts and deterministic output through the CLI", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "primitiv-cli-imported-props-e2e-"))
+    const contractPath = path.join(tempDir, "primitiv.contract.json")
+
+    try {
+      fs.writeFileSync(
+        path.join(tempDir, "button-props.ts"),
+        `export interface ButtonProps {
+  tone?: "quiet" | "loud"
+  count: 0 | 1
+}`
+      )
+      fs.writeFileSync(
+        path.join(tempDir, "Button.tsx"),
+        `import type { ButtonProps } from "./button-props"
+
+export function Button({ tone = "quiet", count }: ButtonProps) {
+  return <button>{tone}{count}</button>
+}`
+      )
+      fs.writeFileSync(
+        path.join(tempDir, "primitiv.config.js"),
+        `module.exports = {
+  sources: { codebase: { root: ".", patterns: ["**/*.ts", "**/*.tsx"], ignore: ["node_modules/**"] } },
+  governance: { sourceOfTruth: "codebase", onConflict: "error" },
+  output: { path: "./primitiv.contract.json" }
+}`
+      )
+
+      execFileSync("bun", [CLI, "build"], { cwd: tempDir, encoding: "utf-8" })
+      const firstContract = JSON.parse(fs.readFileSync(contractPath, "utf-8"))
+      expect(firstContract.components.Button.props).toEqual({
+        tone: { type: '"quiet" | "loud"', required: false, values: ["loud", "quiet"], default: "quiet" },
+        count: { type: "0 | 1", required: true, values: [0, 1] }
+      })
+
+      execFileSync("bun", [CLI, "build"], { cwd: tempDir, encoding: "utf-8" })
+      const secondContract = JSON.parse(fs.readFileSync(contractPath, "utf-8"))
+      expect(secondContract.components).toEqual(firstContract.components)
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
 })

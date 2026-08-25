@@ -73,8 +73,11 @@ export class CodebaseScanner {
         const parsed = parseProgram(content)
         if (parsed) {
           this.extractTSTokens(parsed.program, file, tokens, registry, pending, capture)
-          if ((ext === ".tsx" || ext === ".jsx") && !parsed.recovered) {
-            componentAnalyzer.addModule({ content, file, program: parsed.program })
+          if (!parsed.recovered) {
+            componentAnalyzer.addModule(
+              { content, file, program: parsed.program },
+              { analyzeComponents: ext === ".tsx" || ext === ".jsx" }
+            )
           }
         }
       }
