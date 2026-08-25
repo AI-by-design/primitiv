@@ -361,3 +361,310 @@ export const Ambiguous = wrapper<Props>(
     })
   })
 })
+
+describe("imported and composed component props", () => {
+  test("resolves direct named interfaces, aliases, default declarations, and TS/TSX/index modules", async () => {
+    writeFixture(
+      "types.ts",
+      `export interface NamedProps { label: string; size?: "sm" | "lg" }
+export type AliasProps = { count: 0 | 1 }`
+    )
+    writeFixture("default.tsx", `export default interface DefaultProps { tone?: "quiet" | "loud" }`)
+    writeFixture("folder/index.ts", `export interface FolderProps { active?: boolean }`)
+    writeFixture(
+      "Components.tsx",
+      `import type { NamedProps as RenamedProps, AliasProps } from "./types"
+import type DefaultProps from "./default"
+import type { FolderProps } from "./folder"
+
+export function Named(props: RenamedProps) { return <div /> }
+export const Alias = (props: AliasProps) => <div />
+export const Default = (props: DefaultProps) => <div />
+export const Folder = (props: FolderProps) => <div />`
+    )
+
+    const { components } = await new CodebaseScanner(source()).scan()
+
+    expect(components["Components#Named"]?.props).toEqual({
+      label: { type: "string", required: true },
+      size: { type: '"sm" | "lg"', required: false, values: ["lg", "sm"] }
+    })
+    expect(components["Components#Alias"]?.props).toEqual({
+      count: { type: "0 | 1", required: true, values: [0, 1] }
+    })
+    expect(components["Components#Default"]?.props).toEqual({
+      tone: { type: '"quiet" | "loud"', required: false, values: ["loud", "quiet"] }
+    })
+    expect(components["Components#Folder"]?.props).toEqual({
+      active: { type: "boolean", required: false }
+    })
+  })
+
+  test("resolves local barrels, export-star barrels, and multi-hop barrel chains", async () => {
+    writeFixture("shared/base.ts", `export interface BaseProps { id: string; disabled?: boolean }`)
+    writeFixture("shared/index.ts", `export * from "./base"`)
+    writeFixture(
+      "bridge.ts",
+      `import type { BaseProps } from "./shared"
+export type { BaseProps }`
+    )
+    writeFixture("ui/index.ts", `export { BaseProps as CardProps } from "../bridge"`)
+    writeFixture(
+      "Card.tsx",
+      `import type { CardProps } from "./ui"
+export function Card(props: CardProps) { return <article /> }`
+    )
+
+    const { components } = await new CodebaseScanner(source()).scan()
+    expect(components.Card?.props).toEqual({
+      id: { type: "string", required: true },
+      disabled: { type: "boolean", required: false }
+    })
+  })
+
+  test("merges extensions and intersections, accepts identical duplicates, and handles Pick/Omit", async () => {
+    writeFixture("base.ts", `export interface Base { id: string; tone?: "quiet" | "loud"; count?: 0 | 1 }`)
+    writeFixture(
+      "props.ts",
+      `import type { Base } from "./base"
+export interface Extended extends Base { label: string }
+export type Picked = Pick<Extended, "id" | "label">
+export type Omitted = Omit<Extended, "tone">
+export type Duplicate = { id: string } & { id: string; label?: string }
+export type Conflict = { id: string } & { id: number }`
+    )
+    writeFixture(
+      "Composed.tsx",
+      `import type { Extended, Picked, Omitted, Duplicate, Conflict } from "./props"
+export const Extended = (props: Extended) => <div />
+export const Picked = (props: Picked) => <div />
+export const Omitted = (props: Omitted) => <div />
+export const Duplicate = (props: Duplicate) => <div />
+export const Conflict = (props: Conflict) => <div />`
+    )
+
+    const { components } = await new CodebaseScanner(source()).scan()
+    expect(components["Composed#Extended"]?.props).toEqual({
+      id: { type: "string", required: true },
+      tone: { type: '"quiet" | "loud"', required: false, values: ["loud", "quiet"] },
+      count: { type: "0 | 1", required: false, values: [0, 1] },
+      label: { type: "string", required: true }
+    })
+    expect(components["Composed#Picked"]?.props).toEqual({
+      id: { type: "string", required: true },
+      label: { type: "string", required: true }
+    })
+    expect(components["Composed#Omitted"]?.props).toEqual({
+      id: { type: "string", required: true },
+      count: { type: "0 | 1", required: false, values: [0, 1] },
+      label: { type: "string", required: true }
+    })
+    expect(components["Composed#Duplicate"]?.props).toEqual({
+      id: { type: "string", required: true },
+      label: { type: "string", required: false }
+    })
+    expect(components["Composed#Conflict"]?.props).toEqual({})
+  })
+
+  test("preserves FC and forwardRef wrappers, values, and direct defaults through imported types", async () => {
+    writeFixture("props.ts", `export interface Props { tone?: "quiet" | "loud"; count?: 0 | 1 }`)
+    writeFixture(
+      "Wrapped.tsx",
+      `import { forwardRef, type FC } from "react"
+import type { Props } from "./props"
+export const Badge: FC<Props> = ({ tone = "quiet", count = +1 }) => <span />
+export const Button = forwardRef<HTMLButtonElement, Props>(({ tone = "loud", count = 0 }, ref) => <button ref={ref} />)`
+    )
+
+    const { components } = await new CodebaseScanner(source()).scan()
+    expect(components["Wrapped#Badge"]?.props).toEqual({
+      tone: { type: '"quiet" | "loud"', required: false, values: ["loud", "quiet"], default: "quiet" },
+      count: { type: "0 | 1", required: false, values: [0, 1], default: "1" }
+    })
+    expect(components["Wrapped#Button"]?.props).toEqual({
+      tone: { type: '"quiet" | "loud"', required: false, values: ["loud", "quiet"], default: "loud" },
+      count: { type: "0 | 1", required: false, values: [0, 1], default: "0" }
+    })
+  })
+
+  test("is independent of source/file enumeration order", async () => {
+    const firstRoot = path.join(tempDir, "first")
+    const secondRoot = path.join(tempDir, "second")
+    const fixtures: Array<[string, string]> = [
+      ["types.ts", `export interface Props { label: string; size?: "sm" | "lg" }`],
+      ["Widget.tsx", `import type { Props } from "./types"\nexport function Widget(props: Props) { return <div /> }`]
+    ]
+    for (const [file, content] of fixtures) writeFixture(file, content, firstRoot)
+    for (const [file, content] of [...fixtures].reverse()) writeFixture(file, content, secondRoot)
+
+    const first = await new CodebaseScanner(source(firstRoot, ["**/*.tsx", "**/*.ts"])).scan()
+    const second = await new CodebaseScanner(source(secondRoot, ["**/*.ts", "**/*.tsx"])).scan()
+    expect(first.components).toEqual(second.components)
+  })
+
+  test("treats multiple matching relative modules as ambiguous", async () => {
+    writeFixture("types.ts", `export interface Props { id: string }`)
+    writeFixture("types/index.ts", `export interface Props { id: string }`)
+    writeFixture(
+      "Widget.tsx",
+      `import type { Props } from "./types"
+export function Widget(props: Props) { return <div /> }`
+    )
+
+    const { components } = await new CodebaseScanner(source()).scan()
+    expect(components.Widget?.props).toEqual({})
+  })
+
+  test("rejects explicitly unsupported relative module extensions", async () => {
+    writeFixture("types.js.ts", `export interface Props { id: string }`)
+    writeFixture(
+      "Widget.tsx",
+      `import type { Props } from "./types.js"
+export function Widget(props: Props) { return <div /> }`
+    )
+
+    const { components } = await new CodebaseScanner(source()).scan()
+    expect(components.Widget).toBeDefined()
+    expect(components.Widget?.props).toEqual({})
+  })
+
+  test("does not treat an export-star barrel as a default type re-export", async () => {
+    writeFixture("types.ts", `export default interface Props { id: string }`)
+    writeFixture("index.ts", `export * from "./types"`)
+    writeFixture(
+      "Widget.tsx",
+      `import type Props from "./index"
+export function Widget(props: Props) { return <div /> }`
+    )
+
+    const { components } = await new CodebaseScanner(source()).scan()
+    expect(components.Widget?.props).toEqual({})
+  })
+
+  test("ignores unrelated star exports but propagates nested barrel ambiguity", async () => {
+    writeFixture("good.ts", `export interface Props { id: string }`)
+    writeFixture("unrelated.ts", `export interface OtherProps { label: string }`)
+    writeFixture("valid/index.ts", `export * from "../good"\nexport * from "../unrelated"`)
+    writeFixture("a.ts", `export interface Props { id: string }`)
+    writeFixture("b.ts", `export interface Props { id: number }`)
+    writeFixture("ambiguous/index.ts", `export * from "../a"\nexport * from "../b"`)
+    writeFixture("invalid/index.ts", `export * from "../ambiguous"\nexport * from "../good"`)
+    writeFixture(
+      "Components.tsx",
+      `import type { Props as ValidProps } from "./valid"
+import type { Props as InvalidProps } from "./invalid"
+export function Valid(props: ValidProps) { return <div /> }
+export function Invalid(props: InvalidProps) { return <div /> }`
+    )
+
+    const { components } = await new CodebaseScanner(source()).scan()
+    expect(components["Components#Valid"]?.props).toEqual({ id: { type: "string", required: true } })
+    expect(components["Components#Invalid"]?.props).toEqual({})
+  })
+
+  test("bounds deeply nested declaration graphs without throwing", async () => {
+    const aliases = Array.from({ length: 70 }, (_, index) =>
+      index === 69 ? `type P${index} = { id: string }` : `type P${index} = P${index + 1}`
+    ).join("\n")
+    writeFixture("types.ts", `${aliases}\nexport type Props = P0`)
+    writeFixture(
+      "Widget.tsx",
+      `import type { Props } from "./types"
+export function Widget(props: Props) { return <div /> }`
+    )
+
+    const { components } = await new CodebaseScanner(source()).scan()
+    expect(components.Widget).toBeDefined()
+    expect(components.Widget?.props).toEqual({})
+  })
+
+  test.each([
+    [
+      "missing module",
+      `import type { Props } from "./missing"\nexport function Widget(props: Props) { return <div /> }`,
+      []
+    ],
+    [
+      "missing export",
+      `import type { Props } from "./types"\nexport function Widget(props: Props) { return <div /> }`,
+      [`interface Props { id: string }`]
+    ],
+    [
+      "package import",
+      `import type { Props } from "some-package"\nexport function Widget(props: Props) { return <div /> }`,
+      []
+    ],
+    [
+      "path alias",
+      `import type { Props } from "@/types"\nexport function Widget(props: Props) { return <div /> }`,
+      [`export interface Props { id: string }`]
+    ],
+    [
+      "namespace import",
+      `import * as Types from "./types"\nexport function Widget(props: Types.Props) { return <div /> }`,
+      [`export interface Props { id: string }`]
+    ],
+    [
+      "unsupported utility",
+      `import type { Props } from "./types"\nexport function Widget(props: Props) { return <div /> }`,
+      [`export interface Base { id: string }\nexport type Props = Partial<Base>`]
+    ],
+    [
+      "Pick with a missing key",
+      `import type { Props } from "./types"\nexport function Widget(props: Props) { return <div /> }`,
+      [`export interface Base { id: string }\nexport type Props = Pick<Base, "missing">`]
+    ],
+    [
+      "unsupported generic",
+      `import type { Props } from "./types"\nexport function Widget(props: Props<string>) { return <div /> }`,
+      [`export interface Props<T> { value: T }`]
+    ],
+    [
+      "partial composed failure",
+      `import type { Props } from "./types"\nexport function Widget(props: Props) { return <div /> }`,
+      [`export type Props = { id: string } & Missing`]
+    ],
+    [
+      "unsupported package base",
+      `import type { Props } from "./types"\nexport function Widget(props: Props) { return <div /> }`,
+      [
+        `import type { HTMLAttributes } from "react"\nexport interface Props extends HTMLAttributes<HTMLElement> { id: string }`
+      ]
+    ],
+    [
+      "barrel conflict",
+      `import type { Props } from "./index"\nexport function Widget(props: Props) { return <div /> }`,
+      [
+        `export * from "./a"\nexport * from "./b"`,
+        `export interface Props { id: string }`,
+        `export interface Props { id: number }`
+      ]
+    ],
+    [
+      "cycle",
+      `import type { Props } from "./a"\nexport function Widget(props: Props) { return <div /> }`,
+      [
+        `import type { Props as BProps } from "./b"\nexport type Props = BProps`,
+        `import type { Props as AProps } from "./a"\nexport type Props = AProps`
+      ]
+    ]
+  ] as Array<
+    [string, string, string[]]
+  >)("%s degrades to empty props without dropping the component", async (_name, component, support) => {
+    writeFixture("Widget.tsx", component)
+    if (_name === "barrel conflict") writeFixture("index.ts", support[0])
+    if (_name === "barrel conflict") {
+      writeFixture("a.ts", support[1])
+      writeFixture("b.ts", support[2])
+    } else if (_name === "cycle") {
+      writeFixture("a.ts", support[0])
+      writeFixture("b.ts", support[1])
+    } else {
+      for (const [index, content] of support.entries())
+        writeFixture(index === 0 ? "types.ts" : `support-${index}.ts`, content)
+    }
+    const { components } = await new CodebaseScanner(source()).scan()
+    expect(components.Widget).toBeDefined()
+    expect(components.Widget?.props).toEqual({})
+  })
+})

@@ -2,21 +2,26 @@ import * as path from "node:path"
 import type * as t from "@babel/types"
 import { getBindingIdentifiers, VISITOR_KEYS } from "@babel/types"
 import type { Component, ComponentAnalysisModule, ComponentKind, ComponentMap, PropDefinition } from "../types"
+import { type ResolvedTypeMember, resolveTypeMembers, type TypeResolutionModule } from "./component-type-resolution"
 
 /** Scan-wide component discovery and conservative local JSX relationship analysis. */
 export class ComponentAnalyzer {
-  private components = new Map<string, Component>()
+  private components = new Map<string, ComponentDefinition>()
   private modules = new Map<string, ComponentModule>()
+  private typeModules = new Map<string, TypeResolutionModule>()
   private sites: RelationshipSite[] = []
 
-  addModule(opts: ComponentAnalysisModule): void {
+  addModule(opts: ComponentAnalysisModule, options: { analyzeComponents?: boolean } = {}): void {
     const file = normalizeFile(opts.file)
+    this.typeModules.set(file, { file, content: opts.content, program: opts.program })
+    if (options.analyzeComponents === false) return
+
     const discovered = discoverComponents({ ...opts, file })
     const localComponents = new Map<string, ScopeBinding>()
     const ownerRoots = new WeakMap<t.Node, string>()
 
     for (const definition of discovered.definitions) {
-      this.components.set(definition.id, definition.component)
+      this.components.set(definition.id, definition)
       ownerRoots.set(definition.node, definition.id)
       if (definition.localName) {
         localComponents.set(definition.localName, {
@@ -72,7 +77,10 @@ export class ComponentAnalyzer {
     for (const id of [...this.components.keys()].sort()) {
       const stored = this.components.get(id)
       if (!stored) continue
-      const component: Component = { ...stored }
+      const component: Component = {
+        ...stored.component,
+        props: resolveProps({ modules: this.typeModules, file: stored.file, input: stored.propsInput })
+      }
       const ownerUses = outgoing.get(id)
       if (ownerUses && ownerUses.size > 0) {
         component.uses = Object.fromEntries([...ownerUses.entries()].sort(([a], [b]) => compareStrings(a, b)))
@@ -116,9 +124,11 @@ interface ImportReference {
 
 interface ComponentDefinition {
   id: string
+  file: string
   localName?: string
   node: t.Node
   component: Component
+  propsInput: ResolvedPropsInput | null
 }
 
 interface ComponentModule {
@@ -153,7 +163,7 @@ interface WalkContext {
 
 const OTHER_BINDING = Symbol("other-binding")
 
-function discoverComponents(opts: { content: string; file: string; program: t.Program }): {
+function discoverComponents(opts: { file: string; program: t.Program }): {
   definitions: ComponentDefinition[]
   exports: Map<string, Set<string>>
 } {
@@ -219,9 +229,7 @@ function discoverComponents(opts: { content: string; file: string; program: t.Pr
     } else if (isComponentNode(declaration)) {
       const name = path.posix.basename(opts.file, path.posix.extname(opts.file))
       if (/^[A-Z]/.test(name)) {
-        anonymousDefaults.push(
-          makeDefinition({ content: opts.content, file: opts.file, name, node: declaration, program: opts.program })
-        )
+        anonymousDefaults.push(makeDefinition({ file: opts.file, name, node: declaration }))
       }
     }
   }
@@ -232,14 +240,12 @@ function discoverComponents(opts: { content: string; file: string; program: t.Pr
   for (const [name, candidate] of localInit) {
     if (!requestedLocals.has(name) || !/^[A-Z]/.test(name) || !isComponentNode(candidate.node)) continue
     const definition = makeDefinition({
-      content: opts.content,
       file: opts.file,
       idType: candidate.idType,
       line: candidate.line,
       localName: name,
       name,
-      node: candidate.node,
-      program: opts.program
+      node: candidate.node
     })
     definitions.push(definition)
     idsByLocal.set(name, definition.id)
@@ -257,25 +263,25 @@ function discoverComponents(opts: { content: string; file: string; program: t.Pr
 }
 
 function makeDefinition(opts: {
-  content: string
   file: string
   idType?: t.TSType
   line?: number
   localName?: string
   name: string
   node: t.Node
-  program: t.Program
 }): ComponentDefinition {
   return {
     id: componentId(opts.file, opts.name),
+    file: opts.file,
     localName: opts.localName,
     node: opts.node,
+    propsInput: propsInput(opts.node, opts.idType),
     component: {
       name: opts.name,
       displayName: opts.name,
       kind: classifyComponent(opts.name, opts.file),
       source: { adapter: "codebase", file: opts.file, line: opts.line ?? lineOf(opts.node) },
-      props: resolveProps({ program: opts.program, content: opts.content, node: opts.node, idType: opts.idType })
+      props: {}
     }
   }
 }
@@ -517,15 +523,13 @@ function normalizeForIdMatch(value: string): string {
 }
 
 function resolveProps(opts: {
-  program: t.Program
-  content: string
-  node: t.Node
-  idType?: t.TSType
+  modules: Map<string, TypeResolutionModule>
+  file: string
+  input: ResolvedPropsInput | null
 }): Record<string, PropDefinition> {
-  const resolved = propsInput(opts.node, opts.idType)
-  if (!resolved) return {}
-  const members = typeMembers(resolved.typeNode, opts.program)
-  return members ? membersToProps(members, opts.content, destructuredDefaults(resolved.parameter)) : {}
+  if (!opts.input) return {}
+  const members = resolveTypeMembers({ modules: opts.modules, file: opts.file, typeNode: opts.input.typeNode })
+  return members ? membersToProps(members, destructuredDefaults(opts.input.parameter)) : {}
 }
 
 interface ResolvedPropsInput {
@@ -719,38 +723,13 @@ function isTypeArgContainer(value: unknown): value is { params: t.TSType[] } {
   return typeof value === "object" && value !== null && "params" in value && Array.isArray(value.params)
 }
 
-function typeMembers(typeNode: t.TSType, program: t.Program): t.TSTypeElement[] | null {
-  if (typeNode.type === "TSTypeLiteral") return typeNode.members
-  if (typeNode.type === "TSTypeReference" && typeNode.typeName.type === "Identifier") {
-    return findTypeDeclMembers(program, typeNode.typeName.name)
-  }
-  return null
-}
-
-function findTypeDeclMembers(program: t.Program, name: string): t.TSTypeElement[] | null {
-  for (const statement of program.body) {
-    const declaration =
-      statement.type === "ExportNamedDeclaration" && statement.declaration ? statement.declaration : statement
-    if (declaration.type === "TSInterfaceDeclaration" && declaration.id.name === name) return declaration.body.body
-    if (
-      declaration.type === "TSTypeAliasDeclaration" &&
-      declaration.id.name === name &&
-      declaration.typeAnnotation.type === "TSTypeLiteral"
-    ) {
-      return declaration.typeAnnotation.members
-    }
-  }
-  return null
-}
-
 function membersToProps(
-  members: t.TSTypeElement[],
-  content: string,
+  members: ResolvedTypeMember[],
   defaults: Map<string, PropLiteral>
 ): Record<string, PropDefinition> {
   const props: Record<string, PropDefinition> = {}
-  for (const member of members) {
-    if (member.type !== "TSPropertySignature") continue
+  for (const resolved of members) {
+    const { member, content } = resolved
     const name =
       member.key.type === "Identifier" ? member.key.name : member.key.type === "StringLiteral" ? member.key.value : null
     if (!name) continue

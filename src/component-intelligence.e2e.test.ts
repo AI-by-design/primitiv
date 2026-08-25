@@ -11,14 +11,14 @@ import { verify } from "./verify/verify"
 function writeGraphFixture(root: string): void {
   const files: Record<string, string> = {
     "components/Icon.tsx": `export function Icon() { return <svg /> }`,
-    "components/Button.tsx": `import { Icon } from "./Icon"
-
-interface ButtonProps {
+    "components/Button.types.ts": `export interface ButtonProps {
   size?: "sm" | "md" | "lg"
   disabled?: false | true
   elevation?: 0 | 1 | 2
   label?: string
-}
+}`,
+    "components/Button.tsx": `import { Icon } from "./Icon"
+import type { ButtonProps } from "./Button.types"
 
 export function Button({
   size = "md",
@@ -40,7 +40,7 @@ export function Settings() {
   return <><Toolbar /><Button /></>
 }`,
     "primitiv.config.js": `module.exports = {
-  sources: { codebase: { root: ".", patterns: ["**/*.tsx"], ignore: ["node_modules/**"] } },
+  sources: { codebase: { root: ".", patterns: ["**/*.ts", "**/*.tsx"], ignore: ["node_modules/**"] } },
   governance: { sourceOfTruth: "codebase", onConflict: "warn" },
   output: { path: "./primitiv.contract.json" }
 }`
