@@ -232,9 +232,13 @@ export interface Component {
   // Static source evidence only, never runtime frequency. Omitted when no edges exist.
   uses?: Record<string, number>
   // Statically resolved local JSX sites that target this component. Presence means at
-  // least one site; zero is represented by absence.
+  // least one site; zero is represented by absence. Observed props are bounded static
+  // source evidence from explicit JSX attributes, never runtime-frequency claims.
   usage?: {
     sites: number
+    props?: Record<string, Array<string | number | boolean | null>>
+    // Sorted prop names whose distinct observed values exceeded the retained bound.
+    truncatedProps?: string[]
   }
   rationale?: Rationale
   [key: string]: unknown
