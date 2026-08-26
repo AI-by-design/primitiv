@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.15.0](https://github.com/AI-by-design/primitiv/compare/v2.14.0...v2.15.0) (2026-08-25)
+
+
+### Features
+
+* expose component API evidence through MCP ([#132](https://github.com/AI-by-design/primitiv/issues/132)) ([0af39ea](https://github.com/AI-by-design/primitiv/commit/0af39ea7c9246c39424a59d55040c0dc6aa82d34))
+
 ## [2.14.0](https://github.com/AI-by-design/primitiv/compare/v2.13.0...v2.14.0) (2026-08-25)
 
 
