@@ -64,6 +64,29 @@ describe("component merge (path-qualified identity)", () => {
     expect(contract.componentNameIndex?.Card).toEqual(["Card"])
   })
 
+  test("prototype-like component names remain ordinary lookup keys", () => {
+    const contract = buildWith([
+      {
+        name: "figma",
+        components: {
+          "figma:proto-key": {
+            name: "__proto__",
+            displayName: "__proto__",
+            source: { adapter: "figma" }
+          },
+          "figma:constructor-key": {
+            name: "constructor",
+            displayName: "constructor",
+            source: { adapter: "figma" }
+          }
+        }
+      }
+    ])
+
+    expect(Reflect.get(contract.componentNameIndex ?? {}, "__proto__")).toEqual(["figma:proto-key"])
+    expect(contract.componentNameIndex?.constructor).toEqual(["figma:constructor-key"])
+  })
+
   test("relationship facts survive construction and serialization without creating a conflict", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "primitiv-contract-relationships-"))
     const outputPath = path.join(tempDir, "primitiv.contract.json")

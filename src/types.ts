@@ -207,7 +207,8 @@ export interface TokenRedefinition {
 // component's name doesn't match its filename (`components/ui/Card#CardHeader` for a
 // compound sibling; normalized match, so `card-header.tsx` ↔ `CardHeader` and `index.*` ↔
 // folder name). Figma/Storybook components have no fs path; their ids are source-prefixed
-// (`figma:Card`, `storybook:Card`) so they can never collide with path ids.
+// (`figma:<published-key>` for Figma's published identity, `storybook:<display-name>` for the
+// existing Storybook identity) so they can never collide with path ids.
 export interface ComponentMap {
   [id: string]: Component
 }
@@ -219,6 +220,8 @@ export interface Component {
   // The bare export name (`Card`) — what humans and agents call it. The map key is the
   // qualified id; lookups by name go through the contract's componentNameIndex.
   displayName?: string
+  // Optional source-provided description (for example, a published Figma component description).
+  description?: string
   // What the AST scanner judged this export to be. Reusable UI = "component";
   // screens/providers/icons are tagged (not dropped) so consumers can filter noise.
   kind?: ComponentKind
@@ -245,11 +248,18 @@ export interface Component {
 }
 
 export interface PropDefinition {
-  type: string
-  required: boolean
+  type?: string
+  required?: boolean
   default?: string
   // Complete finite literal values declared by the prop type, preserving primitive types.
   values?: Array<string | number | boolean>
+  // Source-neutral category for evidence that does not map cleanly to a language type.
+  kind?: "boolean" | "text" | "variant" | "instance-swap"
+  // Recommended instance-swap targets; unlike `values`, these are not an exhaustive domain.
+  preferredValues?: Array<{
+    type: "component" | "component-set"
+    key: string
+  }>
 }
 
 export interface Conflict {

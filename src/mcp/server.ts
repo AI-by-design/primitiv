@@ -353,7 +353,7 @@ export class PrimitivMCPServer {
                 id,
                 displayName: c.displayName ?? c.name,
                 ...(c.kind ? { kind: c.kind } : {}),
-                source: c.source,
+                source: projectCompactSource(c.source),
                 propCount: Object.keys(c.props ?? {}).length,
                 propNames: Object.keys(c.props ?? {}).sort(compareStrings),
                 ...(c.rationale ? { rationale: c.rationale } : {})
@@ -663,7 +663,21 @@ export class PrimitivMCPServer {
     if (!this.contract) return { success: true, facts: {} }
     const parsed = apiFactsSchema.safeParse(this.contract.components[id])
     if (!parsed.success) return { success: false, error: invalidApiFacts(id, parsed.error) }
-    return { success: true, facts: parsed.data.props ?? {} }
+    const rawProps = parsed.data.props
+    if (rawProps === undefined) return { success: true, facts: {} }
+    if (!rawProps || typeof rawProps !== "object" || Array.isArray(rawProps)) {
+      return {
+        success: false,
+        error: `API facts for component '${id}' are malformed (props: expected a property map). Run \`primitiv build\` to regenerate the contract.`
+      }
+    }
+    const facts: ApiFacts = Object.create(null) as ApiFacts
+    for (const name of Object.keys(rawProps).sort(compareStrings)) {
+      const definition = propDefinitionSchema.safeParse((rawProps as Record<string, unknown>)[name])
+      if (!definition.success) return { success: false, error: invalidApiFacts(id, definition.error) }
+      facts[name] = definition.data
+    }
+    return { success: true, facts }
   }
 
   private validateUsageFacts(id: string): { success: true; facts: UsageFacts } | { success: false; error: string } {
@@ -682,13 +696,24 @@ const relationshipCountSchema = z.number().int().positive()
 const propValueSchema = z.union([z.string(), z.number().finite(), z.boolean()])
 const observedPropValueSchema = z.union([z.string(), z.number().finite(), z.boolean(), z.null()])
 const propDefinitionSchema = z.object({
-  type: z.string(),
-  required: z.boolean(),
+  type: z.string().optional(),
+  required: z.boolean().optional(),
   default: z.string().optional(),
-  values: z.array(propValueSchema).optional()
+  values: z.array(propValueSchema).optional(),
+  kind: z.enum(["boolean", "text", "variant", "instance-swap"]).optional(),
+  preferredValues: z
+    .array(
+      z.object({
+        type: z.enum(["component", "component-set"]),
+        key: z.string().min(1)
+      })
+    )
+    .optional()
 })
 const apiFactsSchema = z.looseObject({
-  props: z.record(z.string(), propDefinitionSchema).optional()
+  // Parse each own key manually in validateApiFacts: z.record drops an own `__proto__`
+  // property, but Figma property names are opaque data and must survive byte-for-byte.
+  props: z.unknown().optional()
 })
 const usageProjectionSchema = z.looseObject({
   sites: relationshipCountSchema,
@@ -741,10 +766,30 @@ function projectApiFacts(props: ApiFacts): Record<string, unknown> {
 
 function projectPropDefinition(definition: z.infer<typeof propDefinitionSchema>): Record<string, unknown> {
   return {
-    type: definition.type,
-    required: definition.required,
+    ...(definition.type !== undefined ? { type: definition.type } : {}),
+    ...(definition.required !== undefined ? { required: definition.required } : {}),
     ...(definition.default !== undefined ? { default: definition.default } : {}),
-    ...(definition.values !== undefined ? { values: sortPrimitiveValues(definition.values) } : {})
+    ...(definition.values !== undefined ? { values: sortPrimitiveValues(definition.values) } : {}),
+    ...(definition.kind !== undefined ? { kind: definition.kind } : {}),
+    ...(definition.preferredValues !== undefined
+      ? { preferredValues: sortPreferredValues(definition.preferredValues) }
+      : {})
+  }
+}
+
+function sortPreferredValues(
+  values: Array<{ type: "component" | "component-set"; key: string }>
+): Array<{ type: "component" | "component-set"; key: string }> {
+  const unique = new Map<string, { type: "component" | "component-set"; key: string }>()
+  for (const value of values) unique.set(`${value.type}\u0000${value.key}`, value)
+  return [...unique.values()].sort((a, b) => compareStrings(a.type, b.type) || compareStrings(a.key, b.key))
+}
+
+function projectCompactSource(source: Component["source"]): Record<string, unknown> {
+  return {
+    adapter: source.adapter,
+    ...(source.file !== undefined ? { file: source.file } : {}),
+    ...(source.line !== undefined ? { line: source.line } : {})
   }
 }
 

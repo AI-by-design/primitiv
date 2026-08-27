@@ -587,6 +587,65 @@ describe("get_design_context", () => {
     expect(payload.components["ui/Panel"].props).toBeUndefined()
   })
 
+  test("components category strips source metadata while get_component retains full provenance", async () => {
+    const figmaProps = JSON.parse(`{
+      "Tone": { "kind": "variant", "values": ["Secondary", "Primary", "Primary"] },
+      "Icon": {
+        "kind": "instance-swap",
+        "preferredValues": [
+          { "type": "component-set", "key": "set-key" },
+          { "type": "component", "key": "component-key" },
+          { "type": "component", "key": "component-key" }
+        ]
+      },
+      "__proto__": { "kind": "text", "type": "string", "default": "safe" }
+    }`)
+    const c = await connect(
+      writeContract({
+        components: {
+          "figma:button-set-key": {
+            name: "Button",
+            displayName: "Button",
+            description: "A published button component",
+            source: {
+              adapter: "figma",
+              metadata: {
+                assetKey: "button-set-key",
+                assetType: "component-set",
+                fileKey: "file-key",
+                nodeId: "42:1"
+              }
+            },
+            props: figmaProps
+          }
+        }
+      })
+    )
+
+    const compactResult = await c.callTool({ name: "get_design_context", arguments: { category: "components" } })
+    const compact = JSON.parse((compactResult.content as Array<{ type: string; text: string }>)[0].text)
+    expect(compact.components["figma:button-set-key"].source).toEqual({ adapter: "figma" })
+
+    const full = JSON.parse((await getComponent(c, { name: "figma:button-set-key", detail: "api" })).text)
+    expect(full.description).toBe("A published button component")
+    expect(full.source.metadata).toEqual({
+      assetKey: "button-set-key",
+      assetType: "component-set",
+      fileKey: "file-key",
+      nodeId: "42:1"
+    })
+    expect(full.api.props.Tone).toEqual({ kind: "variant", values: ["Primary", "Secondary"] })
+    expect(full.api.props.Icon).toEqual({
+      kind: "instance-swap",
+      preferredValues: [
+        { type: "component", key: "component-key" },
+        { type: "component-set", key: "set-key" }
+      ]
+    })
+    expect(full.api.propNames).toEqual(["Icon", "Tone", "__proto__"])
+    expect(Reflect.get(full.api.props, "__proto__")).toEqual({ kind: "text", type: "string", default: "safe" })
+  })
+
   test("the no-argument summary is byte-equivalent with and without large API, usage, and relationship facts", async () => {
     const generatedAt = new Date().toISOString()
     const baseComponent = {
