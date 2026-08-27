@@ -104,6 +104,15 @@ describe("parseArgTypes", () => {
     expect(result.onClick).toBeDefined()
   })
 
+  test("keeps prototype-like arg names as inert own keys", () => {
+    const result = parseArgTypes(`export default { argTypes: { __proto__: { control: "text" } } }`)
+
+    expect(Object.getPrototypeOf(result)).toBeNull()
+    expect(Object.hasOwn(result, "__proto__")).toBe(true)
+    expect(result.__proto__).toEqual({ type: "string", required: false })
+    expect(({} as { type?: string }).type).toBeUndefined()
+  })
+
   test("unterminated argTypes block returns empty", () => {
     const source = `const meta = { argTypes: { broken: { control: "text" } `
     expect(parseArgTypes(source)).toEqual({})

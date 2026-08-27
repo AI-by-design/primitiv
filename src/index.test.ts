@@ -76,6 +76,26 @@ describe("loadConfig — boundary validation", () => {
     expect(config.experimental).toEqual({ future: true })
   })
 
+  test("resolves a configured Storybook sourceRoot relative to the config", () => {
+    writeConfig(`module.exports = {
+  sources: { storybook: { url: "http://localhost:6006", sourceRoot: "./stories" } },
+  governance: { sourceOfTruth: "storybook", onConflict: "warn" },
+  output: { path: "./primitiv.contract.json" }
+}`)
+
+    expect(loadConfig(undefined, tempDir).sources.storybook?.sourceRoot).toBe(path.join(tempDir, "stories"))
+  })
+
+  test("rejects a non-string Storybook sourceRoot at the config boundary", () => {
+    writeConfig(`module.exports = {
+  sources: { storybook: { url: "http://localhost:6006", sourceRoot: 42 } },
+  governance: { sourceOfTruth: "storybook", onConflict: "warn" },
+  output: { path: "./primitiv.contract.json" }
+}`)
+
+    expect(() => loadConfig(undefined, tempDir)).toThrow(/sources\.storybook\.sourceRoot/)
+  })
+
   test("rejects empty Figma mapping keys and values before they can erase or wildcard names", () => {
     writeConfig(`module.exports = {
   sources: {
