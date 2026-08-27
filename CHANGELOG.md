@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.16.0](https://github.com/AI-by-design/primitiv/compare/v2.15.0...v2.16.0) (2026-08-27)
+
+
+### Features
+
+* extract Figma component API evidence ([#134](https://github.com/AI-by-design/primitiv/issues/134)) ([b334797](https://github.com/AI-by-design/primitiv/commit/b33479719f31b1c4bc07dc77f0ec915cc75d82cb))
+
 ## [2.15.0](https://github.com/AI-by-design/primitiv/compare/v2.14.0...v2.15.0) (2026-08-25)
 
 
