@@ -192,23 +192,23 @@ export class ContractBuilder {
     sources: Array<{ name: string; tokens: TokenMap; components: ComponentMap }>,
     conflicts: Conflict[]
   ): { components: ComponentMap; nameIndex: Record<string, string[]> } {
-    const merged: ComponentMap = {}
+    const merged: ComponentMap = Object.create(null) as ComponentMap
 
     for (const source of sources) {
       for (const [id, component] of Object.entries(source.components)) {
         // Ids are unique by construction (path-qualified for codebase, source-prefixed for
         // figma/storybook), so same-name components coexist instead of overwriting each
         // other. A taken key is a true duplicate — keep the first, mirroring the token path.
-        if (!merged[id]) merged[id] = component
+        if (!(id in merged)) merged[id] = component
       }
     }
 
     // The lookup bridge from the bare names agents know to the qualified ids. Sorted for
     // deterministic contract output across rebuilds.
-    const nameIndex: Record<string, string[]> = {}
+    const nameIndex: Record<string, string[]> = Object.create(null) as Record<string, string[]>
     for (const [id, component] of Object.entries(merged)) {
       const name = component.displayName ?? component.name
-      if (!nameIndex[name]) nameIndex[name] = []
+      if (!(name in nameIndex)) nameIndex[name] = []
       nameIndex[name].push(id)
     }
     for (const ids of Object.values(nameIndex)) ids.sort()

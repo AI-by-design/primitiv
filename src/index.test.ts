@@ -266,6 +266,40 @@ describe("package root — public type surface", () => {
     expect(props.legacy.default).toBeUndefined()
   })
 
+  test("PropDefinition accepts partial source evidence and preserves it through serialization", () => {
+    const figmaProps: Record<string, PropDefinition> = {
+      Tone: {
+        kind: "variant",
+        values: ["Primary", "Secondary"]
+      },
+      Icon: {
+        kind: "instance-swap",
+        preferredValues: [
+          { type: "component-set", key: "set-key" },
+          { type: "component", key: "component-key" }
+        ]
+      }
+    }
+    const component: Component = {
+      name: "Button",
+      displayName: "Button",
+      description: "A published button component",
+      source: {
+        adapter: "figma",
+        metadata: { assetKey: "button-set-key", assetType: "component-set" }
+      },
+      props: figmaProps
+    }
+
+    const roundTripped = JSON.parse(JSON.stringify(component)) as Component
+    expect(roundTripped.description).toBe(component.description)
+    expect(roundTripped.props?.Tone).toEqual({ kind: "variant", values: ["Primary", "Secondary"] })
+    expect(roundTripped.props?.Icon?.preferredValues).toEqual([
+      { type: "component-set", key: "set-key" },
+      { type: "component", key: "component-key" }
+    ])
+  })
+
   test("valuesEquivalent is importable from the root with its conservative comparison behavior", () => {
     expect(valuesEquivalent("#fff", "#ffffff", "colors")).toBe(true)
     expect(valuesEquivalent("#fff", "#eeeeee", "colors")).toBe(false)
@@ -380,6 +414,9 @@ describe("build — codebase and Figma integration", () => {
       }
 
       if (url.endsWith("/files/demo-file/components")) return Response.json({ meta: { components: [] } })
+      if (url.endsWith("/files/demo-file/component_sets")) {
+        return Response.json({ meta: { component_sets: [] } })
+      }
       return new Response("Not found", { status: 404, statusText: "Not Found" })
     }) as typeof fetch
 
@@ -412,7 +449,8 @@ describe("build — codebase and Figma integration", () => {
       expect(requests).toEqual(
         expect.arrayContaining([
           "https://api.figma.com/v1/files/demo-file/variables/local",
-          "https://api.figma.com/v1/files/demo-file/components"
+          "https://api.figma.com/v1/files/demo-file/components",
+          "https://api.figma.com/v1/files/demo-file/component_sets"
         ])
       )
     } finally {

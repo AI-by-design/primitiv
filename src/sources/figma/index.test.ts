@@ -32,10 +32,12 @@ describe("FigmaAdapter — durable identity capture", () => {
     }
     const server = Bun.serve({
       port: 0,
-      fetch: (req) =>
-        new URL(req.url).pathname.endsWith("/variables/local")
-          ? Response.json(variablesResponse)
-          : Response.json({ meta: { components: [] } })
+      fetch: (req) => {
+        const pathname = new URL(req.url).pathname
+        if (pathname.endsWith("/variables/local")) return Response.json(variablesResponse)
+        if (pathname.endsWith("/component_sets")) return Response.json({ meta: { component_sets: [] } })
+        return Response.json({ meta: { components: [] } })
+      }
     })
     try {
       const adapter = new FigmaAdapter({ token: "test-token", fileId: "file123" })
@@ -55,20 +57,15 @@ describe("FigmaAdapter — durable identity capture", () => {
 })
 
 describe("FigmaAdapter — error sanitization", () => {
-  test("an API error message carries the status but never the response body", async () => {
+  test("a 403 names the required read scopes but never includes the response body", async () => {
     // The thrown message ends up persisted in the contract's sourceStatuses, which gets
     // committed and fed to LLMs — a leaked response body (or echoed token) is a security
     // bug, not a formatting choice.
-    const server = Bun.serve({
-      port: 0,
-      fetch: () => new Response("SECRET-BODY-DO-NOT-PERSIST", { status: 403, statusText: "Forbidden" })
-    })
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response("SECRET-BODY-DO-NOT-PERSIST", { status: 403, statusText: "Forbidden" })) as typeof fetch
     try {
       const adapter = new FigmaAdapter({ token: "test-token", fileId: "file123" })
-      // baseUrl is a compile-time-private implementation field; overriding it is the only
-      // way to point the adapter at a stub without adding config surface just for tests.
-      ;(adapter as unknown as { baseUrl: string }).baseUrl = `http://localhost:${server.port}`
-
       let message = ""
       try {
         await adapter.scan()
@@ -76,9 +73,60 @@ describe("FigmaAdapter — error sanitization", () => {
         message = err instanceof Error ? err.message : String(err)
       }
       expect(message).toContain("403")
+      expect(message).toContain("library_content:read")
+      expect(message).toContain("file_content:read")
       expect(message).not.toContain("SECRET-BODY-DO-NOT-PERSIST")
     } finally {
-      server.stop(true)
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("a 429 preserves only valid Retry-After guidance", async () => {
+    const originalFetch = globalThis.fetch
+    try {
+      for (const [header, expected] of [
+        ["120", "Retry after 120 seconds."],
+        ["Thu, 27 Aug 2026 12:00:00 GMT", "Retry after Thu, 27 Aug 2026 12:00:00 GMT."],
+        ["Thu, 31 Feb 2026 12:00:00 GMT", "Wait before trying again."],
+        ["server-secret", "Wait before trying again."]
+      ] as const) {
+        globalThis.fetch = (async () =>
+          new Response("SECRET-BODY-DO-NOT-PERSIST", {
+            status: 429,
+            statusText: "Too Many Requests",
+            headers: { "Retry-After": header }
+          })) as typeof fetch
+        let message = ""
+        try {
+          await new FigmaAdapter({ token: "test-token", fileId: "file123" }).scan()
+        } catch (err) {
+          message = err instanceof Error ? err.message : String(err)
+        }
+        expect(message).toContain(expected)
+        expect(message).not.toContain("SECRET-BODY-DO-NOT-PERSIST")
+        if (expected === "Wait before trying again.") expect(message).not.toContain(header)
+      }
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("a 404 explains that published-library discovery requires the main-file key", async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response("SECRET-BODY-DO-NOT-PERSIST", { status: 404, statusText: "Not Found" })) as typeof fetch
+    try {
+      let message = ""
+      try {
+        await new FigmaAdapter({ token: "test-token", fileId: "branch-key" }).scan()
+      } catch (err) {
+        message = err instanceof Error ? err.message : String(err)
+      }
+      expect(message).toContain("published main-file key")
+      expect(message).toContain("branch keys")
+      expect(message).not.toContain("SECRET-BODY-DO-NOT-PERSIST")
+    } finally {
+      globalThis.fetch = originalFetch
     }
   })
 })
@@ -118,6 +166,7 @@ describe("FigmaAdapter — FLOAT and request handling", () => {
           }
         })
       }
+      if (url.endsWith("/component_sets")) return Response.json({ meta: { component_sets: [] } })
       return Response.json({ meta: { components: [] } })
     }) as typeof fetch
 
@@ -131,7 +180,7 @@ describe("FigmaAdapter — FLOAT and request handling", () => {
     }
   })
 
-  test("times out both Figma endpoints with a sanitised error", async () => {
+  test("times out all concurrently requested Figma endpoints with a sanitised error", async () => {
     const originalFetch = globalThis.fetch
     const requests: Array<{ url: string; signal?: AbortSignal | null }> = []
     globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
@@ -147,14 +196,16 @@ describe("FigmaAdapter — FLOAT and request handling", () => {
         "Figma API request timed out after 10ms. Check your network connection and try again."
       )
       // Promise.all rejects as soon as the first endpoint times out; give the concurrently
-      // started second request its own timeout turn before asserting both signals fired.
+      // started requests their own timeout turn before asserting every signal fired.
       await new Promise<void>((resolve) => setTimeout(resolve, 20))
       expect(requests.map((request) => request.url)).toEqual(
         expect.arrayContaining([
           "https://api.figma.com/v1/files/file123/variables/local",
-          "https://api.figma.com/v1/files/file123/components"
+          "https://api.figma.com/v1/files/file123/components",
+          "https://api.figma.com/v1/files/file123/component_sets"
         ])
       )
+      expect(requests).toHaveLength(3)
       expect(requests.every((request) => request.signal?.aborted)).toBe(true)
     } finally {
       globalThis.fetch = originalFetch
@@ -196,6 +247,7 @@ describe("FigmaAdapter — theme modes", () => {
           }
         })
       }
+      if (url.endsWith("/component_sets")) return Response.json({ meta: { component_sets: [] } })
       return Response.json({ meta: { components: [] } })
     }) as typeof fetch
 
@@ -252,6 +304,7 @@ describe("FigmaAdapter — theme modes", () => {
           }
         })
       }
+      if (url.endsWith("/component_sets")) return Response.json({ meta: { component_sets: [] } })
       return Response.json({ meta: { components: [] } })
     }) as typeof fetch
 
@@ -285,6 +338,7 @@ describe("FigmaAdapter — explicit mapping safety", () => {
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const url = input instanceof Request ? input.url : input.toString()
       if (url.endsWith("/variables/local")) return Response.json({ meta: { variables, variableCollections } })
+      if (url.endsWith("/component_sets")) return Response.json({ meta: { component_sets: [] } })
       return Response.json({ meta: { components: [] } })
     }) as typeof fetch
     return () => {
@@ -392,6 +446,148 @@ describe("FigmaAdapter — explicit mapping safety", () => {
       expect(tokens.spacing["spacing-md"]?.value).toBe("16")
     } finally {
       restore()
+    }
+  })
+})
+
+describe("FigmaAdapter — published component evidence", () => {
+  test("assembles component sets and standalone components from targeted nodes", async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString())
+      if (url.pathname.endsWith("/variables/local")) {
+        return Response.json({ meta: { variables: {}, variableCollections: {} } })
+      }
+      if (url.pathname.endsWith("/components")) {
+        return Response.json({
+          meta: {
+            components: [
+              { key: "child-key", node_id: "2:2", name: "Button, Size=Small", file_key: "file123" },
+              { key: "standalone-key", node_id: "3:3", name: "Icon", file_key: "file123" }
+            ]
+          }
+        })
+      }
+      if (url.pathname.endsWith("/component_sets")) {
+        return Response.json({
+          meta: {
+            component_sets: [
+              {
+                key: "set-key",
+                node_id: "2:1",
+                name: "Button",
+                description: "A button",
+                updated_at: "2026-08-26T00:00:00Z",
+                file_key: "file123"
+              }
+            ]
+          }
+        })
+      }
+      return Response.json({
+        name: "Test file",
+        version: "snapshot-1",
+        lastModified: "2026-08-26T01:00:00Z",
+        nodes: {
+          "2:1": {
+            document: {
+              id: "2:1",
+              type: "COMPONENT_SET",
+              componentPropertyDefinitions: {
+                Size: { type: "VARIANT", variantOptions: ["Large", "Small", "Small"], defaultValue: "Small" },
+                Disabled: { type: "BOOLEAN", defaultValue: false },
+                Label: { type: "TEXT", defaultValue: "Continue" },
+                Swap: {
+                  type: "INSTANCE_SWAP",
+                  defaultValue: "3:3",
+                  preferredValues: [
+                    { type: "COMPONENT", key: "standalone-key" },
+                    { type: "COMPONENT_SET", key: "set-key" },
+                    { type: "COMPONENT", key: "standalone-key" }
+                  ]
+                },
+                Unsupported: { type: "FUTURE_TYPE", defaultValue: "ignored" }
+              }
+            }
+          },
+          "2:2": {
+            document: { id: "2:2", type: "COMPONENT", children: [{ id: "visual-tree" }] },
+            components: { "2:2": { key: "child-key", componentSetId: "2:1" } }
+          },
+          "3:3": {
+            document: { id: "3:3", type: "COMPONENT", fills: [{ type: "SOLID" }] },
+            components: { "3:3": { key: "standalone-key" } }
+          }
+        }
+      })
+    }) as typeof fetch
+
+    try {
+      const result = await new FigmaAdapter({ token: "test-token", fileId: "file123" }).scan()
+      expect(Object.keys(result.components)).toEqual(["figma:set-key", "figma:standalone-key"])
+      expect(result.components["figma:child-key"]).toBeUndefined()
+      expect(result.components["figma:set-key"]).toMatchObject({
+        name: "Button",
+        description: "A button",
+        props: {
+          Size: { kind: "variant", values: ["Large", "Small"], default: "Small" },
+          Disabled: { type: "boolean", kind: "boolean", default: "false" },
+          Label: { type: "string", kind: "text", default: "Continue" },
+          Swap: {
+            kind: "instance-swap",
+            default: "standalone-key",
+            preferredValues: [
+              { type: "component", key: "standalone-key" },
+              { type: "component-set", key: "set-key" }
+            ]
+          }
+        },
+        source: {
+          metadata: {
+            assetType: "component-set",
+            assetKey: "set-key",
+            nodeId: "2:1",
+            fileKey: "file123",
+            fileName: "Test file",
+            fileVersion: "snapshot-1",
+            fileLastModified: "2026-08-26T01:00:00Z",
+            publishedUpdatedAt: "2026-08-26T00:00:00Z"
+          }
+        }
+      })
+      expect(JSON.stringify(result.components)).not.toContain("visual-tree")
+      expect(JSON.stringify(result.components)).not.toContain("SOLID")
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("fails when a successful node response omits required published evidence", async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString())
+      if (url.pathname.endsWith("/variables/local")) {
+        return Response.json({ meta: { variables: {}, variableCollections: {} } })
+      }
+      if (url.pathname.endsWith("/components")) {
+        return Response.json({
+          meta: {
+            components: [{ key: "missing-key", node_id: "9:9", name: "Missing", file_key: "file123" }]
+          }
+        })
+      }
+      if (url.pathname.endsWith("/component_sets")) {
+        return Response.json({ meta: { component_sets: [] } })
+      }
+      return Response.json({ version: "snapshot-1", nodes: { "9:9": null } })
+    }) as typeof fetch
+
+    try {
+      await expect(new FigmaAdapter({ token: "test-token", fileId: "file123" }).scan()).rejects.toThrow(
+        /missing targeted node evidence/i
+      )
+    } finally {
+      globalThis.fetch = originalFetch
     }
   })
 })

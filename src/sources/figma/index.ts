@@ -1,4 +1,13 @@
-import type { ComponentMap, FigmaSource, Source, SourceProvenance, TokenCategory, TokenMap } from "../../types"
+import type {
+  Component,
+  ComponentMap,
+  FigmaSource,
+  PropDefinition,
+  Source,
+  SourceProvenance,
+  TokenCategory,
+  TokenMap
+} from "../../types"
 import { emptyTokenMap } from "../../types"
 
 type FigmaRawValue =
@@ -28,6 +37,11 @@ interface FigmaComponentMeta {
   name?: string
   node_id?: string
   key?: string
+  file_key?: string
+  description?: string
+  component_set_id?: string
+  componentSetId?: string
+  updated_at?: string
 }
 
 interface FigmaVariablesResponse {
@@ -40,8 +54,69 @@ interface FigmaVariablesResponse {
 interface FigmaComponentsResponse {
   meta?: {
     components?: FigmaComponentMeta[]
+    component_sets?: FigmaComponentMeta[]
   }
 }
+
+interface FigmaPropertyDefinition {
+  type?: string
+  defaultValue?: unknown
+  variantOptions?: unknown
+  preferredValues?: unknown
+}
+
+interface FigmaNodeDocument {
+  id?: string
+  type?: string
+  name?: string
+  componentPropertyDefinitions?: Record<string, FigmaPropertyDefinition>
+}
+
+interface FigmaNodeMetadata {
+  key?: string
+  name?: string
+  componentSetId?: string
+  component_set_id?: string
+}
+
+interface FigmaNodeWrapper {
+  document?: FigmaNodeDocument | null
+  components?: Record<string, FigmaNodeMetadata>
+  componentSets?: Record<string, FigmaNodeMetadata>
+}
+
+interface FigmaNodesResponse {
+  name?: string
+  version?: string
+  lastModified?: string
+  nodes?: Record<string, FigmaNodeWrapper | null>
+}
+
+interface PublishedAsset {
+  key: string
+  nodeId: string
+  name: string
+  kind: "component" | "component-set"
+  description?: string
+  updatedAt?: string
+}
+
+interface NodeEvidence {
+  asset: PublishedAsset
+  document: FigmaNodeDocument
+  metadata?: FigmaNodeMetadata
+  componentSetKey?: string
+  componentSetNodeId?: string
+  snapshot?: { fileName?: string; version?: string; lastModified?: string }
+  targetedByNodeId?: Map<string, PublishedAsset>
+}
+
+interface PropertyLookupContext {
+  byKey: Map<string, PublishedAsset>
+  byNodeId: Map<string, PublishedAsset>
+}
+
+const FIGMA_NODE_BATCH_SIZE = 100
 
 export class FigmaAdapter implements Source {
   private baseUrl = "https://api.figma.com/v1"
@@ -78,9 +153,7 @@ export class FigmaAdapter implements Source {
     if (!res.ok) {
       // Status code + statusText only — never the response body. This message ends up in
       // the persisted contract's sourceStatuses, which gets committed and fed to LLMs.
-      throw new Error(
-        `Figma API error (${res.status}): ${res.statusText}. Check your token and fileId in primitiv.config.js.`
-      )
+      throw new Error(`Figma API error (${res.status}): ${res.statusText}. ${figmaErrorGuidance(res)}`)
     }
     return (await res.json()) as T
   }
@@ -178,31 +251,376 @@ export class FigmaAdapter implements Source {
   }
 
   private async extractComponents(): Promise<ComponentMap> {
-    const components: ComponentMap = {}
-    const data = await this.fetchFigma<FigmaComponentsResponse>(`/files/${this.config.fileId}/components`)
-    const entries = data.meta?.components || []
+    // The published lists are discovery only. Component-property definitions and set
+    // membership come from the targeted node responses below.
+    const [componentResponse, componentSetResponse] = await Promise.all([
+      this.fetchFigma<FigmaComponentsResponse>(`/files/${this.config.fileId}/components`),
+      this.fetchFigma<FigmaComponentsResponse>(`/files/${this.config.fileId}/component_sets`)
+    ])
+    const componentEntries = componentResponse.meta?.components
+    const componentSetEntries = componentSetResponse.meta?.component_sets
+    if (!Array.isArray(componentEntries) || !Array.isArray(componentSetEntries)) {
+      throw new Error("Figma published component discovery returned a malformed asset list.")
+    }
+    const discoveredAssets = this.collectPublishedAssets(componentEntries, "component")
+    discoveredAssets.push(...this.collectPublishedAssets(componentSetEntries, "component-set"))
+    const assets: PublishedAsset[] = []
+    const seenAssets = new Map<string, PublishedAsset>()
+    for (const asset of discoveredAssets) {
+      const existing = seenAssets.get(asset.key)
+      if (existing) {
+        if (
+          existing.nodeId !== asset.nodeId ||
+          existing.kind !== asset.kind ||
+          existing.name !== asset.name ||
+          existing.description !== asset.description ||
+          existing.updatedAt !== asset.updatedAt
+        ) {
+          throw new Error(`Figma published asset '${safeIdentity(asset)}' was discovered with conflicting identities.`)
+        }
+        continue
+      }
+      seenAssets.set(asset.key, asset)
+      assets.push(asset)
+    }
 
-    for (const comp of entries) {
-      const name = comp.name
-      if (!name) continue
+    const byKey = new Map<string, PublishedAsset>()
+    const byNodeId = new Map<string, PublishedAsset>()
+    for (const asset of assets) {
+      const existingKey = byKey.get(asset.key)
+      if (existingKey && existingKey.nodeId !== asset.nodeId) {
+        throw new Error(`Figma published asset key '${safeIdentity(asset)}' maps to multiple node IDs.`)
+      }
+      const existingNode = byNodeId.get(asset.nodeId)
+      if (existingNode && existingNode.key !== asset.key) {
+        throw new Error(`Figma node '${asset.nodeId}' maps to multiple published asset keys.`)
+      }
+      byKey.set(asset.key, asset)
+      byNodeId.set(asset.nodeId, asset)
+    }
 
-      // Source-prefixed id: Figma components have no fs path, and the prefix guarantees the
-      // id can never collide with a codebase path id. Name lookups go through displayName.
-      components[`figma:${name}`] = {
-        name,
-        displayName: name,
-        source: {
-          adapter: "figma",
-          metadata: {
-            nodeId: comp.node_id,
-            componentKey: comp.key
-          }
-        },
-        props: {}
+    const sortedAssets = [...assets].sort(comparePublishedAssets)
+    const nodeIds = sortedAssets.map((asset) => asset.nodeId)
+    if (nodeIds.length === 0) return Object.create(null) as ComponentMap
+
+    const evidence = await this.fetchNodeEvidence(sortedAssets)
+    const sets = new Map<string, NodeEvidence>()
+    const components = new Map<string, NodeEvidence>()
+    for (const item of evidence) {
+      if (item.asset.kind === "component-set") sets.set(item.asset.key, item)
+      else components.set(item.asset.key, item)
+    }
+
+    const consumedChildren = new Set<string>()
+    for (const item of components.values()) {
+      if (!item.componentSetNodeId) continue
+      if (!item.componentSetKey || !sets.has(item.componentSetKey)) {
+        throw new Error(
+          `Figma component '${safeIdentity(item.asset)}' claims membership in an unresolved published component set.`
+        )
+      }
+      consumedChildren.add(item.asset.key)
+    }
+
+    const output: ComponentMap = Object.create(null) as ComponentMap
+    for (const item of sets.values()) {
+      output[`figma:${item.asset.key}`] = this.toComponent(item, byKey)
+    }
+    for (const item of components.values()) {
+      if (consumedChildren.has(item.asset.key)) continue
+      output[`figma:${item.asset.key}`] = this.toComponent(item, byKey)
+    }
+    return sortComponentMap(output)
+  }
+
+  private collectPublishedAssets(
+    entries: FigmaComponentMeta[] | undefined,
+    kind: PublishedAsset["kind"]
+  ): PublishedAsset[] {
+    const assets: PublishedAsset[] = []
+    for (const entry of Array.isArray(entries) ? entries : []) {
+      if (!entry || typeof entry !== "object") {
+        throw new Error(`Figma published ${kind} discovery result is malformed.`)
+      }
+      const key = nonEmptyString(entry.key)
+      const nodeId = nonEmptyString(entry.node_id)
+      if (!key || !nodeId) {
+        throw new Error(`Figma published ${kind} discovery result is missing a stable key or node ID.`)
+      }
+      const fileKey = nonEmptyString(entry.file_key)
+      if (!fileKey || fileKey !== this.config.fileId) {
+        throw new Error(`Figma published asset '${key}' reports an invalid file key.`)
+      }
+      assets.push({
+        key,
+        nodeId,
+        name: typeof entry.name === "string" ? entry.name : key,
+        kind,
+        ...(typeof entry.description === "string" ? { description: entry.description } : {}),
+        ...(typeof entry.updated_at === "string" ? { updatedAt: entry.updated_at } : {})
+      })
+    }
+    return assets
+  }
+
+  private async fetchNodeEvidence(assets: PublishedAsset[]): Promise<NodeEvidence[]> {
+    const batches: string[][] = []
+    for (let index = 0; index < assets.length; index += FIGMA_NODE_BATCH_SIZE) {
+      batches.push(assets.slice(index, index + FIGMA_NODE_BATCH_SIZE).map((asset) => asset.nodeId))
+    }
+
+    const responses: FigmaNodesResponse[] = []
+    let pinnedVersion: string | undefined
+    let fileName: string | undefined
+    let lastModified: string | undefined
+    for (let index = 0; index < batches.length; index += 1) {
+      if (index > 0 && !pinnedVersion) {
+        throw new Error("Figma component evidence requires a version when more than one node batch is needed.")
+      }
+      const query = new URLSearchParams({ ids: batches[index].join(","), depth: "1" })
+      if (pinnedVersion) query.set("version", pinnedVersion)
+      const response = await this.fetchFigma<FigmaNodesResponse>(
+        `/files/${this.config.fileId}/nodes?${query.toString()}`
+      )
+      responses.push(response)
+
+      const responseVersion = nonEmptyString(response.version)
+      if (responseVersion !== undefined) {
+        if (pinnedVersion && responseVersion !== pinnedVersion) {
+          throw new Error("Figma component evidence returned conflicting file versions.")
+        }
+        pinnedVersion = responseVersion
+      } else if (index > 0) {
+        throw new Error("Figma component evidence returned no version for a pinned node batch.")
+      }
+      const responseName = nonEmptyString(response.name)
+      if (responseName !== undefined) {
+        if (fileName !== undefined && fileName !== responseName) {
+          throw new Error("Figma component evidence returned conflicting file metadata.")
+        }
+        fileName = responseName
+      }
+      const responseLastModified = nonEmptyString(response.lastModified)
+      if (responseLastModified !== undefined) {
+        if (lastModified !== undefined && lastModified !== responseLastModified) {
+          throw new Error("Figma component evidence returned conflicting file metadata.")
+        }
+        lastModified = responseLastModified
       }
     }
 
-    return components
+    const componentTables = new Map<string, FigmaNodeMetadata>()
+    const componentSetTables = new Map<string, FigmaNodeMetadata>()
+    for (const response of responses) {
+      for (const wrapper of Object.values(response.nodes ?? {})) {
+        if (!wrapper) continue
+        this.mergeNodeMetadata(componentTables, wrapper.components)
+        this.mergeNodeMetadata(componentSetTables, wrapper.componentSets)
+      }
+    }
+
+    const byNodeId = new Map(assets.map((asset) => [asset.nodeId, asset]))
+    const targetedByNodeId = new Map<string, PublishedAsset>()
+    const targetedNodeKeys = new Map<string, string | undefined>()
+    const conflictedTargetedNodes = new Set<string>()
+    for (const [nodeId, metadata] of [...componentTables, ...componentSetTables]) {
+      if (!metadata.key) continue
+      if (conflictedTargetedNodes.has(nodeId)) continue
+      const prior = targetedNodeKeys.get(nodeId)
+      if (prior !== undefined && prior !== metadata.key) targetedNodeKeys.set(nodeId, undefined)
+      else targetedNodeKeys.set(nodeId, metadata.key)
+      if (prior !== undefined && prior !== metadata.key) conflictedTargetedNodes.add(nodeId)
+    }
+    for (const [nodeId, key] of targetedNodeKeys) {
+      const asset = key === undefined ? undefined : byNodeId.get(nodeId)
+      if (asset && asset.key === key) targetedByNodeId.set(nodeId, asset)
+    }
+    const evidence: NodeEvidence[] = []
+    for (const asset of assets) {
+      const wrapper = responses
+        .map((response) => response.nodes?.[asset.nodeId])
+        .find((candidate) => candidate !== undefined)
+      const document = wrapper?.document
+      if (!document)
+        throw new Error(`Figma published asset '${safeIdentity(asset)}' is missing targeted node evidence.`)
+      if (document.id !== asset.nodeId) {
+        throw new Error(`Figma published asset '${safeIdentity(asset)}' returned mismatched node evidence.`)
+      }
+      const expectedType = asset.kind === "component-set" ? "COMPONENT_SET" : "COMPONENT"
+      if (document.type !== expectedType) {
+        throw new Error(`Figma published asset '${safeIdentity(asset)}' returned mismatched node evidence.`)
+      }
+      const metadata =
+        asset.kind === "component" ? componentTables.get(asset.nodeId) : componentSetTables.get(asset.nodeId)
+      if (asset.kind === "component" && (!metadata || metadata.key !== asset.key)) {
+        throw new Error(`Figma published asset '${safeIdentity(asset)}' is missing matching component metadata.`)
+      }
+      if (asset.kind === "component-set" && metadata?.key !== undefined && metadata.key !== asset.key) {
+        throw new Error(`Figma published asset '${safeIdentity(asset)}' returned a mismatched published key.`)
+      }
+
+      let componentSetNodeId: string | undefined
+      let componentSetKey: string | undefined
+      if (asset.kind === "component") {
+        const membership = componentTables.get(asset.nodeId)
+        const claimedSet = nonEmptyString(membership?.componentSetId ?? membership?.component_set_id)
+        if (claimedSet) {
+          const setMetadata = componentSetTables.get(claimedSet)
+          const setAsset = byNodeId.get(claimedSet)
+          if (
+            !setAsset ||
+            setAsset.kind !== "component-set" ||
+            (setMetadata?.key !== undefined && setMetadata.key !== setAsset.key)
+          ) {
+            throw new Error(
+              `Figma component '${safeIdentity(asset)}' claims membership in an unresolved component set.`
+            )
+          }
+          componentSetNodeId = claimedSet
+          componentSetKey = setAsset.key
+        }
+      }
+      evidence.push({ asset, document, metadata, componentSetNodeId, componentSetKey, targetedByNodeId })
+    }
+
+    // Without a version, a single batch is usable but must not claim snapshot metadata.
+    const snapshot = pinnedVersion
+      ? { fileName, version: pinnedVersion, lastModified }
+      : { fileName, version: undefined, lastModified: undefined }
+    for (const item of evidence) item.snapshot = snapshot
+    return evidence
+  }
+
+  private mergeNodeMetadata(
+    target: Map<string, FigmaNodeMetadata>,
+    source: Record<string, FigmaNodeMetadata> | undefined
+  ): void {
+    if (!source || typeof source !== "object" || Array.isArray(source)) return
+    for (const [nodeId, metadata] of Object.entries(source)) {
+      if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) continue
+      const existing = target.get(nodeId)
+      if (existing && !sameNodeMetadata(existing, metadata)) {
+        throw new Error("Figma component evidence returned conflicting metadata.")
+      }
+      const existingMembership = existing?.componentSetId ?? existing?.component_set_id
+      const incomingMembership = metadata.componentSetId ?? metadata.component_set_id
+      const merged: FigmaNodeMetadata = {}
+      const key = metadata.key ?? existing?.key
+      const name = metadata.name ?? existing?.name
+      const membership = incomingMembership ?? existingMembership
+      if (key !== undefined) merged.key = key
+      if (name !== undefined) merged.name = name
+      if (membership !== undefined) merged.componentSetId = membership
+      target.set(nodeId, merged)
+    }
+  }
+
+  private toComponent(item: NodeEvidence, byKey: Map<string, PublishedAsset>): Component {
+    const metadata = item.snapshot
+    const sourceMetadata: Record<string, unknown> = {
+      assetType: item.asset.kind,
+      assetKey: item.asset.key,
+      nodeId: item.asset.nodeId,
+      fileKey: this.config.fileId,
+      ...(item.asset.updatedAt !== undefined ? { publishedUpdatedAt: item.asset.updatedAt } : {})
+    }
+    if (metadata?.fileName !== undefined) sourceMetadata.fileName = metadata.fileName
+    if (metadata?.version !== undefined) sourceMetadata.fileVersion = metadata.version
+    if (metadata?.lastModified !== undefined) sourceMetadata.fileLastModified = metadata.lastModified
+
+    const props = this.extractPropertyDefinitions(item.document.componentPropertyDefinitions, {
+      byKey,
+      byNodeId: item.targetedByNodeId ?? new Map()
+    })
+    return {
+      name: item.asset.name,
+      displayName: item.asset.name,
+      ...(item.asset.description !== undefined ? { description: item.asset.description } : {}),
+      source: { adapter: "figma", metadata: sourceMetadata },
+      props
+    }
+  }
+
+  private extractPropertyDefinitions(
+    definitions: Record<string, FigmaPropertyDefinition> | undefined,
+    lookups: PropertyLookupContext
+  ): Record<string, PropDefinition> {
+    const props: Record<string, PropDefinition> = Object.create(null) as Record<string, PropDefinition>
+    if (!definitions || typeof definitions !== "object" || Array.isArray(definitions)) return props
+    for (const name of Object.keys(definitions).sort(compareStrings)) {
+      if (!name || name.trim().length === 0) continue
+      const definition = definitions[name]
+      if (
+        !definition ||
+        typeof definition !== "object" ||
+        Array.isArray(definition) ||
+        typeof definition.type !== "string"
+      ) {
+        continue
+      }
+      const mapped = this.mapPropertyDefinition(definition, lookups)
+      if (mapped) props[name] = mapped as PropDefinition
+    }
+    return props
+  }
+
+  private mapPropertyDefinition(
+    definition: FigmaPropertyDefinition,
+    lookups: PropertyLookupContext
+  ): Record<string, unknown> | undefined {
+    switch (definition.type) {
+      case "BOOLEAN": {
+        const value = definition.defaultValue
+        return {
+          type: "boolean",
+          kind: "boolean",
+          ...(typeof value === "boolean" ? { default: String(value) } : {})
+        }
+      }
+      case "TEXT": {
+        const value = definition.defaultValue
+        return {
+          type: "string",
+          kind: "text",
+          ...(typeof value === "string" ? { default: value } : {})
+        }
+      }
+      case "VARIANT": {
+        if (!Array.isArray(definition.variantOptions)) return undefined
+        if (!definition.variantOptions.every((value) => typeof value === "string")) return undefined
+        const values = definition.variantOptions as string[]
+        if (values.length === 0) return undefined
+        const sorted = sortPrimitiveValues(values)
+        const defaultValue =
+          typeof definition.defaultValue === "string" && sorted.includes(definition.defaultValue)
+            ? definition.defaultValue
+            : undefined
+        return { kind: "variant", values: sorted, ...(defaultValue !== undefined ? { default: defaultValue } : {}) }
+      }
+      case "INSTANCE_SWAP": {
+        const preferredValues = Array.isArray(definition.preferredValues)
+          ? definition.preferredValues.filter(isPreferredValue).map((value) => ({
+              type: value.type === "COMPONENT_SET" ? "component-set" : "component",
+              key: value.key
+            }))
+          : []
+        const unique = new Map(preferredValues.map((value) => [`${value.type}:${value.key}`, value]))
+        const sorted = [...unique.values()].sort(
+          (a, b) => compareStrings(a.type, b.type) || compareStrings(a.key, b.key)
+        )
+        const defaultValue =
+          typeof definition.defaultValue === "string"
+            ? (lookups.byKey.get(definition.defaultValue)?.key ?? lookups.byNodeId.get(definition.defaultValue)?.key)
+            : undefined
+        return {
+          kind: "instance-swap",
+          ...(defaultValue !== undefined ? { default: defaultValue } : {}),
+          ...(sorted.length > 0 ? { preferredValues: sorted } : {})
+        }
+      }
+      default:
+        return undefined
+    }
   }
 
   private mappingFor(mapping: Record<string, string> | undefined, stableKey: string | undefined): string | undefined {
@@ -260,4 +678,90 @@ export class FigmaAdapter implements Source {
       return "spacing"
     return "spacing" // default for numeric values
   }
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined
+}
+
+function safeIdentity(asset: PublishedAsset): string {
+  return asset.key
+}
+
+function compareStrings(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
+function comparePublishedAssets(a: PublishedAsset, b: PublishedAsset): number {
+  return compareStrings(a.key, b.key) || compareStrings(a.nodeId, b.nodeId) || compareStrings(a.kind, b.kind)
+}
+
+function sortComponentMap(components: ComponentMap): ComponentMap {
+  const sorted: ComponentMap = Object.create(null) as ComponentMap
+  for (const id of Object.keys(components).sort(compareStrings)) sorted[id] = components[id]
+  return sorted
+}
+
+function sortPrimitiveValues(values: Array<string | number | boolean>): Array<string | number | boolean> {
+  const unique = new Map<string, string | number | boolean>()
+  for (const value of values) unique.set(`${typeof value}:${String(value)}`, value)
+  return [...unique.values()].sort(comparePrimitiveValues)
+}
+
+function comparePrimitiveValues(a: string | number | boolean, b: string | number | boolean): number {
+  const rank = (value: string | number | boolean): number =>
+    typeof value === "boolean" ? 0 : typeof value === "number" ? 1 : 2
+  const aRank = rank(a)
+  const bRank = rank(b)
+  if (aRank !== bRank) return aRank - bRank
+  if (typeof a === "boolean" && typeof b === "boolean") return Number(a) - Number(b)
+  if (typeof a === "number" && typeof b === "number") return a - b
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
+function isPreferredValue(value: unknown): value is { type: "COMPONENT" | "COMPONENT_SET"; key: string } {
+  if (!value || typeof value !== "object") return false
+  const candidate = value as Record<string, unknown>
+  return (
+    (candidate.type === "COMPONENT" || candidate.type === "COMPONENT_SET") &&
+    typeof candidate.key === "string" &&
+    candidate.key.length > 0
+  )
+}
+
+function sameNodeMetadata(a: FigmaNodeMetadata, b: FigmaNodeMetadata): boolean {
+  const membershipA = a.componentSetId ?? a.component_set_id
+  const membershipB = b.componentSetId ?? b.component_set_id
+  return sameOptional(a.key, b.key) && sameOptional(a.name, b.name) && sameOptional(membershipA, membershipB)
+}
+
+function figmaErrorGuidance(response: Response): string {
+  switch (response.status) {
+    case 403:
+      return "Check that the token has library_content:read and file_content:read, and that it can access the configured published main file."
+    case 404:
+      return "Check that fileId is the published main-file key; Figma's published-library endpoints do not accept branch keys."
+    case 429:
+      return `Figma rate limit exceeded.${retryAfterGuidance(response.headers.get("Retry-After"))}`
+    default:
+      return "Check your token and fileId in primitiv.config.js."
+  }
+}
+
+function retryAfterGuidance(value: string | null): string {
+  if (value !== null) {
+    const trimmed = value.trim()
+    if (/^(0|[1-9]\d{0,9})$/.test(trimmed)) return ` Retry after ${trimmed} seconds.`
+    if (/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(trimmed)) {
+      const timestamp = Date.parse(trimmed)
+      if (Number.isFinite(timestamp) && new Date(timestamp).toUTCString() === trimmed) {
+        return ` Retry after ${trimmed}.`
+      }
+    }
+  }
+  return " Wait before trying again."
+}
+
+function sameOptional(a: string | undefined, b: string | undefined): boolean {
+  return a === undefined || b === undefined || a === b
 }

@@ -609,6 +609,7 @@ describe("verify — failed sources", () => {
             }
           })
         }
+        if (url.endsWith("/component_sets")) return Response.json({ meta: { component_sets: [] } })
         return Response.json({ meta: { components: [] } })
       }) as typeof fetch
       const committed = await buildContract(undefined, { cwd: tempDir, silent: true })
