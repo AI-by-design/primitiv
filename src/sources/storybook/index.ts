@@ -1,9 +1,10 @@
 import * as path from "node:path"
 import type { ComponentMap, DemonstratedStory, PropDefinition, Source, StorybookSource, TokenMap } from "../../types"
 import { emptyTokenMap } from "../../types"
-import { parseArgTypes } from "./argTypes"
+import { matchParsedStory, type ParsedStorybookSource, parseStorybookSource } from "./csf"
+import { boundDemonstratedEvidence } from "./demonstratedBudget"
 import { MAX_MANIFEST_BYTES, MAX_METADATA_STRING_BYTES, MAX_STORIES_PER_COMPONENT } from "./limits"
-import { readStoryFile, SUPPORTED_STORY_FILE_EXTENSIONS } from "./resolveStoryFile"
+import { readStoryFile, resolveStoryFile, SUPPORTED_STORY_FILE_EXTENSIONS } from "./resolveStoryFile"
 
 interface StorybookManifest {
   entries?: Record<string, unknown>
@@ -12,11 +13,6 @@ interface StorybookManifest {
 
 interface ManifestStory extends DemonstratedStory {
   title: string
-}
-
-interface SourceEvidence {
-  props: Record<string, PropDefinition>
-  extracted: boolean
 }
 
 export class StorybookAdapter implements Source {
@@ -48,6 +44,7 @@ export class StorybookAdapter implements Source {
     }
 
     const components = Object.create(null) as ComponentMap
+    const parsedFiles = new Map<string, ParsedStorybookSource | null>()
     for (const title of [...grouped.keys()].sort(compareStrings)) {
       const eligibleStories = deduplicateStories(grouped.get(title) ?? [])
       const retainedStories = eligibleStories.slice(0, MAX_STORIES_PER_COMPONENT)
@@ -55,8 +52,29 @@ export class StorybookAdapter implements Source {
       if (!name) continue
 
       const importPath = sharedImportPath(retainedStories)
-      const sourceEvidence = this.extractProps(importPath)
-      const storyIds = retainedStories.map((story) => story.id)
+      const demonstratedStories = retainedStories.map((story) => this.demonstratedStory(story, parsedFiles))
+      // Component-wide meta evidence is only safe when every eligible manifest
+      // story for the title points at one source file. The retained-story cap
+      // bounds output, but must not hide a second file from this ambiguity
+      // check. `source.file` below intentionally remains based on retained
+      // stories, as required for bounded provenance output.
+      const sharedSource = this.sharedParsedSource(eligibleStories, parsedFiles)
+      const sourceAnalyzed = retainedStories.some(
+        (story) => story.importPath !== undefined && this.parseSourceFile(story.importPath, parsedFiles) !== undefined
+      )
+      const demonstrated = boundDemonstratedEvidence({
+        title,
+        extraction: sourceAnalyzed ? "source" : "manifest-only",
+        storyCount: eligibleStories.length,
+        ...(sharedSource?.values ? { defaultArgs: sharedSource.values } : {}),
+        ...(sharedSource?.unresolvedKeys ? { unresolvedDefaultArgs: sharedSource.unresolvedKeys } : {}),
+        ...(sharedSource?.truncatedKeys ? { truncatedDefaultArgs: sharedSource.truncatedKeys } : {}),
+        ...(sharedSource?.hasUnresolvedSpread ? { hasUnresolvedDefaultArgsSpread: true } : {}),
+        ...(sharedSource?.controls ? { controls: sharedSource.controls } : {}),
+        stories: demonstratedStories,
+        ...(eligibleStories.length > retainedStories.length ? { truncatedStories: true } : {})
+      })
+      const storyIds = demonstrated.stories?.map((story) => story.id) ?? []
 
       components[`storybook:${title}`] = {
         name,
@@ -66,35 +84,73 @@ export class StorybookAdapter implements Source {
           ...(importPath !== undefined ? { file: importPath } : {}),
           metadata: { storyIds, title }
         },
-        props: sourceEvidence.props,
-        demonstrated: {
-          title,
-          extraction: sourceEvidence.extracted ? "source" : "manifest-only",
-          storyCount: eligibleStories.length,
-          stories: retainedStories.map(({ id, name: storyName, importPath: storyPath }) => ({
-            id,
-            ...(storyName !== undefined ? { name: storyName } : {}),
-            ...(storyPath !== undefined ? { importPath: storyPath } : {})
-          })),
-          ...(eligibleStories.length > retainedStories.length ? { truncatedStories: true } : {})
-        }
+        props: sharedSource?.props ?? emptyPropMap(),
+        demonstrated
       }
     }
 
     return components
   }
 
-  private extractProps(importPath: string | undefined): SourceEvidence {
-    // Prop extraction requires one unambiguous relative story path and a configured
-    // filesystem root. Manifest identity remains useful without either.
-    if (!this.config.sourceRoot || !importPath) return { props: emptyPropMap(), extracted: false }
+  private parseSourceFile(
+    importPath: string | undefined,
+    cache: Map<string, ParsedStorybookSource | null>
+  ): ParsedStorybookSource | undefined {
+    if (!this.config.sourceRoot || !importPath) return undefined
+    const resolved = resolveStoryFile(this.config.sourceRoot, importPath)
+    if (!resolved.ok) return undefined
+    const cached = cache.get(resolved.path)
+    if (cached !== undefined) return cached ?? undefined
     const read = readStoryFile(this.config.sourceRoot, importPath)
-    if (!read.ok) return { props: emptyPropMap(), extracted: false }
+    if (!read.ok) {
+      cache.set(resolved.path, null)
+      return undefined
+    }
 
     try {
-      return { props: parseArgTypes(read.source), extracted: true }
+      const parsed = parseStorybookSource(read.source)
+      cache.set(read.path, parsed)
+      if (read.path !== resolved.path) cache.set(resolved.path, parsed)
+      return parsed
     } catch {
-      return { props: emptyPropMap(), extracted: false }
+      cache.set(read.path, null)
+      if (read.path !== resolved.path) cache.set(resolved.path, null)
+      return undefined
+    }
+  }
+
+  private sharedParsedSource(
+    stories: ManifestStory[],
+    cache: Map<string, ParsedStorybookSource | null>
+  ): ParsedStorybookSource | undefined {
+    if (!this.config.sourceRoot || stories.length === 0) return undefined
+    const canonicalPaths = new Set<string>()
+    for (const story of stories) {
+      if (!story.importPath) return undefined
+      const resolved = resolveStoryFile(this.config.sourceRoot, story.importPath)
+      if (!resolved.ok) return undefined
+      canonicalPaths.add(resolved.path)
+    }
+    if (canonicalPaths.size !== 1) return undefined
+    return cache.get([...canonicalPaths][0]) ?? undefined
+  }
+
+  private demonstratedStory(
+    manifest: ManifestStory,
+    cache: Map<string, ParsedStorybookSource | null>
+  ): DemonstratedStory {
+    const source = this.parseSourceFile(manifest.importPath, cache)
+    const parsed = source ? matchParsedStory(source, manifest.title, manifest.id) : undefined
+    return {
+      id: manifest.id,
+      ...((manifest.name ?? parsed?.name) ? { name: manifest.name ?? parsed?.name } : {}),
+      ...(parsed ? { exportName: parsed.exportName } : {}),
+      ...(manifest.importPath !== undefined ? { importPath: manifest.importPath } : {}),
+      ...(parsed?.values ? { args: parsed.values } : {}),
+      ...(parsed?.unresolvedKeys ? { unresolvedArgs: parsed.unresolvedKeys } : {}),
+      ...(parsed?.truncatedKeys ? { truncatedArgs: parsed.truncatedKeys } : {}),
+      ...(parsed?.hasUnresolvedSpread ? { hasUnresolvedArgsSpread: true } : {}),
+      ...(parsed?.controls ? { controls: parsed.controls } : {})
     }
   }
 

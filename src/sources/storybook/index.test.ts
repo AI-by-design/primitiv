@@ -292,8 +292,227 @@ describe("StorybookAdapter — source extraction", () => {
       )
 
       const button = components["storybook:Admin/Button"]
-      expect(button.props).toEqual({ disabled: { type: "boolean", required: true } })
+      expect(button.props).toEqual({ disabled: { required: true } })
       expect(button.demonstrated?.extraction).toBe("source")
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test("joins manifest stories to source exports by exact ID and retains scoped evidence", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "primitiv-storybook-evidence-"))
+    try {
+      fs.writeFileSync(
+        path.join(root, "Button.stories.tsx"),
+        `const defaults = { label: "Button", dynamic: getDefault() }
+         export default {
+           id: "custom-button",
+           args: defaults,
+           argTypes: {
+             tone: {
+               type: { name: "enum", value: ["primary", "secondary"], required: true },
+               control: "radio",
+               options: ["secondary", "primary"],
+               mapping: { primary: "brand", secondary: getTone() }
+             },
+             controlOnly: { control: false }
+           },
+           parameters: { addon: { argTypes: { invented: { type: "string" } } } }
+         }
+         export const Primary = { name: "Source Primary", args: { tone: "primary", count: 1 } }
+         export const Secondary = {
+           __id: "button-special",
+           args: { tone: chooseTone(), count: 2 },
+           argTypes: { tone: { control: "select", options: ["secondary"] } }
+         }
+         export const Helper = { args: { shouldNotAppear: true } }
+        `
+      )
+      const { components } = await scanManifest(
+        {
+          entries: {
+            secondary: {
+              type: "story",
+              id: "button-special",
+              title: "Admin/Button",
+              importPath: "./Button.stories.tsx"
+            },
+            mismatch: {
+              type: "story",
+              id: "custom-button--missing",
+              title: "Admin/Button",
+              name: "Manifest mismatch",
+              importPath: "./Button.stories.tsx"
+            },
+            primary: {
+              type: "story",
+              id: "custom-button--primary",
+              title: "Admin/Button",
+              name: "Manifest Primary",
+              importPath: "./Button.stories.tsx"
+            }
+          }
+        },
+        { sourceRoot: root }
+      )
+
+      const button = components["storybook:Admin/Button"]
+      expect(button.props).toEqual({
+        tone: { type: "enum", required: true, values: ["primary", "secondary"] }
+      })
+      expect(button.demonstrated).toEqual({
+        title: "Admin/Button",
+        extraction: "source",
+        storyCount: 3,
+        defaultArgs: { label: "Button" },
+        unresolvedDefaultArgs: ["dynamic"],
+        controls: {
+          controlOnly: { control: false },
+          tone: {
+            control: "radio",
+            choices: [
+              { option: "primary", mappedValue: "brand" },
+              { option: "secondary", mappingUnresolved: true }
+            ]
+          }
+        },
+        stories: [
+          {
+            id: "button-special",
+            exportName: "Secondary",
+            importPath: "./Button.stories.tsx",
+            args: { count: 2 },
+            unresolvedArgs: ["tone"],
+            controls: { tone: { control: "select", choices: [{ option: "secondary" }] } }
+          },
+          {
+            id: "custom-button--missing",
+            name: "Manifest mismatch",
+            importPath: "./Button.stories.tsx"
+          },
+          {
+            id: "custom-button--primary",
+            name: "Manifest Primary",
+            exportName: "Primary",
+            importPath: "./Button.stories.tsx",
+            args: { count: 1, tone: "primary" }
+          }
+        ]
+      })
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test("keeps per-file story evidence but omits ambiguous component-wide meta evidence", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "primitiv-storybook-multifile-"))
+    try {
+      fs.writeFileSync(
+        path.join(root, "One.stories.ts"),
+        `export default { args: { fromOne: true } }; export const One = { args: { value: 1 } }`
+      )
+      fs.writeFileSync(
+        path.join(root, "Two.stories.ts"),
+        `export default { args: { fromTwo: true } }; export const Two = { args: { value: 2 } }`
+      )
+      const { components } = await scanManifest(
+        {
+          entries: {
+            one: { id: "shared--one", title: "Shared", importPath: "./One.stories.ts" },
+            two: { id: "shared--two", title: "Shared", importPath: "./Two.stories.ts" }
+          }
+        },
+        { sourceRoot: root }
+      )
+
+      const shared = components["storybook:Shared"]
+      expect(shared.source.file).toBeUndefined()
+      expect(shared.props).toEqual({})
+      expect(shared.demonstrated?.defaultArgs).toBeUndefined()
+      expect(shared.demonstrated?.stories).toEqual([
+        { id: "shared--one", exportName: "One", importPath: "./One.stories.ts", args: { value: 1 } },
+        { id: "shared--two", exportName: "Two", importPath: "./Two.stories.ts", args: { value: 2 } }
+      ])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test("does not let the retained-story cap hide a second source file", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "primitiv-storybook-retained-cap-files-"))
+    try {
+      fs.writeFileSync(path.join(root, "One.stories.ts"), `export default { args: { fromOne: true } }`)
+      fs.writeFileSync(path.join(root, "Two.stories.ts"), `export default { args: { fromTwo: true } }`)
+      const stories = Array.from({ length: MAX_STORIES_PER_COMPONENT }, (_, index) => ({
+        id: `shared--a-${String(index).padStart(2, "0")}`,
+        title: "Shared",
+        importPath: "./One.stories.ts"
+      }))
+      stories.push({ id: "shared--z-overflow", title: "Shared", importPath: "./Two.stories.ts" })
+
+      const { components } = await scanManifest(
+        { entries: Object.fromEntries(stories.map((story) => [story.id, story])) },
+        { sourceRoot: root }
+      )
+      const shared = components["storybook:Shared"]
+
+      expect(shared.source.file).toBe("./One.stories.ts")
+      expect(shared.props).toEqual({})
+      expect(shared.demonstrated?.storyCount).toBe(MAX_STORIES_PER_COMPONENT + 1)
+      expect(shared.demonstrated?.stories).toHaveLength(MAX_STORIES_PER_COMPONENT)
+      expect(shared.demonstrated?.defaultArgs).toBeUndefined()
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test("parses one canonical file once across equivalent manifest paths", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "primitiv-storybook-canonical-cache-"))
+    try {
+      fs.mkdirSync(path.join(root, "stories"))
+      fs.writeFileSync(
+        path.join(root, "stories", "Shared.stories.ts"),
+        `export default { args: { shared: true } };
+         export const One = { args: { value: 1 } };
+         export const Two = { args: { value: 2 } }`
+      )
+      const { components } = await scanManifest(
+        {
+          entries: {
+            one: { id: "shared--one", title: "Shared", importPath: "./stories/Shared.stories.ts" },
+            two: { id: "shared--two", title: "Shared", importPath: "stories/Shared.stories.ts" }
+          }
+        },
+        { sourceRoot: root }
+      )
+
+      const shared = components["storybook:Shared"]
+      expect(shared.source.file).toBeUndefined()
+      expect(shared.demonstrated?.defaultArgs).toEqual({ shared: true })
+      expect(shared.demonstrated?.stories?.map((story) => story.exportName)).toEqual(["One", "Two"])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test("degrades a source parse error to manifest-only evidence", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "primitiv-storybook-parse-error-"))
+    try {
+      fs.writeFileSync(path.join(root, "Broken.stories.ts"), "export default { args: {")
+      const { components } = await scanManifest(
+        {
+          entries: {
+            primary: { id: "broken--primary", title: "Broken", importPath: "./Broken.stories.ts" }
+          }
+        },
+        { sourceRoot: root }
+      )
+      expect(components["storybook:Broken"].demonstrated).toEqual({
+        title: "Broken",
+        extraction: "manifest-only",
+        storyCount: 1,
+        stories: [{ id: "broken--primary", importPath: "./Broken.stories.ts" }]
+      })
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }

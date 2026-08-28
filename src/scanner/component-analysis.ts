@@ -1,6 +1,14 @@
 import * as path from "node:path"
 import type * as t from "@babel/types"
 import { getBindingIdentifiers, VISITOR_KEYS } from "@babel/types"
+import {
+  comparePrimitiveValues,
+  MAX_PRIMITIVE_VALUES,
+  type PrimitiveValue,
+  primitiveValueKey,
+  retainSmallestPrimitiveValues,
+  sortPrimitiveValues
+} from "../normalize/component-evidence-values"
 import type { Component, ComponentAnalysisModule, ComponentKind, ComponentMap, PropDefinition } from "../types"
 import { type ResolvedTypeMember, resolveTypeMembers, type TypeResolutionModule } from "./component-type-resolution"
 
@@ -95,7 +103,7 @@ export class ComponentAnalyzer {
           componentUsage.props = Object.fromEntries(
             [...props.entries()]
               .sort(([a], [b]) => compareStrings(a, b))
-              .map(([name, observed]) => [name, [...observed.values.values()].sort(compareObservedPropValues)])
+              .map(([name, observed]) => [name, [...observed.values.values()].sort(comparePrimitiveValues)])
           )
           const truncatedProps = [...props.entries()]
             .filter(([, observed]) => observed.truncated)
@@ -634,8 +642,8 @@ function firstParamType(params: t.Node[]): t.TSType | null {
   return annotation?.type === "TSTypeAnnotation" ? annotation.typeAnnotation : null
 }
 
-type PropLiteral = string | number | boolean
-type ObservedPropValue = PropLiteral | null
+type PropLiteral = Exclude<PrimitiveValue, null>
+type ObservedPropValue = PrimitiveValue
 
 interface ObservedProp {
   name: string
@@ -646,8 +654,6 @@ interface ObservedPropAccumulator {
   truncated: boolean
   values: Map<string, ObservedPropValue>
 }
-
-const MAX_OBSERVED_VALUES_PER_PROP = 20
 
 function unwrapLiteralWrapper(node: t.Node): t.Node {
   let current = node
@@ -728,32 +734,12 @@ function addObservedProp(
     componentProps.set(prop.name, observed)
   }
 
-  const key = observedPropValueKey(prop.value)
+  const key = primitiveValueKey(prop.value)
   if (observed.values.has(key)) return
-  if (observed.values.size < MAX_OBSERVED_VALUES_PER_PROP) {
-    observed.values.set(key, prop.value)
-    return
-  }
-
-  observed.truncated = true
-  let greatest: [string, ObservedPropValue] | undefined
-  for (const entry of observed.values) {
-    if (!greatest || compareObservedPropValues(entry[1], greatest[1]) > 0) greatest = entry
-  }
-  if (greatest && compareObservedPropValues(prop.value, greatest[1]) < 0) {
-    observed.values.delete(greatest[0])
-    observed.values.set(key, prop.value)
-  }
-}
-
-function observedPropValueKey(value: ObservedPropValue): string {
-  return value === null ? "null" : `${typeof value}:${String(value)}`
-}
-
-function compareObservedPropValues(a: ObservedPropValue, b: ObservedPropValue): number {
-  if (a === null) return b === null ? 0 : 1
-  if (b === null) return -1
-  return comparePropLiterals(a, b)
+  const retained = retainSmallestPrimitiveValues([...observed.values.values(), prop.value], MAX_PRIMITIVE_VALUES)
+  observed.truncated ||= retained.truncated
+  observed.values.clear()
+  for (const value of retained.values) observed.values.set(primitiveValueKey(value), value)
 }
 
 function finiteNumber(value: number): number | undefined {
@@ -777,19 +763,7 @@ function literalValues(typeNode: t.TSType): PropLiteral[] | undefined {
   }
   if (values.length === 0) return undefined
 
-  const unique = new Map<string, PropLiteral>()
-  for (const value of values) unique.set(`${typeof value}:${String(value)}`, value)
-  return [...unique.values()].sort(comparePropLiterals)
-}
-
-function comparePropLiterals(a: PropLiteral, b: PropLiteral): number {
-  const rank = (value: PropLiteral): number => (typeof value === "boolean" ? 0 : typeof value === "number" ? 1 : 2)
-  const aRank = rank(a)
-  const bRank = rank(b)
-  if (aRank !== bRank) return aRank - bRank
-  if (typeof a === "boolean" && typeof b === "boolean") return Number(a) - Number(b)
-  if (typeof a === "number" && typeof b === "number") return a - b
-  return a < b ? -1 : a > b ? 1 : 0
+  return sortPrimitiveValues(values)
 }
 
 function destructuredDefaults(parameter?: t.Node): Map<string, PropLiteral> {

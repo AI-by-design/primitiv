@@ -215,11 +215,38 @@ export interface ComponentMap {
 
 export type ComponentKind = "component" | "screen" | "provider" | "icon" | "other"
 
+export type DemonstratedValue =
+  | string
+  | number
+  | boolean
+  | null
+  | DemonstratedValue[]
+  | { [key: string]: DemonstratedValue }
+
+export interface StorybookControlChoice {
+  option: string | number | boolean
+  mappedValue?: DemonstratedValue
+  mappingUnresolved?: boolean
+}
+
+export interface StorybookControlEvidence {
+  control?: string | false
+  choices?: StorybookControlChoice[]
+  unresolvedChoices?: boolean
+  truncatedChoices?: boolean
+}
+
 export interface DemonstratedStory {
   // Storybook's manifest/permalink identity. Never synthesized from a display label.
   id: string
   name?: string
+  exportName?: string
   importPath?: string
+  args?: Record<string, DemonstratedValue>
+  unresolvedArgs?: string[]
+  truncatedArgs?: string[]
+  hasUnresolvedArgsSpread?: boolean
+  controls?: Record<string, StorybookControlEvidence>
 }
 
 export interface DemonstratedEvidence {
@@ -228,6 +255,11 @@ export interface DemonstratedEvidence {
   extraction: "manifest-only" | "source"
   // Unique eligible manifest stories before the retained-story cap.
   storyCount: number
+  defaultArgs?: Record<string, DemonstratedValue>
+  unresolvedDefaultArgs?: string[]
+  truncatedDefaultArgs?: string[]
+  hasUnresolvedDefaultArgsSpread?: boolean
+  controls?: Record<string, StorybookControlEvidence>
   stories?: DemonstratedStory[]
   truncatedStories?: boolean
 }

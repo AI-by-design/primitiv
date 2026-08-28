@@ -2,7 +2,19 @@ import { afterEach, describe, expect, test } from "bun:test"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
-import { MAX_MANIFEST_BYTES, MAX_METADATA_STRING_BYTES, MAX_SOURCE_BYTES, MAX_STORIES_PER_COMPONENT } from "./limits"
+import {
+  MAX_CONTROL_CHOICES,
+  MAX_DEMONSTRATED_BYTES_PER_COMPONENT,
+  MAX_MANIFEST_BYTES,
+  MAX_METADATA_STRING_BYTES,
+  MAX_OMISSION_MARKER_NAMES,
+  MAX_SERIALIZED_VALUE_BYTES,
+  MAX_SOURCE_BYTES,
+  MAX_STATIC_BINDING_DEPTH,
+  MAX_STATIC_COLLECTION_ENTRIES,
+  MAX_STATIC_RECURSION_DEPTH,
+  MAX_STORIES_PER_COMPONENT
+} from "./limits"
 import { readStoryFile, resolveStoryFile } from "./resolveStoryFile"
 
 const temporaryRoots: string[] = []
@@ -20,11 +32,18 @@ function makeRoot(): string {
 }
 
 describe("Storybook input limits", () => {
-  test("exports the PR1 caps", () => {
+  test("exports the Storybook input and evidence caps", () => {
     expect(MAX_MANIFEST_BYTES).toBe(10 * 1024 * 1024)
     expect(MAX_SOURCE_BYTES).toBe(2 * 1024 * 1024)
     expect(MAX_METADATA_STRING_BYTES).toBe(1024)
     expect(MAX_STORIES_PER_COMPONENT).toBe(50)
+    expect(MAX_STATIC_BINDING_DEPTH).toBe(64)
+    expect(MAX_STATIC_RECURSION_DEPTH).toBe(4)
+    expect(MAX_STATIC_COLLECTION_ENTRIES).toBe(20)
+    expect(MAX_CONTROL_CHOICES).toBe(20)
+    expect(MAX_SERIALIZED_VALUE_BYTES).toBe(2 * 1024)
+    expect(MAX_DEMONSTRATED_BYTES_PER_COMPONENT).toBe(64 * 1024)
+    expect(MAX_OMISSION_MARKER_NAMES).toBe(20)
   })
 })
 
