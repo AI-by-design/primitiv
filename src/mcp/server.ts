@@ -602,9 +602,10 @@ export class PrimitivMCPServer {
   }): CallToolResult {
     if (!this.contract) return this.noContract()
     const component = this.contract.components[opts.id]
-    const base: Component = { ...component }
-    delete base.uses
-    delete base.usage
+    // Keep the default payload intentionally stable and compact. Components are an
+    // additive contract surface, so spreading here would silently expose every future
+    // evidence field through MCP (including bounded-but-still-large story evidence).
+    const base = projectDefaultComponent(component)
     const payload: Record<string, unknown> = {
       id: opts.id,
       ...(opts.resolvedBy ? { resolvedBy: opts.resolvedBy } : {}),
@@ -790,6 +791,19 @@ function projectCompactSource(source: Component["source"]): Record<string, unkno
     adapter: source.adapter,
     ...(source.file !== undefined ? { file: source.file } : {}),
     ...(source.line !== undefined ? { line: source.line } : {})
+  }
+}
+
+function projectDefaultComponent(component: Component): Record<string, unknown> {
+  return {
+    name: component.name,
+    ...(component.displayName !== undefined ? { displayName: component.displayName } : {}),
+    ...(component.description !== undefined ? { description: component.description } : {}),
+    ...(component.kind !== undefined ? { kind: component.kind } : {}),
+    ...(component.scope !== undefined ? { scope: component.scope } : {}),
+    source: component.source,
+    ...(component.props !== undefined ? { props: component.props } : {}),
+    ...(component.rationale !== undefined ? { rationale: component.rationale } : {})
   }
 }
 

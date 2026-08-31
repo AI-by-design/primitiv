@@ -383,6 +383,63 @@ describe("verify — component identity migration (0.2 → 0.3)", () => {
     expect(result.exitCode).toBe(0)
     expect(result.messages.some((m) => m.includes("intentional coexistence"))).toBe(true)
   })
+
+  test("reports the Storybook full-title migration as one re-key plus the formerly overwritten addition", async () => {
+    const originalFetch = globalThis.fetch
+    fs.writeFileSync(
+      path.join(tempDir, "primitiv.config.js"),
+      `module.exports = {
+  sources: { storybook: { url: "https://storybook.example.test" } },
+  governance: { sourceOfTruth: "storybook", onConflict: "warn" },
+  output: { path: "./primitiv.contract.json" }
+}`
+    )
+    writeContract(tempDir, {
+      version: "2.16.0",
+      sources: ["storybook"],
+      components: {
+        "storybook:Button": {
+          name: "Button",
+          displayName: "Button",
+          source: { adapter: "storybook", file: "./AdminButton.stories.tsx" }
+        }
+      },
+      componentNameIndex: { Button: ["storybook:Button"] },
+      sourceStatuses: {
+        codebase: { status: "skipped" },
+        figma: { status: "skipped" },
+        storybook: { status: "ok", tokens: 0, components: 1 }
+      }
+    })
+    globalThis.fetch = (async () =>
+      Response.json({
+        entries: {
+          admin: {
+            type: "story",
+            id: "admin-button--primary",
+            title: "Admin/Button",
+            name: "Primary",
+            importPath: "./AdminButton.stories.tsx"
+          },
+          storefront: {
+            type: "story",
+            id: "storefront-button--primary",
+            title: "Storefront/Button",
+            name: "Primary",
+            importPath: "./StorefrontButton.stories.tsx"
+          }
+        }
+      })) as typeof fetch
+
+    try {
+      const result = await verify(undefined, { cwd: tempDir })
+      expect(result.drift.changes).toContain("component re-keyed: storybook:Button → storybook:Admin/Button")
+      expect(result.drift.changes).toContain("component added: storybook:Storefront/Button")
+      expect(result.drift.changes.some((change) => change === "component removed: storybook:Button")).toBe(false)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
 })
 
 describe("verify — component relationship drift", () => {

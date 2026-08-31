@@ -22,7 +22,9 @@ export function parseArgTypes(source: string): Record<string, PropDefinition> {
   if (braceCloseIdx === -1) return {}
 
   const block = source.slice(braceOpenIdx + 1, braceCloseIdx)
-  const props: Record<string, PropDefinition> = {}
+  // Arg names are authored input. A null prototype keeps names such as
+  // `__proto__` inert instead of letting them mutate the result object's shape.
+  const props = Object.create(null) as Record<string, PropDefinition>
 
   for (const { name, body } of topLevelEntries(block)) {
     const controlMatch = body.match(/control\s*:\s*["']([\w-]+)["']/)

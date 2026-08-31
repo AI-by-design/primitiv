@@ -283,6 +283,52 @@ describe("get_component relationship projections", () => {
     expect(JSON.parse(withFacts.text).usage).toBeUndefined()
   })
 
+  test("no-detail calls use an explicit allowlist for additive component evidence", async () => {
+    const component = {
+      name: "Button",
+      displayName: "Button",
+      description: "Primary action",
+      kind: "component",
+      scope: "ui",
+      source: {
+        adapter: "storybook",
+        file: "src/Button.stories.tsx",
+        metadata: { title: "Admin/Button", storyIds: ["admin-button--primary"] }
+      },
+      props: { disabled: { type: "boolean", required: false } },
+      rationale: { when: "Submitting a form" },
+      demonstrated: {
+        title: "Admin/Button",
+        extraction: "manifest-only",
+        storyCount: 1,
+        stories: [{ id: "admin-button--primary", name: "Primary", importPath: "src/Button.stories.tsx" }]
+      },
+      variants: ["legacy-story-label"],
+      uses: { "ui/Icon": 1 },
+      usage: { sites: 2 },
+      futureEvidence: { large: true }
+    } as unknown as PrimitivContract["components"][string]
+    const c = await connect(
+      writeContract({
+        components: { "storybook:Admin/Button": component },
+        componentNameIndex: { Button: ["storybook:Admin/Button"] }
+      })
+    )
+
+    const payload = JSON.parse((await getComponent(c, { name: "Button" })).text)
+    expect(payload).toEqual({
+      id: "storybook:Admin/Button",
+      name: "Button",
+      displayName: "Button",
+      description: "Primary action",
+      kind: "component",
+      scope: "ui",
+      source: component.source,
+      props: component.props,
+      rationale: component.rationale
+    })
+  })
+
   test("usage, relationships, and all expose only the requested deterministic projections", async () => {
     const c = await connect(
       writeContract({

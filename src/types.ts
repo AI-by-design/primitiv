@@ -207,13 +207,30 @@ export interface TokenRedefinition {
 // component's name doesn't match its filename (`components/ui/Card#CardHeader` for a
 // compound sibling; normalized match, so `card-header.tsx` ↔ `CardHeader` and `index.*` ↔
 // folder name). Figma/Storybook components have no fs path; their ids are source-prefixed
-// (`figma:<published-key>` for Figma's published identity, `storybook:<display-name>` for the
-// existing Storybook identity) so they can never collide with path ids.
+// (`figma:<published-key>` for Figma's published identity, `storybook:<manifest-title>` for
+// Storybook's hierarchy-qualified identity) so they can never collide with path ids.
 export interface ComponentMap {
   [id: string]: Component
 }
 
 export type ComponentKind = "component" | "screen" | "provider" | "icon" | "other"
+
+export interface DemonstratedStory {
+  // Storybook's manifest/permalink identity. Never synthesized from a display label.
+  id: string
+  name?: string
+  importPath?: string
+}
+
+export interface DemonstratedEvidence {
+  title: string
+  // PR 1 records manifest identity only. PR 2 adds bounded static source extraction.
+  extraction: "manifest-only" | "source"
+  // Unique eligible manifest stories before the retained-story cap.
+  storyCount: number
+  stories?: DemonstratedStory[]
+  truncatedStories?: boolean
+}
 
 export interface Component {
   name: string
@@ -229,8 +246,9 @@ export interface Component {
   // isn't the right scope (e.g. a shared component that should win in one app area).
   scope?: string
   source: SourceProvenance
-  variants?: string[]
   props?: Record<string, PropDefinition>
+  // Bounded source-specific examples/configurations; never a formal API or runtime-frequency claim.
+  demonstrated?: DemonstratedEvidence
   // Qualified target component id → statically resolved local JSX opening-site count.
   // Static source evidence only, never runtime frequency. Omitted when no edges exist.
   uses?: Record<string, number>
@@ -346,7 +364,13 @@ export const primitivConfigSchema = z.looseObject({
         optional: z.boolean().optional()
       })
       .optional(),
-    storybook: z.looseObject({ url: z.string(), optional: z.boolean().optional() }).optional()
+    storybook: z
+      .looseObject({
+        url: z.string(),
+        sourceRoot: z.string().optional(),
+        optional: z.boolean().optional()
+      })
+      .optional()
   }),
   governance: z.looseObject({
     sourceOfTruth: z.enum(["codebase", "figma", "storybook", "manual"]),

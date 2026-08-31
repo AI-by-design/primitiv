@@ -19,6 +19,8 @@ export type {
   ComponentKind,
   ComponentMap,
   Conflict,
+  DemonstratedEvidence,
+  DemonstratedStory,
   InferredRule,
   InferredRules,
   LintCategory,
