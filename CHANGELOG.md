@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.17.0](https://github.com/AI-by-design/primitiv/compare/v2.16.0...v2.17.0) (2026-08-31)
+
+
+### Features
+
+* harden Storybook component identity ([#136](https://github.com/AI-by-design/primitiv/issues/136)) ([ba83c90](https://github.com/AI-by-design/primitiv/commit/ba83c900d14afc51af52e229d167a6c7cd6ad08c))
+
 ## [2.16.0](https://github.com/AI-by-design/primitiv/compare/v2.15.0...v2.16.0) (2026-08-27)
 
 
