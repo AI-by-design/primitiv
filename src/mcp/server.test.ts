@@ -329,6 +329,52 @@ describe("get_component relationship projections", () => {
     })
   })
 
+  test("no-detail payloads are byte-identical across absent, small, and large demonstrated evidence", async () => {
+    const component = {
+      name: "Button",
+      displayName: "Button",
+      source: { adapter: "storybook", file: "src/Button.stories.tsx" },
+      props: { disabled: { type: "boolean", required: false } }
+    } as PrimitivContract["components"][string]
+    const demonstrated = [
+      undefined,
+      {
+        title: "Button",
+        extraction: "source" as const,
+        storyCount: 1,
+        stories: [{ id: "button--primary", args: { disabled: false } }]
+      },
+      {
+        title: "Button",
+        extraction: "source" as const,
+        storyCount: 50,
+        defaultArgs: Object.fromEntries(
+          Array.from({ length: 20 }, (_, index) => [`default-${index}`, "x".repeat(256)])
+        ),
+        stories: Array.from({ length: 50 }, (_, index) => ({
+          id: `button--story-${index}`,
+          args: { label: "x".repeat(256) }
+        }))
+      }
+    ]
+    const payloads: string[] = []
+
+    for (const evidence of demonstrated) {
+      const c = await connect(
+        writeContract({
+          components: {
+            "storybook:Button": { ...component, ...(evidence ? { demonstrated: evidence } : {}) }
+          },
+          componentNameIndex: { Button: ["storybook:Button"] }
+        })
+      )
+      payloads.push((await getComponent(c, { name: "Button" })).text)
+      await disconnect()
+    }
+
+    expect(new Set(payloads).size).toBe(1)
+  })
+
   test("usage, relationships, and all expose only the requested deterministic projections", async () => {
     const c = await connect(
       writeContract({

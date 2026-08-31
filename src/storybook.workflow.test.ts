@@ -39,21 +39,33 @@ function textOf(result: { content?: Array<{ type: string; text?: string }> }): s
 
 function writeFixture(root: string, storybookUrl: string): void {
   const files: Record<string, string> = {
-    "stories/AdminButton.stories.tsx": `export default {
+    "stories/AdminButton.stories.tsx": `const baseArgs = { label: "Admin action", disabled: false }
+
+export default {
   title: "Admin/Button",
+  args: { ...baseArgs, runtimeOnly: makeRuntimeValue() },
   argTypes: {
-    disabled: { control: "boolean", required: true },
-    tone: { control: "select", options: ["primary", "secondary"] }
+    disabled: { type: "boolean", control: "boolean", required: true },
+    tone: {
+      type: { name: "enum", value: ["primary", "secondary", "danger"], required: false },
+      control: "select",
+      options: ["primary", "secondary"],
+      mapping: { primary: "brand", secondary: getSecondaryTone() }
+    },
+    controlOnly: { control: false }
   }
 }
 
-export const Primary = {}
-export const Secondary = {}
+export const Primary = { args: { tone: "primary" } }
+export const Secondary = {
+  args: { disabled: true, tone: chooseTone() },
+  argTypes: { tone: { control: "radio", options: ["secondary"] } }
+}
 `,
     "stories/StorefrontButton.stories.tsx": `export default {
   title: "Storefront/Button",
   argTypes: {
-    label: { control: "text" }
+    label: { type: "string", control: "text" }
   }
 }
 
@@ -79,7 +91,7 @@ export const Primary = {}
   }
 }
 
-describe("Storybook hardening and identity workflow", () => {
+describe("Storybook static evidence workflow", () => {
   test("Storybook HTTP → CLI build → contract → verify → MCP", async () => {
     // Canonicalize macOS's /var → /private/var alias so the spawned CLI and the
     // in-process MCP server agree on the contract's project root.
@@ -167,7 +179,7 @@ describe("Storybook hardening and identity workflow", () => {
       expect(admin.variants).toBeUndefined()
       expect(admin.props).toEqual({
         disabled: { type: "boolean", required: true },
-        tone: { type: "enum", required: false }
+        tone: { type: "enum", required: false, values: ["danger", "primary", "secondary"] }
       })
       expect(admin.source).toEqual({
         adapter: "storybook",
@@ -181,16 +193,35 @@ describe("Storybook hardening and identity workflow", () => {
         title: "Admin/Button",
         extraction: "source",
         storyCount: 2,
+        defaultArgs: { disabled: false, label: "Admin action" },
+        unresolvedDefaultArgs: ["runtimeOnly"],
+        controls: {
+          controlOnly: { control: false },
+          disabled: { control: "boolean" },
+          tone: {
+            control: "select",
+            choices: [
+              { option: "primary", mappedValue: "brand" },
+              { option: "secondary", mappingUnresolved: true }
+            ]
+          }
+        },
         stories: [
           {
             id: "admin-button--primary",
             name: "Primary",
-            importPath: "./stories/AdminButton.stories.tsx"
+            exportName: "Primary",
+            importPath: "./stories/AdminButton.stories.tsx",
+            args: { tone: "primary" }
           },
           {
             id: "admin-button--secondary",
             name: "Secondary",
-            importPath: "./stories/AdminButton.stories.tsx"
+            exportName: "Secondary",
+            importPath: "./stories/AdminButton.stories.tsx",
+            args: { disabled: true },
+            unresolvedArgs: ["tone"],
+            controls: { tone: { control: "radio", choices: [{ option: "secondary" }] } }
           }
         ]
       })
@@ -215,7 +246,7 @@ describe("Storybook hardening and identity workflow", () => {
       mcpServer = new PrimitivMCPServer(contractPath)
       const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
       await mcpServer.start(serverTransport)
-      client = new Client({ name: "storybook-hardening-workflow", version: "0.0.0" })
+      client = new Client({ name: "storybook-static-evidence-workflow", version: "0.0.0" })
       await client.connect(clientTransport)
 
       const defaultResult = await client.callTool({
