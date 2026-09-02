@@ -6,6 +6,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
 import { normalizeRuleCategory, RULE_CATEGORIES } from "../inferrer"
+import { safeDisplayText } from "../safe-display"
 import type { Component, LintCategory, PrimitivContract, Rationale, TokenCategory } from "../types"
 import { LINT_CATEGORIES, primitivContractSchema, summarizeValidationIssues, TOKEN_CATEGORIES } from "../types"
 
@@ -362,9 +363,12 @@ export class PrimitivMCPServer {
           )
         }
         if (category === "all" || category === "conflicts") {
-          result.conflicts = this.contract.conflicts
-          result.conflictCount = this.contract.conflicts.length
-          result.pendingConflicts = this.contract.conflicts.filter((c) => c.resolution === "pending").length
+          const page = projectConflictPage(this.contract.conflicts)
+          if (!page.success) return this.err(page.error)
+          result.conflicts = page.items
+          result.conflictCount = page.total
+          result.pendingConflicts = page.pending
+          result.conflictsTruncated = page.items.length < page.total
         }
         result.generatedAt = this.contract.generatedAt
         result.sources = this.contract.sources
@@ -493,26 +497,22 @@ export class PrimitivMCPServer {
         if (!this.contract) return this.noContract()
         const type = args.type || "all"
         const status = args.status || "pending"
-        let conflicts = this.contract.conflicts
+        const parsedConflicts = parseConflictProjectionInputs(this.contract.conflicts)
+        if (!parsedConflicts.success) return this.err(parsedConflicts.error)
+        let conflicts = parsedConflicts.items
         if (type !== "all") conflicts = conflicts.filter((c) => c.type === type)
         if (status !== "all")
           conflicts = conflicts.filter((c) =>
             status === "pending" ? c.resolution === "pending" : c.resolution !== "pending"
           )
-        const actionableCount = conflicts.filter((c) => c.actionable === true).length
-        const pendingDecisionCount = conflicts.filter((c) => c.actionable === false).length
+        const page = projectParsedConflictPage(conflicts)
+        if (!page.success) return this.err(page.error)
         return this.json({
-          count: conflicts.length,
-          actionableCount,
-          pendingDecisionCount,
-          conflicts: conflicts.map((c) => ({
-            type: c.type,
-            name: c.name,
-            resolution: c.resolution,
-            actionable: c.actionable ?? false,
-            suggestedFix: c.suggestedFix,
-            sources: c.sources
-          }))
+          count: page.total,
+          actionableCount: page.actionable,
+          pendingDecisionCount: page.pendingDecision,
+          truncated: page.items.length < page.total,
+          conflicts: page.items
         })
       }
     )
@@ -687,6 +687,210 @@ export class PrimitivMCPServer {
     if (!parsed.success) return { success: false, error: invalidUsageFacts(id, parsed.error) }
     return { success: true, facts: parsed.data.usage ?? { sites: 0 } }
   }
+}
+
+const DEFAULT_CONFLICT_PAGE_LIMIT = 25
+const MAX_CONFLICT_PAGE_BYTES = 512 * 1024
+const projectionStringSchema = z.string().max(4096)
+const projectionPathSchema = z.array(projectionStringSchema).max(64)
+const structuredConflictValueSchema = z.unknown().superRefine((value, context) => {
+  const error = structuredConflictValueError(value)
+  if (error) context.addIssue({ code: "custom", message: error })
+})
+
+type ConflictProjectionInput = {
+  type: "token" | "component"
+  name: string
+  sources: Array<{
+    source: Record<string, unknown>
+    value: string
+    structuredValue?: unknown
+    componentId?: string
+    factPath?: string[]
+  }>
+  resolved?: string
+  resolution?: "auto" | "manual" | "pending"
+  suggestedFix?: string
+  actionable?: boolean
+  fieldPath?: string[]
+  componentIds?: string[]
+  comparison?: "exact" | "subset"
+  fieldResolution?: Record<string, unknown>
+}
+
+const conflictSourceProjectionSchema = z.object({
+  source: z.object({
+    adapter: z.enum(["codebase", "figma", "storybook"]),
+    file: projectionStringSchema.optional(),
+    line: z.number().int().positive().optional(),
+    metadata: z
+      .record(projectionStringSchema, structuredConflictValueSchema)
+      .refine((value) => Object.keys(value).length <= 100, { message: "must contain at most 100 keys" })
+      .optional()
+  }),
+  value: projectionStringSchema,
+  structuredValue: structuredConflictValueSchema.optional(),
+  componentId: projectionStringSchema.optional(),
+  factPath: projectionPathSchema.optional()
+})
+
+const conflictProjectionSchema = z
+  .object({
+    type: z.enum(["token", "component"]),
+    name: projectionStringSchema,
+    sources: z.array(conflictSourceProjectionSchema).max(100),
+    resolved: projectionStringSchema.optional(),
+    resolution: z.enum(["auto", "manual", "pending"]).optional(),
+    suggestedFix: z
+      .string()
+      .max(16 * 1024)
+      .optional(),
+    actionable: z.boolean().optional(),
+    fieldPath: projectionPathSchema.optional(),
+    componentIds: z.array(projectionStringSchema).max(100).optional(),
+    comparison: z.enum(["exact", "subset"]).optional(),
+    fieldResolution: z
+      .object({
+        adapter: z.enum(["codebase", "figma", "storybook"]),
+        componentIds: z.array(projectionStringSchema).max(100),
+        fieldPath: projectionPathSchema,
+        structuredValue: structuredConflictValueSchema
+      })
+      .optional()
+  })
+  .superRefine((conflict, context) => {
+    if (conflict.fieldPath !== undefined && conflict.resolved !== undefined) {
+      context.addIssue({ code: "custom", message: "field conflicts cannot carry an identity resolution" })
+    }
+    if (conflict.fieldResolution !== undefined) {
+      if (conflict.fieldPath === undefined) {
+        context.addIssue({ code: "custom", message: "field resolution requires a field path" })
+      } else if (!samePath(conflict.fieldPath, conflict.fieldResolution.fieldPath)) {
+        context.addIssue({ code: "custom", message: "field resolution path must match the conflict field path" })
+      }
+    }
+  })
+
+function projectConflictPage(conflicts: unknown[]) {
+  const parsed = parseConflictProjectionInputs(conflicts)
+  if (!parsed.success) return parsed
+  return projectParsedConflictPage(parsed.items)
+}
+
+function parseConflictProjectionInputs(
+  conflicts: unknown[]
+): { success: true; items: ConflictProjectionInput[] } | { success: false; error: string } {
+  const parsed: ConflictProjectionInput[] = []
+  for (const conflict of conflicts) {
+    const result = conflictProjectionSchema.safeParse(conflict)
+    if (!result.success) {
+      return {
+        success: false,
+        error: `Conflict projection is malformed (${summarizeValidationIssues(result.error)}). Run \`primitiv build\` to regenerate the contract.`
+      }
+    }
+    parsed.push(result.data as ConflictProjectionInput)
+  }
+  return { success: true, items: parsed }
+}
+
+function projectParsedConflictPage(conflicts: ConflictProjectionInput[]):
+  | {
+      success: true
+      items: Record<string, unknown>[]
+      total: number
+      pending: number
+      actionable: number
+      pendingDecision: number
+    }
+  | { success: false; error: string } {
+  const items = conflicts.slice(0, DEFAULT_CONFLICT_PAGE_LIMIT).map(projectConflict)
+  const pageBytes = new TextEncoder().encode(JSON.stringify(items)).byteLength
+  if (pageBytes > MAX_CONFLICT_PAGE_BYTES) {
+    return {
+      success: false,
+      error: `Conflict projection exceeds the ${MAX_CONFLICT_PAGE_BYTES}-byte limit. Reduce the retained conflict evidence.`
+    }
+  }
+  return {
+    success: true,
+    items,
+    total: conflicts.length,
+    pending: conflicts.filter((conflict) => conflict.resolution === "pending").length,
+    actionable: conflicts.filter((conflict) => conflict.actionable === true).length,
+    pendingDecision: conflicts.filter((conflict) => conflict.actionable === false).length
+  }
+}
+
+function projectConflict(conflict: ConflictProjectionInput): Record<string, unknown> {
+  return {
+    type: conflict.type,
+    name: safeDisplayText(conflict.name),
+    resolution: conflict.resolution,
+    actionable: conflict.actionable ?? false,
+    ...(conflict.suggestedFix !== undefined ? { suggestedFix: safeDisplayText(conflict.suggestedFix, 1_024) } : {}),
+    ...(conflict.fieldPath !== undefined ? { fieldPath: conflict.fieldPath } : {}),
+    ...(conflict.componentIds !== undefined ? { componentIds: conflict.componentIds } : {}),
+    ...(conflict.comparison !== undefined ? { comparison: conflict.comparison } : {}),
+    ...(conflict.fieldResolution !== undefined ? { fieldResolution: conflict.fieldResolution } : {}),
+    sources: conflict.sources.map((source) => ({
+      source: projectConflictSource(source.source),
+      value: safeDisplayText(source.value, 4_096),
+      ...(source.structuredValue !== undefined ? { structuredValue: source.structuredValue } : {}),
+      ...(source.componentId !== undefined ? { componentId: source.componentId } : {}),
+      ...(source.factPath !== undefined ? { factPath: source.factPath } : {})
+    }))
+  }
+}
+
+function projectConflictSource(source: Record<string, unknown>): Record<string, unknown> {
+  return {
+    adapter: source.adapter,
+    ...(typeof source.file === "string" ? { file: safeDisplayText(source.file, 1_024) } : {}),
+    ...(typeof source.line === "number" ? { line: source.line } : {}),
+    ...(source.metadata !== undefined ? { metadata: source.metadata } : {})
+  }
+}
+
+function samePath(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((part, index) => part === b[index])
+}
+
+function structuredConflictValueError(root: unknown): string | undefined {
+  const pending: Array<{ value: unknown; depth: number }> = [{ value: root, depth: 0 }]
+  let nodes = 0
+  while (pending.length > 0) {
+    const current = pending.pop()
+    if (!current) break
+    nodes += 1
+    if (nodes > 1_000) return "must contain at most 1000 values"
+    if (current.depth > 16) return "must be at most 16 levels deep"
+    const value = current.value
+    if (value === null || typeof value === "boolean") continue
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) return "numbers must be finite"
+      continue
+    }
+    if (typeof value === "string") {
+      if (value.length > 64 * 1024) return "strings must contain at most 65536 characters"
+      continue
+    }
+    if (Array.isArray(value)) {
+      if (value.length > 100) return "arrays must contain at most 100 values"
+      for (const child of value) pending.push({ value: child, depth: current.depth + 1 })
+      continue
+    }
+    if (typeof value === "object") {
+      const record = value as Record<string, unknown>
+      const keys = Object.keys(record)
+      if (keys.length > 100) return "objects must contain at most 100 keys"
+      if (keys.some((key) => key.length > 4096)) return "object keys must contain at most 4096 characters"
+      for (const key of keys) pending.push({ value: record[key], depth: current.depth + 1 })
+      continue
+    }
+    return "must contain only JSON-compatible values"
+  }
+  return undefined
 }
 
 const componentDetailSchema = z.enum(["api", "usage", "relationships", "all"])

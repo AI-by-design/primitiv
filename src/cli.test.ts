@@ -28,6 +28,18 @@ describe("primitiv --version", () => {
   })
 })
 
+describe("primitiv help", () => {
+  test("documents governance-aware verify exit codes and strict conflict escalation", () => {
+    const help = runCli()
+
+    expect(help).toContain("--strict: escalate pending conflicts / stale contract / token")
+    expect(help).toContain('includes pending conflicts allowed by governance.onConflict\n     "warn" / "auto-resolve"')
+    expect(help).toContain('pending conflicts under governance.onConflict "error"')
+    expect(help).toContain("failed source scans when using --strict")
+    expect(help).not.toContain("Check the contract is fresh and conflict-free")
+  })
+})
+
 describe("primitiv build — command-line integration", () => {
   test("writes deterministic JSX component relationships to the contract", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "primitiv-cli-relationships-e2e-"))

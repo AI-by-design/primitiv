@@ -48,7 +48,7 @@ Usage:
   primitiv init           Detect your project and generate primitiv.config.js
   primitiv build          Scan sources, resolve conflicts, write the contract
   primitiv serve          Start the MCP server
-  primitiv verify         Check the contract is fresh and conflict-free (for CI)
+  primitiv verify         Check contract freshness, token usage, source scans, and conflict policy
   primitiv --version      Print the installed version
 
 Options:
@@ -56,16 +56,18 @@ Options:
   primitiv build  [config] Path to config file (default: primitiv.config.js)
   primitiv serve  [config] Path to config file (default: primitiv.config.js)
   primitiv verify [config] [--strict] [--json] [--fast]
-                           --strict: escalate stale contract / token misuses / failed
-                                     source scans to hard failure (exit 2)
+                           --strict: escalate pending conflicts / stale contract / token
+                                     misuses / failed source scans to hard failure (exit 2)
                            --json:   emit a machine-readable report instead of text
                            --fast:   skip the rebuild-and-compare step; use file mtimes
                                      instead. Faster but unreliable in CI / fresh clones.
 
 Exit codes for verify:
-  0  clean — contract matches a fresh rebuild, conflicts resolved, no token misuses
-  1  stale or token misuse detected (warning level)
-  2  unresolved conflicts (or stale / token misuses / failed source scans in --strict)
+  0  no blocking findings — includes pending conflicts allowed by governance.onConflict
+     "warn" / "auto-resolve", and failed optional source scans, when not using --strict
+  1  stale contract or token misuse without --strict (including alongside tolerated conflicts)
+  2  pending conflicts under governance.onConflict "error", or pending conflicts / stale
+     contract / token misuses / failed source scans when using --strict
   3  no config or contract found, or the contract is malformed
 
 Exit codes for build:

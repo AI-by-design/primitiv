@@ -4,6 +4,7 @@ import { ContractBuilder } from "./contract"
 import { lintTokenMisuse } from "./lint"
 import { PrimitivMCPServer } from "./mcp"
 import { applyRationale, loadRationale } from "./rationale"
+import { safeDisplayText } from "./safe-display"
 import { CodebaseScanner } from "./scanner"
 import { FigmaAdapter } from "./sources/figma"
 import { StorybookAdapter } from "./sources/storybook"
@@ -18,7 +19,11 @@ export type {
   Component,
   ComponentKind,
   ComponentMap,
+  ComponentMapping,
   Conflict,
+  ConflictEvidence,
+  ConflictScope,
+  ConflictStructuredValue,
   DemonstratedEvidence,
   DemonstratedStory,
   InferredRule,
@@ -29,6 +34,7 @@ export type {
   PropDefinition,
   Rationale,
   RationaleMap,
+  SourceAdapter,
   SourceProvenance,
   SourceScanStatus,
   SourceStatus,
@@ -168,10 +174,9 @@ export async function buildContract(
 
   log("\n📋 Building contract...")
   const builder = new ContractBuilder(config)
-  const contract = builder.build(sources)
+  const contract = builder.build(sources, { sourceStatuses })
   contract.sourceRoot = projectRoot
   contract.configPath = path.resolve(cwd, configPath || "primitiv.config.js")
-  contract.sourceStatuses = sourceStatuses
 
   // Non-blocking notice: same-name components now coexist under qualified ids instead of
   // first-wins. Surfaced so nobody mistakes a multi-id name for a duplicate-scan bug.
@@ -180,7 +185,7 @@ export async function buildContract(
     const top = coexisting
       .sort((a, b) => b[1].length - a[1].length)
       .slice(0, 8)
-      .map(([name, ids]) => `${name}(×${ids.length})`)
+      .map(([name, ids]) => `${safeDisplayText(name)}(×${ids.length})`)
       .join(", ")
     log(
       `   ℹ ${coexisting.length} component name${coexisting.length === 1 ? "" : "s"} with multiple implementations — coexisting, resolved at lookup by scope/rationale. Top: ${top}`
@@ -221,9 +226,11 @@ export async function build(configPath?: string): Promise<number> {
   if (contract.conflicts.length > 0) {
     console.log(`\n⚠️  ${contract.conflicts.length} conflict(s) found:`)
     contract.conflicts.forEach((c) => {
-      console.log(`   - ${c.type}: ${c.name}`)
+      const field = c.fieldPath ? ` at ${c.fieldPath.map((segment) => safeDisplayText(segment)).join(" / ")}` : ""
+      console.log(`   - ${c.type}: ${safeDisplayText(c.name)}${field}`)
       c.sources.forEach((s) => {
-        console.log(`     ${s.source.adapter}${s.source.file ? ` (${s.source.file})` : ""}: ${s.value}`)
+        const file = s.source.file ? ` (${safeDisplayText(s.source.file)})` : ""
+        console.log(`     ${s.source.adapter}${file}: ${safeDisplayText(s.value)}`)
       })
     })
   }
@@ -292,7 +299,7 @@ function recordScanFailure(opts: {
 function scanErrorMessage(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err)
   const firstLine = msg.split("\n")[0]
-  return firstLine.length > 200 ? `${firstLine.slice(0, 200)}…` : firstLine
+  return safeDisplayText(firstLine, 200)
 }
 
 function countTokens(tokens: TokenMap): number {

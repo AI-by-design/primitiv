@@ -14,7 +14,8 @@ const conflictSchema = z
     // opaque for other states rather than defining a complete conflict schema here.
     type: z.unknown().optional(),
     name: z.unknown().optional(),
-    suggestedFix: z.unknown().optional()
+    suggestedFix: z.unknown().optional(),
+    fieldPath: z.unknown().optional()
   })
   .superRefine((conflict, ctx) => {
     if (conflict.resolution !== "pending") return
@@ -33,6 +34,18 @@ const conflictSchema = z
         code: "custom",
         path: ["suggestedFix"],
         message: "must be a string when present on a pending conflict"
+      })
+    }
+    if (
+      conflict.fieldPath !== undefined &&
+      (!Array.isArray(conflict.fieldPath) ||
+        conflict.fieldPath.length > 64 ||
+        conflict.fieldPath.some((segment) => typeof segment !== "string" || segment.length > 4096))
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["fieldPath"],
+        message: "must be a bounded string path when present on a pending conflict"
       })
     }
   })

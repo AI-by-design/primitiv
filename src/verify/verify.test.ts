@@ -17,12 +17,16 @@ afterEach(() => {
   fs.rmSync(tempDir, { recursive: true, force: true })
 })
 
-function writeConfig(root: string, patterns: string[] = ["**/*.css"]) {
+function writeConfig(
+  root: string,
+  patterns: string[] = ["**/*.css"],
+  onConflict: "error" | "warn" | "auto-resolve" = "warn"
+) {
   const body = `module.exports = {
   sources: {
     codebase: { root: ".", patterns: ${JSON.stringify(patterns)}, ignore: ["node_modules/**"] }
   },
-  governance: { sourceOfTruth: "codebase", onConflict: "warn" },
+  governance: { sourceOfTruth: "codebase", onConflict: "${onConflict}" },
   output: { path: "./primitiv.contract.json" }
 }
 `
@@ -100,13 +104,50 @@ describe("verify", () => {
     expect(result.conflicts.pending).toBe(0)
   })
 
-  test("returns unresolved-conflicts (exit 2) when pending conflicts exist", async () => {
+  test("warn policy reports pending conflicts without failing verify", async () => {
     writeConfig(tempDir)
     writeContract(tempDir, { conflicts: [pendingConflict()] })
     const result = await verify(undefined, { cwd: tempDir })
     expect(result.status).toBe("unresolved-conflicts")
-    expect(result.exitCode).toBe(2)
+    expect(result.exitCode).toBe(0)
     expect(result.conflicts.pending).toBe(1)
+    expect(result.messages.some((message) => message.startsWith("! 1 pending conflict"))).toBe(true)
+  })
+
+  test("escapes control characters in conflict messages", async () => {
+    writeConfig(tempDir)
+    const conflict = pendingConflict("\u001b[31mButton\nsize")
+    conflict.fieldPath = ["props", "size", "default"]
+    conflict.suggestedFix = "Review\rthis evidence."
+    writeContract(tempDir, { conflicts: [conflict] })
+
+    const result = await verify(undefined, { cwd: tempDir, fast: true })
+    const rendered = result.messages.join("\n")
+    expect(rendered).not.toContain("\u001b")
+    expect(rendered).not.toContain("\r")
+    expect(rendered).toContain("\\u{001b}")
+    expect(rendered).toContain("\\u{000d}")
+  })
+
+  test.each([
+    ["error", 2],
+    ["warn", 0],
+    ["auto-resolve", 0]
+  ] as const)("pending conflicts follow governance.onConflict=%s by default", async (onConflict, exitCode) => {
+    writeConfig(tempDir, ["**/*.css"], onConflict)
+    writeContract(tempDir, { conflicts: [pendingConflict()] })
+    const result = await verify(undefined, { cwd: tempDir })
+    expect(result.status).toBe("unresolved-conflicts")
+    expect(result.exitCode).toBe(exitCode)
+    expect(result.conflicts).toEqual({ total: 1, pending: 1 })
+  })
+
+  test("--strict escalates pending conflicts regardless of governance policy", async () => {
+    writeConfig(tempDir, ["**/*.css"], "auto-resolve")
+    writeContract(tempDir, { conflicts: [pendingConflict()] })
+    const result = await verify(undefined, { cwd: tempDir, strict: true })
+    expect(result.status).toBe("unresolved-conflicts")
+    expect(result.exitCode).toBe(2)
   })
 
   test("returns stale (exit 1) when a token in source is missing from the contract", async () => {
@@ -192,7 +233,7 @@ describe("verify", () => {
     const result = await verify(undefined, { cwd: tempDir })
     // Even though both conditions hold, we report the conflict as the primary status.
     expect(result.status).toBe("unresolved-conflicts")
-    expect(result.exitCode).toBe(2)
+    expect(result.exitCode).toBe(1)
   })
 
   test("accepts an explicit config path", async () => {
@@ -247,7 +288,7 @@ describe("verify — hardcoded token values", () => {
 
     const result = await verify(undefined, { cwd: tempDir })
     expect(result.status).toBe("unresolved-conflicts")
-    expect(result.exitCode).toBe(2)
+    expect(result.exitCode).toBe(1)
     // Violations are still tracked even when conflicts win the status field.
     expect(result.violations.total).toBe(1)
   })
@@ -556,18 +597,11 @@ describe("verify — component relationship drift", () => {
 })
 
 describe("verify — failed sources", () => {
-  function unreachablePort(): number {
-    const s = Bun.serve({ port: 0, fetch: () => new Response("") })
-    const port = s.port
-    s.stop(true)
-    return port
-  }
-
-  function writeStorybookConfig(root: string, port: number) {
+  function writeStorybookConfig(root: string) {
     const body = `module.exports = {
   sources: {
     codebase: { root: ".", patterns: ["**/*.css"], ignore: ["node_modules/**"] },
-    storybook: { url: "http://localhost:${port}" }
+    storybook: { url: "http://127.0.0.1:9" }
   },
   governance: { sourceOfTruth: "codebase", onConflict: "warn" },
   output: { path: "./primitiv.contract.json" }
@@ -613,7 +647,7 @@ describe("verify — failed sources", () => {
   }
 
   test("entries from a source that failed during rebuild are not reported as removed", async () => {
-    writeStorybookConfig(tempDir, unreachablePort())
+    writeStorybookConfig(tempDir)
     storybookCommit(tempDir)
 
     const result = await verify(undefined, { cwd: tempDir })
@@ -627,7 +661,7 @@ describe("verify — failed sources", () => {
   })
 
   test("--strict escalates a failed source to exit 2 (source-scan-failed)", async () => {
-    writeStorybookConfig(tempDir, unreachablePort())
+    writeStorybookConfig(tempDir)
     storybookCommit(tempDir)
 
     const result = await verify(undefined, { cwd: tempDir, strict: true })
@@ -679,7 +713,9 @@ describe("verify — failed sources", () => {
       const result = await verify(undefined, { cwd: tempDir })
       expect(result.drift.changes.some((change) => change.includes("mode removed"))).toBe(false)
       expect(result.status).toBe("clean")
-      expect(result.failedSources).toEqual([{ name: "figma", error: "offline" }])
+      expect(result.failedSources).toEqual([
+        { name: "figma", error: "Figma API request failed. Check your network connection and try again." }
+      ])
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -752,6 +788,14 @@ describe("verify — invalid contract", () => {
         mutate: (contract) =>
           (contract.conflicts = [
             { resolution: "pending", type: "token", name: "colors.primary", suggestedFix: ["rebuild"] }
+          ])
+      },
+      {
+        name: "pending conflict field path",
+        path: "conflicts.0.fieldPath",
+        mutate: (contract) =>
+          (contract.conflicts = [
+            { resolution: "pending", type: "component", name: "Button", fieldPath: ["props", 42] }
           ])
       },
       {
