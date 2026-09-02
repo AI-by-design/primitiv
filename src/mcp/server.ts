@@ -5,8 +5,16 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
+import { compareConflictsCanonical } from "../conflict-order"
 import { normalizeRuleCategory, RULE_CATEGORIES } from "../inferrer"
 import { safeDisplayText } from "../safe-display"
+import {
+  isSafeNonEmptyIdentifier,
+  isWithinDurableParticipantBounds,
+  MAX_CONFLICT_COMPONENT_ID_BYTES,
+  MAX_CONFLICT_COMPONENT_IDS,
+  MAX_IDENTIFIER_PATH_SEGMENTS
+} from "../safe-identifier"
 import type { Component, LintCategory, PrimitivContract, Rationale, TokenCategory } from "../types"
 import { LINT_CATEGORIES, primitivContractSchema, summarizeValidationIssues, TOKEN_CATEGORIES } from "../types"
 
@@ -16,7 +24,7 @@ export class PrimitivMCPServer {
   private watcher: fs.FSWatcher | null = null
   private derivedNameIndex: Record<string, string[]> | null = null
   private derivedUsedByIndex: Record<string, Record<string, number>> | null = null
-  private validatedRelationshipFacts: Record<string, RelationshipFacts> = {}
+  private validatedRelationshipFacts: Record<string, RelationshipFacts> = Object.create(null)
 
   constructor(private contractPath: string) {
     this.server = new McpServer({
@@ -57,7 +65,7 @@ export class PrimitivMCPServer {
       this.contract = parsed as PrimitivContract
       this.derivedNameIndex = null
       this.derivedUsedByIndex = null
-      this.validatedRelationshipFacts = {}
+      this.validatedRelationshipFacts = Object.create(null)
       this.warnIfMismatched()
     } catch {
       process.stderr.write(
@@ -69,13 +77,13 @@ export class PrimitivMCPServer {
   // displayName → ids. Contracts ≥0.3 carry the index; for older ones (bare-name keys,
   // no displayName) it's derived once per load so name lookups keep working.
   private nameIndex(): Record<string, string[]> {
-    if (!this.contract) return {}
+    if (!this.contract) return Object.create(null)
     if (this.contract.componentNameIndex) return this.contract.componentNameIndex
     if (!this.derivedNameIndex) {
-      const index: Record<string, string[]> = {}
+      const index: Record<string, string[]> = Object.create(null)
       for (const [id, c] of Object.entries(this.contract.components)) {
         const name = c.displayName ?? c.name
-        if (!index[name]) index[name] = []
+        if (!hasOwnKey(index, name)) index[name] = []
         index[name].push(id)
       }
       this.derivedNameIndex = index
@@ -84,23 +92,23 @@ export class PrimitivMCPServer {
   }
 
   private usedByIndex(facts: Record<string, RelationshipFacts>): Record<string, Record<string, number>> {
-    if (!this.contract) return {}
+    if (!this.contract) return Object.create(null)
     if (this.derivedUsedByIndex) return this.derivedUsedByIndex
 
-    const index: Record<string, Record<string, number>> = {}
+    const index: Record<string, Record<string, number>> = Object.create(null)
     for (const ownerId of Object.keys(this.contract.components).sort(compareStrings)) {
       const ownerFacts = facts[ownerId]
       for (const targetId of Object.keys(ownerFacts.uses ?? {}).sort(compareStrings)) {
-        if (!index[targetId]) index[targetId] = {}
+        if (!hasOwnKey(index, targetId)) index[targetId] = Object.create(null)
         index[targetId][ownerId] = ownerFacts.uses?.[targetId] ?? 0
       }
     }
 
-    this.derivedUsedByIndex = Object.fromEntries(
-      Object.keys(index)
-        .sort(compareStrings)
-        .map((targetId) => [targetId, sortCountMap(index[targetId])])
-    )
+    const sorted: Record<string, Record<string, number>> = Object.create(null)
+    for (const targetId of Object.keys(index).sort(compareStrings)) {
+      sorted[targetId] = sortCountMap(index[targetId])
+    }
+    this.derivedUsedByIndex = sorted
     return this.derivedUsedByIndex
   }
 
@@ -271,7 +279,9 @@ export class PrimitivMCPServer {
         annotations: { readOnlyHint: true },
         inputSchema: {
           category: z.string().optional(),
-          tokenCategory: z.string().optional()
+          tokenCategory: z.string().optional(),
+          offset: pageOffsetSchema.optional(),
+          limit: pageLimitSchema.optional()
         }
       },
       async (args) => {
@@ -279,7 +289,7 @@ export class PrimitivMCPServer {
         const category = args.category || "summary"
 
         if (category === "summary") {
-          const tokenCounts: Record<string, number> = {}
+          const tokenCounts: Record<string, number> = Object.create(null)
           for (const [cat, tokens] of Object.entries(this.contract.tokens)) {
             tokenCounts[cat] = Object.keys(tokens).length
           }
@@ -334,7 +344,7 @@ export class PrimitivMCPServer {
         if (category === "all" || category === "tokens") {
           if (args.tokenCategory) {
             const tc = this.normalizeTokenCategory(args.tokenCategory)
-            if (!(tc in this.contract.tokens)) {
+            if (!hasOwnKey(this.contract.tokens, tc)) {
               return this.err(
                 `Unknown token category '${args.tokenCategory}'. Available: ${Object.keys(this.contract.tokens).join(", ")}. Pass no tokenCategory to get all.`
               )
@@ -363,12 +373,15 @@ export class PrimitivMCPServer {
           )
         }
         if (category === "all" || category === "conflicts") {
-          const page = projectConflictPage(this.contract.conflicts)
+          const page = projectConflictPage(this.contract.conflicts, args.offset ?? 0, args.limit ?? DEFAULT_PAGE_LIMIT)
           if (!page.success) return this.err(page.error)
           result.conflicts = page.items
           result.conflictCount = page.total
           result.pendingConflicts = page.pending
-          result.conflictsTruncated = page.items.length < page.total
+          result.conflictSummary = { total: page.total, pending: page.pending, actionable: page.actionable }
+          result.conflictPage = pageMeta(page.total, page.items.length, page.offset)
+          result.conflictInstruction =
+            "Call get_conflicts to filter by component or structured field path and retrieve additional pages."
         }
         result.generatedAt = this.contract.generatedAt
         result.sources = this.contract.sources
@@ -395,8 +408,8 @@ export class PrimitivMCPServer {
           ? [this.normalizeTokenCategory(args.category)]
           : Object.keys(this.contract.tokens)
         for (const cat of categories) {
-          const tokens = this.contract.tokens[cat]
-          if (tokens?.[args.name]) {
+          const tokens = hasOwnKey(this.contract.tokens, cat) ? this.contract.tokens[cat] : undefined
+          if (tokens && hasOwnKey(tokens, args.name)) {
             return this.json({ ...tokens[args.name], category: cat })
           }
         }
@@ -410,14 +423,16 @@ export class PrimitivMCPServer {
       "get_component",
       {
         description:
-          "Look up a component by name or id. Read-only, no side effects. Pass context (your current working file or directory) so same-name components resolve by path scope. Returns the component JSON (with its id) when the lookup resolves to exactly one component, or an error listing available names if not found. Detail is opt-in: pass 'api' for the component's declared prop contract, 'usage' for static JSX-site counts and observed prop values, 'relationships' for sorted outgoing uses and derived incoming usedBy counts, or 'all' for every projection. These are static source-site facts, never runtime frequency. When several components share the name and neither governance nor scope decides, returns { ambiguous, matches, instruction } — follow the instruction: match each candidate's rationale.when against the user's intent, and if that doesn't decide, ask the user; never pick arbitrarily. Use this when you need implementation details for a known component to reuse it rather than recreate it. For a list of all components, use get_design_context with category 'components' instead.",
+          "Look up a component by name or id. Read-only, no side effects. Pass context (your current working file or directory) so same-name components resolve by path scope. Returns the component JSON (with its id) when the lookup resolves to exactly one component, or an error listing available names if not found. Detail is opt-in: pass 'api' for the component's declared prop contract, 'usage' for static JSX-site counts and observed prop values, 'relationships' for sorted outgoing uses and derived incoming usedBy counts, 'conflicts' for bounded source-conflict evidence, or 'all' for every projection. These are static source-site facts, never runtime frequency. When several components share the name and neither governance nor scope decides, returns { ambiguous, matches, instruction } — follow the instruction: match each candidate's rationale.when against the user's intent, and if that doesn't decide, ask the user; never pick arbitrarily. Use this when you need implementation details for a known component to reuse it rather than recreate it. For a list of all components, use get_design_context with category 'components' instead.",
         annotations: { readOnlyHint: true },
         inputSchema: {
           name: z.string(),
           // Optional by design: a name-only lookup must keep working (and fall through to
           // the ambiguous payload on multi-match), never fail validation.
           context: z.string().optional(),
-          detail: componentDetailSchema.optional()
+          detail: componentDetailSchema.optional(),
+          offset: pageOffsetSchema.optional(),
+          limit: pageLimitSchema.optional()
         }
       },
       async (args) => {
@@ -425,25 +440,37 @@ export class PrimitivMCPServer {
         const components = this.contract.components
 
         // Direct hit — `name` may already be a qualified id (`components/ui/Card`, `figma:Card`).
-        if (components[args.name]) return this.componentResponse({ id: args.name, detail: args.detail })
+        if (hasOwnKey(components, args.name))
+          return this.componentResponse({ id: args.name, detail: args.detail, offset: args.offset, limit: args.limit })
 
-        const ids = this.nameIndex()[args.name] ?? []
+        const index = this.nameIndex()
+        const ids = hasOwnKey(index, args.name) ? index[args.name] : []
+        if (ids.some((id) => !hasOwnKey(components, id))) {
+          return this.err(
+            "Contract component name index references a missing component. Run `primitiv build` to regenerate."
+          )
+        }
         if (ids.length === 0) {
           const available = [...new Set(Object.values(components).map((c) => c.displayName ?? c.name))]
             .sort()
             .join(", ")
           return this.err(`Component '${args.name}' not found. Available: ${available}`)
         }
-        if (ids.length === 1) return this.componentResponse({ id: ids[0], detail: args.detail })
+        if (ids.length === 1)
+          return this.componentResponse({ id: ids[0], detail: args.detail, offset: args.offset, limit: args.limit })
 
         // Resolution order: governance → scope → hand the decision to the agent's ladder
         // (rationale.when vs intent, then ask the user). The contract decides what it can;
         // the agent never free-chooses.
-        const configuredResolution = this.contract.componentNameResolutions?.[args.name]
+        const resolutions = this.contract.componentNameResolutions
+        const configuredResolution =
+          resolutions && hasOwnKey(resolutions, args.name) ? resolutions[args.name] : undefined
         if (configuredResolution !== undefined && ids.includes(configuredResolution)) {
           return this.componentResponse({
             id: configuredResolution,
             detail: args.detail,
+            offset: args.offset,
+            limit: args.limit,
             resolvedBy: "governance.sourceOfTruth"
           })
         }
@@ -462,6 +489,8 @@ export class PrimitivMCPServer {
           return this.componentResponse({
             id,
             detail: args.detail,
+            offset: args.offset,
+            limit: args.limit,
             resolvedBy: "governance.sourceOfTruth"
           })
         }
@@ -471,7 +500,14 @@ export class PrimitivMCPServer {
             ids.map((id) => ({ id, dir: components[id].scope ?? idDirectory(id) })),
             args.context
           )
-          if (scoped !== null) return this.componentResponse({ id: scoped, detail: args.detail, resolvedBy: "scope" })
+          if (scoped !== null)
+            return this.componentResponse({
+              id: scoped,
+              detail: args.detail,
+              offset: args.offset,
+              limit: args.limit,
+              resolvedBy: "scope"
+            })
         }
 
         // Ambiguous is a governed payload, not an error — the instruction ships in the
@@ -502,17 +538,23 @@ export class PrimitivMCPServer {
       "get_conflicts",
       {
         description:
-          "Get conflicts between design sources. Read-only, no side effects. Returns JSON with conflict count, actionable count, and a list of conflicts with type, name, resolution status, and suggested fixes. Pass type: 'all' | 'token' | 'component' (default 'all'). Pass status: 'all' | 'pending' | 'resolved' (default 'pending'). Use this to audit disagreements between sources (e.g. Figma vs codebase). For resolved design values, use get_token or get_component instead.",
+          "Get a bounded, repeatable page of design-system conflicts. Read-only, no side effects. Filter by type, status, scope, exact component name or durable component ID, and a structured fieldPath prefix. Use offset and limit for pagination (default 25, maximum 100). For resolved design values, use get_token or get_component instead.",
         annotations: { readOnlyHint: true },
         inputSchema: {
-          type: z.string().optional(),
-          status: z.string().optional()
+          type: z.enum(["all", "token", "component"]).optional(),
+          status: z.enum(["all", "pending", "resolved"]).optional(),
+          scope: z.enum(["all", "cross-source", "within-source"]).optional(),
+          component: projectionStringSchema.optional(),
+          fieldPath: projectionPathSchema.optional(),
+          offset: pageOffsetSchema.optional(),
+          limit: pageLimitSchema.optional()
         }
       },
       async (args) => {
         if (!this.contract) return this.noContract()
         const type = args.type || "all"
         const status = args.status || "pending"
+        const scope = args.scope || "all"
         const parsedConflicts = parseConflictProjectionInputs(this.contract.conflicts)
         if (!parsedConflicts.success) return this.err(parsedConflicts.error)
         let conflicts = parsedConflicts.items
@@ -521,13 +563,29 @@ export class PrimitivMCPServer {
           conflicts = conflicts.filter((c) =>
             status === "pending" ? c.resolution === "pending" : c.resolution !== "pending"
           )
-        const page = projectParsedConflictPage(conflicts)
+        if (scope !== "all") conflicts = conflicts.filter((c) => c.scope === scope)
+        if (args.component !== undefined) {
+          const componentFilter = args.component
+          conflicts = conflicts.filter(
+            (c) =>
+              c.name === componentFilter || (Array.isArray(c.componentIds) && c.componentIds.includes(componentFilter))
+          )
+        }
+        if (args.fieldPath !== undefined) {
+          const fieldPathFilter = args.fieldPath
+          conflicts = conflicts.filter((c) => Array.isArray(c.fieldPath) && isPathPrefix(fieldPathFilter, c.fieldPath))
+        }
+        const page = projectConflictPage(conflicts, args.offset ?? 0, args.limit ?? DEFAULT_PAGE_LIMIT)
         if (!page.success) return this.err(page.error)
         return this.json({
           count: page.total,
+          total: page.total,
+          returned: page.items.length,
+          offset: page.offset,
+          hasMore: page.hasMore,
+          nextOffset: page.nextOffset,
           actionableCount: page.actionable,
           pendingDecisionCount: page.pendingDecision,
-          truncated: page.items.length < page.total,
           conflicts: page.items
         })
       }
@@ -615,8 +673,13 @@ export class PrimitivMCPServer {
     id: string
     detail?: ComponentDetail
     resolvedBy?: ComponentResolution
+    offset?: number
+    limit?: number
   }): CallToolResult {
     if (!this.contract) return this.noContract()
+    if (!hasOwnKey(this.contract.components, opts.id)) {
+      return this.err("Contract component index references a missing component. Run `primitiv build` to regenerate.")
+    }
     const component = this.contract.components[opts.id]
     // Keep the default payload intentionally stable and compact. Components are an
     // additive contract surface, so spreading here would silently expose every future
@@ -651,8 +714,24 @@ export class PrimitivMCPServer {
       const usedBy = this.usedByIndex(validated.facts)
       payload.relationships = {
         uses: sortCountMap(facts.uses ?? {}),
-        usedBy: usedBy[opts.id] ?? {}
+        usedBy: hasOwnKey(usedBy, opts.id) ? usedBy[opts.id] : {}
       }
+    }
+    if (opts.detail === "conflicts" || opts.detail === "all") {
+      const parsedConflicts = parseConflictProjectionInputs(this.contract.conflicts)
+      if (!parsedConflicts.success) return this.err(parsedConflicts.error)
+      const displayName = component.displayName ?? component.name
+      const related = parsedConflicts.items.filter((conflict) => {
+        if (conflict.fieldPath !== undefined) return conflict.componentIds?.includes(opts.id) === true
+        return conflict.name === displayName || conflict.componentIds?.includes(opts.id)
+      })
+      const page = projectConflictPage(related, opts.offset ?? 0, opts.limit ?? DEFAULT_PAGE_LIMIT)
+      if (!page.success) return this.err(page.error)
+      payload.conflicts = {
+        ...pageMeta(page.total, page.items.length, page.offset),
+        conflicts: page.items
+      }
+      payload.conflictSummary = { total: page.total, pending: page.pending, actionable: page.actionable }
     }
     return this.json(payload)
   }
@@ -661,11 +740,10 @@ export class PrimitivMCPServer {
     ids: string[]
   ): { success: true; facts: Record<string, RelationshipFacts> } | { success: false; error: string } {
     if (!this.contract) return { success: true, facts: {} }
-    const facts: Record<string, RelationshipFacts> = {}
+    const facts: Record<string, RelationshipFacts> = Object.create(null)
     for (const id of ids.sort(compareStrings)) {
-      const cached = this.validatedRelationshipFacts[id]
-      if (cached) {
-        facts[id] = cached
+      if (hasOwnKey(this.validatedRelationshipFacts, id)) {
+        facts[id] = this.validatedRelationshipFacts[id]
         continue
       }
       const parsed = relationshipFactsSchema.safeParse(this.contract.components[id])
@@ -705,10 +783,22 @@ export class PrimitivMCPServer {
   }
 }
 
-const DEFAULT_CONFLICT_PAGE_LIMIT = 25
+const componentDetailSchema = z.enum(["api", "usage", "relationships", "conflicts", "all"])
+type ComponentDetail = z.infer<typeof componentDetailSchema>
+type ComponentResolution = "scope" | "governance.sourceOfTruth"
+
+// Conflict responses are deliberately paged: source evidence can be large in real contracts.
+const DEFAULT_PAGE_LIMIT = 25
+const MAX_PAGE_LIMIT = 100
 const MAX_CONFLICT_PAGE_BYTES = 512 * 1024
+const MAX_PROJECTED_COMPONENT_IDS = 100
+const pageOffsetSchema = z.number().int().min(0).max(1_000_000)
+const pageLimitSchema = z.number().int().min(1).max(MAX_PAGE_LIMIT)
 const projectionStringSchema = z.string().max(4096)
-const projectionPathSchema = z.array(projectionStringSchema).max(64)
+const projectionIdentifierSchema = projectionStringSchema
+  .min(1)
+  .refine(isSafeNonEmptyIdentifier, { message: "must not contain unsafe control or bidirectional code points" })
+const projectionPathSchema = z.array(projectionIdentifierSchema).min(1).max(MAX_IDENTIFIER_PATH_SEGMENTS)
 const structuredConflictValueSchema = z.unknown().superRefine((value, context) => {
   const error = structuredConflictValueError(value)
   if (error) context.addIssue({ code: "custom", message: error })
@@ -717,6 +807,7 @@ const structuredConflictValueSchema = z.unknown().superRefine((value, context) =
 type ConflictProjectionInput = {
   type: "token" | "component"
   name: string
+  scope?: "cross-source" | "within-source"
   sources: Array<{
     source: Record<string, unknown>
     value: string
@@ -731,7 +822,14 @@ type ConflictProjectionInput = {
   fieldPath?: string[]
   componentIds?: string[]
   comparison?: "exact" | "subset"
-  fieldResolution?: Record<string, unknown>
+  fieldResolution?: {
+    adapter: "codebase" | "figma" | "storybook"
+    componentIds: string[]
+    fieldPath: string[]
+    structuredValue: unknown
+  }
+  evidenceTotal?: number
+  evidenceTruncated?: true
 }
 
 const conflictSourceProjectionSchema = z.object({
@@ -746,16 +844,16 @@ const conflictSourceProjectionSchema = z.object({
   }),
   value: projectionStringSchema,
   structuredValue: structuredConflictValueSchema.optional(),
-  componentId: projectionStringSchema.optional(),
+  componentId: projectionIdentifierSchema.optional(),
   factPath: projectionPathSchema.optional()
 })
-
 const conflictProjectionSchema = z
   .object({
     type: z.enum(["token", "component"]),
     name: projectionStringSchema,
+    scope: z.enum(["cross-source", "within-source"]).optional(),
     sources: z.array(conflictSourceProjectionSchema).max(100),
-    resolved: projectionStringSchema.optional(),
+    resolved: projectionIdentifierSchema.optional(),
     resolution: z.enum(["auto", "manual", "pending"]).optional(),
     suggestedFix: z
       .string()
@@ -763,16 +861,18 @@ const conflictProjectionSchema = z
       .optional(),
     actionable: z.boolean().optional(),
     fieldPath: projectionPathSchema.optional(),
-    componentIds: z.array(projectionStringSchema).max(100).optional(),
+    componentIds: z.array(projectionIdentifierSchema).max(MAX_CONFLICT_COMPONENT_IDS).optional(),
     comparison: z.enum(["exact", "subset"]).optional(),
     fieldResolution: z
       .object({
         adapter: z.enum(["codebase", "figma", "storybook"]),
-        componentIds: z.array(projectionStringSchema).max(100),
+        componentIds: z.array(projectionIdentifierSchema).max(MAX_CONFLICT_COMPONENT_IDS),
         fieldPath: projectionPathSchema,
         structuredValue: structuredConflictValueSchema
       })
-      .optional()
+      .optional(),
+    evidenceTotal: z.number().int().nonnegative().optional(),
+    evidenceTruncated: z.literal(true).optional()
   })
   .superRefine((conflict, context) => {
     if (conflict.fieldPath !== undefined && conflict.resolved !== undefined) {
@@ -785,12 +885,95 @@ const conflictProjectionSchema = z
         context.addIssue({ code: "custom", message: "field resolution path must match the conflict field path" })
       }
     }
+    validateDurableComponentIds({ ids: conflict.componentIds, path: ["componentIds"], context })
+    validateDurableComponentIds({
+      ids: conflict.fieldResolution?.componentIds,
+      path: ["fieldResolution", "componentIds"],
+      context
+    })
+
+    const retained = conflict.sources.length
+    if (conflict.evidenceTotal === undefined) {
+      if (conflict.evidenceTruncated !== undefined) {
+        context.addIssue({
+          code: "custom",
+          path: ["evidenceTruncated"],
+          message: "requires evidenceTotal"
+        })
+      }
+    } else {
+      if (conflict.evidenceTotal < retained) {
+        context.addIssue({
+          code: "custom",
+          path: ["evidenceTotal"],
+          message: "must be at least the retained source count"
+        })
+      }
+      const isTruncated = conflict.evidenceTotal > retained
+      if (isTruncated && conflict.evidenceTruncated !== true) {
+        context.addIssue({
+          code: "custom",
+          path: ["evidenceTruncated"],
+          message: "must be true when evidenceTotal exceeds retained sources"
+        })
+      } else if (!isTruncated && conflict.evidenceTruncated !== undefined) {
+        context.addIssue({
+          code: "custom",
+          path: ["evidenceTruncated"],
+          message: "must be omitted when all evidence is retained"
+        })
+      }
+    }
   })
 
-function projectConflictPage(conflicts: unknown[]) {
+interface DurableComponentIdValidation {
+  ids: string[] | undefined
+  path: Array<string | number>
+  context: z.RefinementCtx
+}
+
+function validateDurableComponentIds({ ids, path, context }: DurableComponentIdValidation): void {
+  if (ids === undefined) return
+  if (!isWithinDurableParticipantBounds(ids)) {
+    context.addIssue({
+      code: "custom",
+      path,
+      message: `must contain at most ${MAX_CONFLICT_COMPONENT_ID_BYTES} bytes of UTF-8 identifier text`
+    })
+  }
+}
+
+function projectConflictPage(
+  conflicts: unknown[],
+  offset: number,
+  limit: number
+):
+  | {
+      success: true
+      items: Record<string, unknown>[]
+      total: number
+      pending: number
+      actionable: number
+      pendingDecision: number
+      offset: number
+      limit: number
+      hasMore: boolean
+      nextOffset?: number
+    }
+  | { success: false; error: string } {
   const parsed = parseConflictProjectionInputs(conflicts)
   if (!parsed.success) return parsed
-  return projectParsedConflictPage(parsed.items)
+  const page = projectParsedConflictPage(parsed.items, offset, limit)
+  const pageBytes = new TextEncoder().encode(JSON.stringify(page.items)).byteLength
+  if (pageBytes > MAX_CONFLICT_PAGE_BYTES) {
+    return {
+      success: false,
+      error:
+        `Conflict page exceeds the ${MAX_CONFLICT_PAGE_BYTES}-byte projection limit. ` +
+        "Request a smaller limit or narrower component and fieldPath filters."
+    }
+  }
+  return { success: true, ...page }
 }
 
 function parseConflictProjectionInputs(
@@ -807,55 +990,71 @@ function parseConflictProjectionInputs(
     }
     parsed.push(result.data as ConflictProjectionInput)
   }
+  parsed.sort(compareConflictsCanonical)
   return { success: true, items: parsed }
 }
 
-function projectParsedConflictPage(conflicts: ConflictProjectionInput[]):
-  | {
-      success: true
-      items: Record<string, unknown>[]
-      total: number
-      pending: number
-      actionable: number
-      pendingDecision: number
-    }
-  | { success: false; error: string } {
-  const items = conflicts.slice(0, DEFAULT_CONFLICT_PAGE_LIMIT).map(projectConflict)
-  const pageBytes = new TextEncoder().encode(JSON.stringify(items)).byteLength
-  if (pageBytes > MAX_CONFLICT_PAGE_BYTES) {
-    return {
-      success: false,
-      error: `Conflict projection exceeds the ${MAX_CONFLICT_PAGE_BYTES}-byte limit. Reduce the retained conflict evidence.`
-    }
-  }
+function projectParsedConflictPage(parsed: ConflictProjectionInput[], offset: number, limit: number) {
+  const items = parsed.slice(offset, offset + limit).map(projectConflict)
+  const total = parsed.length
+  const hasMore = offset + items.length < total
   return {
-    success: true,
     items,
-    total: conflicts.length,
-    pending: conflicts.filter((conflict) => conflict.resolution === "pending").length,
-    actionable: conflicts.filter((conflict) => conflict.actionable === true).length,
-    pendingDecision: conflicts.filter((conflict) => conflict.actionable === false).length
+    total,
+    pending: parsed.filter((c) => c.resolution === "pending").length,
+    actionable: parsed.filter((c) => c.actionable === true).length,
+    pendingDecision: parsed.filter((c) => c.actionable === false).length,
+    offset,
+    limit,
+    hasMore,
+    ...(hasMore ? { nextOffset: offset + items.length } : {})
   }
 }
 
-function projectConflict(conflict: ConflictProjectionInput): Record<string, unknown> {
+function projectConflict(c: ConflictProjectionInput): Record<string, unknown> {
+  const evidenceTotal = c.evidenceTotal ?? c.sources.length
   return {
-    type: conflict.type,
-    name: safeDisplayText(conflict.name),
-    resolution: conflict.resolution,
-    actionable: conflict.actionable ?? false,
-    ...(conflict.suggestedFix !== undefined ? { suggestedFix: safeDisplayText(conflict.suggestedFix, 1_024) } : {}),
-    ...(conflict.fieldPath !== undefined ? { fieldPath: conflict.fieldPath } : {}),
-    ...(conflict.componentIds !== undefined ? { componentIds: conflict.componentIds } : {}),
-    ...(conflict.comparison !== undefined ? { comparison: conflict.comparison } : {}),
-    ...(conflict.fieldResolution !== undefined ? { fieldResolution: conflict.fieldResolution } : {}),
-    sources: conflict.sources.map((source) => ({
+    type: c.type,
+    name: safeDisplayText(c.name),
+    ...(c.scope !== undefined ? { scope: c.scope } : {}),
+    resolution: c.resolution,
+    actionable: c.actionable ?? false,
+    ...(c.suggestedFix !== undefined ? { suggestedFix: safeDisplayText(c.suggestedFix, 1_024) } : {}),
+    ...(c.fieldPath !== undefined ? { fieldPath: c.fieldPath } : {}),
+    ...(c.componentIds !== undefined ? projectComponentIds(c.componentIds) : {}),
+    ...(c.comparison !== undefined ? { comparison: c.comparison } : {}),
+    ...(c.fieldResolution !== undefined
+      ? {
+          fieldResolution: {
+            adapter: c.fieldResolution.adapter,
+            ...projectComponentIds(c.fieldResolution.componentIds),
+            fieldPath: c.fieldResolution.fieldPath,
+            structuredValue: c.fieldResolution.structuredValue
+          }
+        }
+      : {}),
+    evidenceTotal,
+    evidenceRetained: c.sources.length,
+    evidenceTruncated: c.evidenceTruncated ?? false,
+    sources: c.sources.map((source) => ({
       source: projectConflictSource(source.source),
       value: safeDisplayText(source.value, 4_096),
       ...(source.structuredValue !== undefined ? { structuredValue: source.structuredValue } : {}),
       ...(source.componentId !== undefined ? { componentId: source.componentId } : {}),
       ...(source.factPath !== undefined ? { factPath: source.factPath } : {})
     }))
+  }
+}
+
+function projectComponentIds(componentIds: string[]): {
+  componentIds: string[]
+  componentIdsTotal: number
+  componentIdsTruncated: boolean
+} {
+  return {
+    componentIds: componentIds.slice(0, MAX_PROJECTED_COMPONENT_IDS),
+    componentIdsTotal: componentIds.length,
+    componentIdsTruncated: componentIds.length > MAX_PROJECTED_COMPONENT_IDS
   }
 }
 
@@ -866,6 +1065,15 @@ function projectConflictSource(source: Record<string, unknown>): Record<string, 
     ...(typeof source.line === "number" ? { line: source.line } : {}),
     ...(source.metadata !== undefined ? { metadata: source.metadata } : {})
   }
+}
+
+function pageMeta(total: number, returned: number, offset: number): Record<string, unknown> {
+  const hasMore = offset + returned < total
+  return { total, returned, offset, hasMore, ...(hasMore ? { nextOffset: offset + returned } : {}) }
+}
+
+function isPathPrefix(prefix: string[], value: string[]): boolean {
+  return prefix.length <= value.length && prefix.every((part, index) => part === value[index])
 }
 
 function samePath(a: string[], b: string[]): boolean {
@@ -908,10 +1116,6 @@ function structuredConflictValueError(root: unknown): string | undefined {
   }
   return undefined
 }
-
-const componentDetailSchema = z.enum(["api", "usage", "relationships", "all"])
-type ComponentDetail = z.infer<typeof componentDetailSchema>
-type ComponentResolution = "scope" | "governance.sourceOfTruth"
 
 const relationshipCountSchema = z.number().int().positive()
 const propValueSchema = z.union([z.string(), z.number().finite(), z.boolean()])
@@ -1067,6 +1271,10 @@ function sortCountMap(counts: Record<string, number>): Record<string, number> {
 
 function compareStrings(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0
+}
+
+function hasOwnKey(record: object, key: PropertyKey): boolean {
+  return Object.getOwnPropertyDescriptor(record, key) !== undefined
 }
 
 // Pick the candidate whose directory (or explicit scope) most specifically contains the

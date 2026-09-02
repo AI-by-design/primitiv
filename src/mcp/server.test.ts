@@ -52,7 +52,13 @@ async function connect(contractPath: string): Promise<Client> {
 
 async function getComponent(
   c: Client,
-  args: { name: string; context?: string; detail?: "api" | "usage" | "relationships" | "all" }
+  args: {
+    name: string
+    context?: string
+    detail?: "api" | "usage" | "relationships" | "conflicts" | "all"
+    offset?: number
+    limit?: number
+  }
 ) {
   const result = await c.callTool({ name: "get_component", arguments: args })
   const content = result.content as Array<{ type: string; text: string }>
@@ -115,6 +121,27 @@ describe("get_component resolution", () => {
     const { isError, text } = await getComponent(c, { name: "product/Card" })
     expect(isError).toBe(false)
     expect(JSON.parse(text).id).toBe("product/Card")
+  })
+
+  test("prototype-like component IDs and names require exact own-key matches", async () => {
+    const components = Object.fromEntries([
+      ["__proto__", { name: "PrototypeId", source: { adapter: "codebase" as const } }],
+      ["ui/PrototypeName", { name: "__proto__", source: { adapter: "codebase" as const } }],
+      ["ui/ConstructorName", { name: "constructor", source: { adapter: "codebase" as const } }],
+      ["ui/ToStringName", { name: "toString", source: { adapter: "codebase" as const } }]
+    ])
+    const componentNameIndex = Object.fromEntries([
+      ["PrototypeId", ["__proto__"]],
+      ["__proto__", ["ui/PrototypeName"]],
+      ["constructor", ["ui/ConstructorName"]],
+      ["toString", ["ui/ToStringName"]]
+    ])
+    const c = await connect(writeContract({ components, componentNameIndex }))
+
+    expect(JSON.parse((await getComponent(c, { name: "__proto__" })).text).id).toBe("__proto__")
+    expect(JSON.parse((await getComponent(c, { name: "constructor" })).text).id).toBe("ui/ConstructorName")
+    expect(JSON.parse((await getComponent(c, { name: "toString" })).text).id).toBe("ui/ToStringName")
+    expect((await getComponent(c, { name: "valueOf" })).isError).toBe(true)
   })
 
   test("unknown name errors with available display names", async () => {
@@ -920,6 +947,320 @@ describe("omittable args are declared optional", () => {
 })
 
 describe("bounded conflict projections", () => {
+  test("get_conflicts returns a page and supports component and field-path filters", async () => {
+    const c = await connect(
+      writeContract({
+        conflicts: [
+          {
+            type: "component",
+            name: "Card",
+            fieldPath: ["props", "size", "default"],
+            componentIds: ["ui/Card", "figma:card"],
+            comparison: "exact",
+            sources: [
+              {
+                source: { adapter: "codebase", metadata: { kind: "declaration" } },
+                value: '"sm"',
+                structuredValue: "sm",
+                componentId: "ui/Card",
+                factPath: ["props", "size", "default"]
+              }
+            ],
+            fieldResolution: {
+              adapter: "codebase",
+              componentIds: ["ui/Card"],
+              fieldPath: ["props", "size", "default"],
+              structuredValue: "sm"
+            },
+            evidenceTotal: 1,
+            resolution: "pending",
+            actionable: true
+          },
+          {
+            type: "component",
+            name: "Button",
+            sources: [{ source: { adapter: "codebase" }, value: "b" }],
+            resolution: "pending",
+            actionable: false
+          }
+        ]
+      })
+    )
+    const result = await c.callTool({ name: "get_conflicts", arguments: { type: "component", limit: 1 } })
+    const payload = JSON.parse((result.content as Array<{ type: string; text: string }>)[0].text)
+    expect(payload).toMatchObject({ count: 2, total: 2, returned: 1, offset: 0, hasMore: true, nextOffset: 1 })
+    const filtered = await c.callTool({ name: "get_conflicts", arguments: { component: "Card" } })
+    const filteredPayload = JSON.parse((filtered.content as Array<{ type: string; text: string }>)[0].text)
+    expect(filteredPayload.total).toBe(1)
+    expect(filteredPayload.conflicts[0].name).toBe("Card")
+    expect(filteredPayload.conflicts[0].sources[0].structuredValue).toBe("sm")
+    expect(filteredPayload.conflicts[0]).toMatchObject({
+      componentIdsTotal: 2,
+      componentIdsTruncated: false,
+      evidenceTotal: 1,
+      evidenceRetained: 1,
+      evidenceTruncated: false,
+      fieldResolution: {
+        componentIdsTotal: 1,
+        componentIdsTruncated: false
+      }
+    })
+
+    const byIdAndPath = await c.callTool({
+      name: "get_conflicts",
+      arguments: { component: "ui/Card", fieldPath: ["props", "size"] }
+    })
+    const byIdAndPathPayload = JSON.parse((byIdAndPath.content as Array<{ type: string; text: string }>)[0].text)
+    expect(byIdAndPathPayload).toMatchObject({ total: 1, returned: 1, hasMore: false })
+  })
+
+  test("filters against complete participant IDs while every conflict surface projects at most 100", async () => {
+    const componentIds = Array.from({ length: 101 }, (_, index) => `component/${String(index).padStart(3, "0")}`)
+    const lastId = componentIds[100]
+    const conflict = {
+      type: "component" as const,
+      name: "Card",
+      scope: "cross-source" as const,
+      fieldPath: ["props", "size", "default"],
+      componentIds,
+      comparison: "exact" as const,
+      sources: [
+        {
+          source: { adapter: "codebase" as const },
+          value: '"sm"',
+          structuredValue: "sm",
+          componentId: componentIds[0],
+          factPath: ["props", "size", "default"]
+        },
+        {
+          source: { adapter: "figma" as const },
+          value: '"lg"',
+          structuredValue: "lg",
+          componentId: lastId,
+          factPath: ["props", "size", "default"]
+        }
+      ],
+      fieldResolution: {
+        adapter: "codebase" as const,
+        componentIds,
+        fieldPath: ["props", "size", "default"],
+        structuredValue: "sm"
+      },
+      evidenceTotal: 101,
+      evidenceTruncated: true as const,
+      resolution: "pending" as const,
+      actionable: true
+    }
+    const c = await connect(
+      writeContract({
+        components: { [lastId]: { name: "Card", source: { adapter: "codebase" } } },
+        conflicts: [conflict]
+      })
+    )
+
+    const getConflict = await c.callTool({ name: "get_conflicts", arguments: { component: lastId } })
+    const conflictPayload = JSON.parse((getConflict.content as Array<{ type: string; text: string }>)[0].text)
+    expect(conflictPayload.total).toBe(1)
+    expect(conflictPayload.conflicts[0]).toMatchObject({
+      scope: "cross-source",
+      comparison: "exact",
+      componentIdsTotal: 101,
+      componentIdsTruncated: true,
+      evidenceTotal: 101,
+      evidenceRetained: 2,
+      evidenceTruncated: true,
+      fieldResolution: {
+        componentIdsTotal: 101,
+        componentIdsTruncated: true,
+        structuredValue: "sm"
+      }
+    })
+    expect(conflictPayload.conflicts[0].componentIds).toHaveLength(100)
+    expect(conflictPayload.conflicts[0].componentIds).not.toContain(lastId)
+    expect(conflictPayload.conflicts[0].fieldResolution.componentIds).toHaveLength(100)
+
+    const componentResult = await c.callTool({
+      name: "get_component",
+      arguments: { name: lastId, detail: "all" }
+    })
+    const componentPayload = JSON.parse((componentResult.content as Array<{ type: string; text: string }>)[0].text)
+    expect(componentPayload.conflicts).toMatchObject({ total: 1, returned: 1 })
+    expect(componentPayload.conflicts.conflicts[0].componentIdsTotal).toBe(101)
+
+    const contextResult = await c.callTool({
+      name: "get_design_context",
+      arguments: { category: "conflicts" }
+    })
+    const contextPayload = JSON.parse((contextResult.content as Array<{ type: string; text: string }>)[0].text)
+    expect(contextPayload.conflicts[0]).toMatchObject({
+      componentIdsTotal: 101,
+      componentIdsTruncated: true,
+      evidenceRetained: 2
+    })
+  })
+
+  test("scope filtering does not infer a scope for legacy conflicts", async () => {
+    const c = await connect(
+      writeContract({
+        conflicts: [
+          {
+            type: "token",
+            name: "colors.cross",
+            scope: "cross-source",
+            sources: [{ source: { adapter: "codebase" }, value: "red" }],
+            resolution: "pending"
+          },
+          {
+            type: "token",
+            name: "colors.local",
+            scope: "within-source",
+            sources: [{ source: { adapter: "codebase" }, value: "blue" }],
+            resolution: "pending"
+          },
+          {
+            type: "token",
+            name: "colors.legacy",
+            sources: [{ source: { adapter: "codebase" }, value: "green" }],
+            resolution: "pending"
+          }
+        ]
+      })
+    )
+
+    for (const scope of [undefined, "all"] as const) {
+      const result = await c.callTool({
+        name: "get_conflicts",
+        arguments: scope === undefined ? {} : { scope }
+      })
+      const payload = JSON.parse((result.content as Array<{ type: string; text: string }>)[0].text)
+      expect(payload.total).toBe(3)
+      expect(payload.conflicts.map((conflict: { scope?: string }) => conflict.scope)).toEqual([
+        "cross-source",
+        undefined,
+        "within-source"
+      ])
+    }
+
+    const cross = await c.callTool({ name: "get_conflicts", arguments: { scope: "cross-source" } })
+    const crossPayload = JSON.parse((cross.content as Array<{ type: string; text: string }>)[0].text)
+    expect(crossPayload.total).toBe(1)
+    expect(crossPayload.conflicts[0].name).toBe("colors.cross")
+
+    const within = await c.callTool({ name: "get_conflicts", arguments: { scope: "within-source" } })
+    const withinPayload = JSON.parse((within.content as Array<{ type: string; text: string }>)[0].text)
+    expect(withinPayload.total).toBe(1)
+    expect(withinPayload.conflicts[0].name).toBe("colors.local")
+  })
+
+  test("sorts conflicts canonically before paging regardless of contract order", async () => {
+    const conflicts: PrimitivContract["conflicts"] = [
+      {
+        type: "token",
+        name: "colors.zeta",
+        scope: "cross-source",
+        sources: [{ source: { adapter: "codebase" }, value: "red" }],
+        resolution: "pending"
+      },
+      {
+        type: "component",
+        name: "Alpha",
+        scope: "cross-source",
+        fieldPath: ["props", "size", "default"],
+        sources: [{ source: { adapter: "figma" }, value: "sm" }],
+        resolution: "pending"
+      }
+    ]
+    const c = await connect(writeContract({ conflicts }))
+
+    const result = await c.callTool({ name: "get_conflicts", arguments: { limit: 1 } })
+    const payload = JSON.parse((result.content as Array<{ type: string; text: string }>)[0].text)
+    expect(payload.conflicts[0]).toMatchObject({ type: "component", name: "Alpha" })
+  })
+
+  test("valid opaque identifiers round-trip without display rewriting", async () => {
+    const opaqueId = "__proto__.size/[primary]:figma#1"
+    const c = await connect(
+      writeContract({
+        conflicts: [
+          {
+            type: "component",
+            name: "Button",
+            componentIds: [opaqueId],
+            fieldPath: ["props", "size[0]", "default:value"],
+            sources: [
+              {
+                source: { adapter: "codebase" },
+                value: "sm",
+                componentId: opaqueId,
+                factPath: ["props", "size[0]", "default:value"]
+              }
+            ],
+            resolution: "pending"
+          }
+        ]
+      })
+    )
+
+    const result = await c.callTool({ name: "get_conflicts", arguments: { component: opaqueId } })
+    const payload = JSON.parse((result.content as Array<{ type: string; text: string }>)[0].text)
+    expect(payload.total).toBe(1)
+    expect(payload.conflicts[0].componentIds).toEqual([opaqueId])
+    expect(payload.conflicts[0].sources[0].componentId).toBe(opaqueId)
+    expect(payload.conflicts[0].fieldPath).toEqual(["props", "size[0]", "default:value"])
+  })
+
+  test("get_component conflicts are bounded and included by all", async () => {
+    const c = await connect(
+      writeContract({
+        components: {
+          "ui/Card": { name: "Card", source: { adapter: "codebase" } }
+        },
+        conflicts: [
+          {
+            type: "component",
+            name: "Card",
+            sources: [{ source: { adapter: "codebase" }, value: "a" }],
+            resolution: "pending"
+          }
+        ]
+      })
+    )
+    const result = await c.callTool({ name: "get_component", arguments: { name: "Card", detail: "conflicts" } })
+    const payload = JSON.parse((result.content as Array<{ type: string; text: string }>)[0].text)
+    expect(payload.conflicts).toMatchObject({ total: 1, returned: 1, hasMore: false })
+  })
+
+  test("get_component does not attach a mapped field conflict to an uninvolved same-name candidate", async () => {
+    const c = await connect(
+      writeContract({
+        components: {
+          "checkout/Button": { name: "Button", source: { adapter: "codebase" } },
+          "marketing/Button": { name: "Button", source: { adapter: "codebase" } },
+          "figma:button": { name: "Button", source: { adapter: "figma" } }
+        },
+        conflicts: [
+          {
+            type: "component",
+            name: "Button",
+            fieldPath: ["props", "size", "default"],
+            componentIds: ["checkout/Button", "figma:button"],
+            sources: [
+              { source: { adapter: "codebase" }, value: '"sm"', componentId: "checkout/Button" },
+              { source: { adapter: "figma" }, value: '"lg"', componentId: "figma:button" }
+            ],
+            resolution: "pending"
+          }
+        ]
+      })
+    )
+    const result = await c.callTool({
+      name: "get_component",
+      arguments: { name: "marketing/Button", detail: "conflicts" }
+    })
+    const payload = JSON.parse((result.content as Array<{ type: string; text: string }>)[0].text)
+    expect(payload.conflicts).toMatchObject({ total: 0, returned: 0, hasMore: false })
+  })
+
   test("conflict display fields escape terminal and bidirectional controls", async () => {
     const c = await connect(
       writeContract({
@@ -942,10 +1283,11 @@ describe("bounded conflict projections", () => {
     expect(conflict.suggestedFix).toContain("\\u{000d}")
   })
 
-  test("get_design_context keeps a large durable conflict set behind a fixed bound", async () => {
+  test("get_design_context keeps a large durable conflict set behind a bounded page", async () => {
     const conflicts = Array.from({ length: 1_000 }, (_, index) => ({
       type: "component" as const,
       name: `Component${String(index).padStart(4, "0")}`,
+      fieldPath: ["props", "size", "default"],
       sources: [
         { source: { adapter: "codebase" as const }, value: `"code-${index}"` },
         { source: { adapter: "figma" as const }, value: `"figma-${index}"` }
@@ -957,13 +1299,14 @@ describe("bounded conflict projections", () => {
     const result = await c.callTool({ name: "get_design_context", arguments: { category: "conflicts" } })
     const text = (result.content as Array<{ type: string; text: string }>)[0].text
     const payload = JSON.parse(text)
-    expect(payload.conflictCount).toBe(1_000)
+    expect(payload.conflictSummary.total).toBe(1_000)
     expect(payload.conflicts).toHaveLength(25)
-    expect(payload.conflictsTruncated).toBe(true)
+    expect(payload.conflictPage).toMatchObject({ total: 1_000, returned: 25, hasMore: true, nextOffset: 25 })
+    expect(payload.conflictInstruction).toContain("get_conflicts")
     expect(text.length).toBeLessThan(100_000)
   })
 
-  test("refuses a valid bounded page whose aggregate evidence exceeds the response budget", async () => {
+  test("refuses a valid page whose aggregate evidence exceeds the response budget", async () => {
     const conflicts = Array.from({ length: 25 }, (_, index) => ({
       type: "component" as const,
       name: `Component${index}`,
@@ -978,20 +1321,40 @@ describe("bounded conflict projections", () => {
     }))
     const c = await connect(writeContract({ conflicts }))
 
-    const result = await c.callTool({ name: "get_conflicts", arguments: {} })
+    const result = await c.callTool({ name: "get_conflicts", arguments: { limit: 25 } })
     expect(result.isError).toBe(true)
-    expect((result.content as Array<{ type: string; text: string }>)[0].text).toContain("projection exceeds")
+    expect((result.content as Array<{ type: string; text: string }>)[0].text).toContain("projection limit")
   })
 })
 
 describe("contract boundary validation", () => {
-  test("validates malformed conflicts before projection", async () => {
+  test("validates malformed conflicts before applying query filters", async () => {
     const c = await connect(
       writeContract({
         conflicts: [null as unknown as PrimitivContract["conflicts"][number]]
       })
     )
-    const result = await c.callTool({ name: "get_conflicts", arguments: {} })
+    const result = await c.callTool({
+      name: "get_conflicts",
+      arguments: { component: "Button", fieldPath: ["props"] }
+    })
+    expect(result.isError).toBe(true)
+    expect((result.content as Array<{ type: string; text: string }>)[0].text).toContain(
+      "Conflict projection is malformed"
+    )
+  })
+
+  test("validates malformed conflicts before selecting component-local evidence", async () => {
+    const c = await connect(
+      writeContract({
+        components: { "ui/Button": { name: "Button", source: { adapter: "codebase" } } },
+        conflicts: [null as unknown as PrimitivContract["conflicts"][number]]
+      })
+    )
+    const result = await c.callTool({
+      name: "get_component",
+      arguments: { name: "ui/Button", detail: "conflicts" }
+    })
     expect(result.isError).toBe(true)
     expect((result.content as Array<{ type: string; text: string }>)[0].text).toContain(
       "Conflict projection is malformed"
@@ -1039,6 +1402,118 @@ describe("contract boundary validation", () => {
     expect((result.content as Array<{ type: string; text: string }>)[0].text).toContain(
       "field conflicts cannot carry an identity resolution"
     )
+  })
+
+  test("rejects incoherent evidence metadata", async () => {
+    const c = await connect(
+      writeContract({
+        conflicts: [
+          {
+            type: "component",
+            name: "Button",
+            sources: [
+              { source: { adapter: "codebase" }, value: "sm" },
+              { source: { adapter: "figma" }, value: "lg" }
+            ],
+            evidenceTotal: 1,
+            resolution: "pending"
+          }
+        ]
+      })
+    )
+
+    const result = await c.callTool({ name: "get_conflicts", arguments: {} })
+    expect(result.isError).toBe(true)
+    expect((result.content as Array<{ type: string; text: string }>)[0].text).toContain(
+      "must be at least the retained source count"
+    )
+  })
+
+  test("rejects unsafe nested machine identifiers without echoing them", async () => {
+    const unsafeId = "ui/\nButton"
+    const c = await connect(
+      writeContract({
+        conflicts: [
+          {
+            type: "component",
+            name: "Button",
+            componentIds: [unsafeId],
+            sources: [{ source: { adapter: "codebase" }, value: "sm", componentId: unsafeId }],
+            resolution: "pending"
+          }
+        ]
+      })
+    )
+
+    const result = await c.callTool({ name: "get_conflicts", arguments: {} })
+    expect(result.isError).toBe(true)
+    const text = (result.content as Array<{ type: string; text: string }>)[0].text
+    expect(text).not.toContain(unsafeId)
+  })
+
+  test("rejects unsafe machine path segments", async () => {
+    const c = await connect(
+      writeContract({
+        conflicts: [
+          {
+            type: "component",
+            name: "Button",
+            fieldPath: ["props", "size\u202e"],
+            sources: [
+              {
+                source: { adapter: "codebase" },
+                value: "sm",
+                factPath: ["props", "size\u202e"]
+              }
+            ],
+            resolution: "pending"
+          }
+        ]
+      })
+    )
+
+    const result = await c.callTool({ name: "get_conflicts", arguments: {} })
+    expect(result.isError).toBe(true)
+  })
+
+  test("rejects participant lists above the durable count ceiling", async () => {
+    const componentIds = Array.from({ length: 10_001 }, (_, index) => `component/${index}`)
+    const c = await connect(
+      writeContract({
+        conflicts: [
+          {
+            type: "component",
+            name: "Button",
+            componentIds,
+            sources: [{ source: { adapter: "codebase" }, value: "sm" }],
+            resolution: "pending"
+          }
+        ]
+      })
+    )
+
+    const result = await c.callTool({ name: "get_conflicts", arguments: {} })
+    expect(result.isError).toBe(true)
+  })
+
+  test("rejects participant lists above the durable UTF-8 byte ceiling", async () => {
+    const componentIds = Array.from({ length: 2_000 }, (_, index) => `${index}-${"é".repeat(140)}`)
+    const c = await connect(
+      writeContract({
+        conflicts: [
+          {
+            type: "component",
+            name: "Button",
+            componentIds,
+            sources: [{ source: { adapter: "codebase" }, value: "sm" }],
+            resolution: "pending"
+          }
+        ]
+      })
+    )
+
+    const result = await c.callTool({ name: "get_conflicts", arguments: {} })
+    expect(result.isError).toBe(true)
   })
 
   test("a structurally malformed contract degrades to the setup error instead of crashing", async () => {
