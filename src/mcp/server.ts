@@ -439,8 +439,23 @@ export class PrimitivMCPServer {
         // Resolution order: governance → scope → hand the decision to the agent's ladder
         // (rationale.when vs intent, then ask the user). The contract decides what it can;
         // the agent never free-chooses.
+        const configuredResolution = this.contract.componentNameResolutions?.[args.name]
+        if (configuredResolution !== undefined && ids.includes(configuredResolution)) {
+          return this.componentResponse({
+            id: configuredResolution,
+            detail: args.detail,
+            resolvedBy: "governance.sourceOfTruth"
+          })
+        }
+
+        // Legacy contracts recorded the governance winner on an identity conflict.
         const governed = this.contract.conflicts.find(
-          (c) => c.type === "component" && c.name === args.name && c.resolved !== undefined && ids.includes(c.resolved)
+          (c) =>
+            c.type === "component" &&
+            c.fieldPath === undefined &&
+            c.name === args.name &&
+            c.resolved !== undefined &&
+            ids.includes(c.resolved)
         )
         if (governed?.resolved !== undefined) {
           const id = governed.resolved
@@ -477,7 +492,8 @@ export class PrimitivMCPServer {
           }),
           instruction:
             "Resolve by scope against your working path, then by rationale.when vs the user's intent. " +
-            "If neither decides, ask the user which component is intended — do not choose arbitrarily."
+            "If neither decides, ask the user which component is intended — do not choose arbitrarily. " +
+            "When these durable IDs represent the same conceptual component across adapters, add them to reconciliation.componentMappings."
         })
       }
     )

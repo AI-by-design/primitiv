@@ -2,9 +2,13 @@ import { describe, expect, test } from "bun:test"
 import {
   DEFAULT_MAX_IDENTIFIER_CHARS,
   hasUnsafeIdentifierCodePoint,
+  identifierListUtf8Bytes,
   isSafeIdentifier,
   isSafeIdentifierPath,
   isSafeNonEmptyIdentifier,
+  isWithinDurableParticipantBounds,
+  MAX_CONFLICT_COMPONENT_ID_BYTES,
+  MAX_CONFLICT_COMPONENT_IDS,
   MAX_IDENTIFIER_PATH_SEGMENTS
 } from "./safe-identifier"
 
@@ -68,5 +72,14 @@ describe("safe identifiers", () => {
     expect(isSafeIdentifierPath([])).toBe(false)
     expect(isSafeIdentifierPath(Array.from({ length: MAX_IDENTIFIER_PATH_SEGMENTS + 1 }, () => "safe"))).toBe(false)
     expect(isSafeIdentifierPath(["props", "unsafe\nsegment"])).toBe(false)
+  })
+
+  test("measures durable participant IDs as UTF-8 and enforces both ceilings", () => {
+    expect(identifierListUtf8Bytes(["a", "\u00e9"])).toBe(3)
+    expect(isWithinDurableParticipantBounds(Array.from({ length: MAX_CONFLICT_COMPONENT_IDS }, () => "id"))).toBe(true)
+    expect(isWithinDurableParticipantBounds(Array.from({ length: MAX_CONFLICT_COMPONENT_IDS + 1 }, () => "id"))).toBe(
+      false
+    )
+    expect(isWithinDurableParticipantBounds(["x".repeat(MAX_CONFLICT_COMPONENT_ID_BYTES + 1)])).toBe(false)
   })
 })

@@ -1,5 +1,7 @@
 export const DEFAULT_MAX_IDENTIFIER_CHARS = 4_096
 export const MAX_IDENTIFIER_PATH_SEGMENTS = 64
+export const MAX_CONFLICT_COMPONENT_IDS = 10_000
+export const MAX_CONFLICT_COMPONENT_ID_BYTES = 512 * 1_024
 
 /** Whether a code point is unsafe in an opaque machine identifier or terminal text. */
 export function isUnsafeIdentifierCodePoint(codePoint: number): boolean {
@@ -47,4 +49,17 @@ export function isSafeIdentifierPath(value: unknown): value is string[] {
     value.length <= MAX_IDENTIFIER_PATH_SEGMENTS &&
     value.every((segment) => typeof segment === "string" && isSafeNonEmptyIdentifier(segment))
   )
+}
+
+/** Count the UTF-8 bytes represented by an ID list, without serializing or normalizing it. */
+export function identifierListUtf8Bytes(ids: readonly string[]): number {
+  const encoder = new TextEncoder()
+  let total = 0
+  for (const id of ids) total += encoder.encode(id).byteLength
+  return total
+}
+
+/** Enforce the durable participant count and UTF-8 text ceilings. */
+export function isWithinDurableParticipantBounds(ids: readonly string[]): boolean {
+  return ids.length <= MAX_CONFLICT_COMPONENT_IDS && identifierListUtf8Bytes(ids) <= MAX_CONFLICT_COMPONENT_ID_BYTES
 }
