@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.18.0](https://github.com/AI-by-design/primitiv/compare/v2.17.0...v2.18.0) (2026-09-04)
+
+
+### Features
+
+* add component reconciliation foundations ([#139](https://github.com/AI-by-design/primitiv/issues/139)) ([142cb14](https://github.com/AI-by-design/primitiv/commit/142cb148bf3093eeb7aa895e9a9e9b680686d9eb))
+* expose component conflict projections ([#141](https://github.com/AI-by-design/primitiv/issues/141)) ([2b4dd1b](https://github.com/AI-by-design/primitiv/commit/2b4dd1b244865def835b64ad0a3f1f6d2d9d7986))
+* reconcile component fields ([#140](https://github.com/AI-by-design/primitiv/issues/140)) ([a55ab65](https://github.com/AI-by-design/primitiv/commit/a55ab65702aeb895fd091450be238167c0c99eda))
+
 ## [2.17.0](https://github.com/AI-by-design/primitiv/compare/v2.16.0...v2.17.0) (2026-08-31)
 
 
