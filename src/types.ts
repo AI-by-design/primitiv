@@ -1,5 +1,11 @@
 import type * as t from "@babel/types"
 import { z } from "zod"
+import {
+  DEFAULT_MAX_IDENTIFIER_CHARS,
+  isSafeIdentifierPath,
+  isSafeNonEmptyIdentifier,
+  MAX_IDENTIFIER_PATH_SEGMENTS
+} from "./safe-identifier"
 
 // Core types for Primitiv
 
@@ -16,12 +22,26 @@ export interface PrimitivConfig {
   output: {
     path: string
   }
+  reconciliation?: {
+    // Exact, user-confirmed links between durable source-specific component IDs.
+    // Each mapping must name at least two adapters. These links take precedence
+    // over conservative display-name association.
+    componentMappings?: ComponentMapping[]
+  }
   // Optional per-token / per-component rationale: why it exists and when to use it.
   // Load from a sidecar YAML (default: ./primitiv.rationale.yml) or inline.
   rationale?: {
     path?: string
     inline?: RationaleMap
   }
+}
+
+export type SourceAdapter = "codebase" | "figma" | "storybook"
+
+export interface ComponentMapping {
+  codebase?: string
+  figma?: string
+  storybook?: string
 }
 
 export interface Rationale {
@@ -82,7 +102,7 @@ export interface Source {
 
 // Source provenance — tracks where every token and component came from
 export interface SourceProvenance {
-  adapter: "codebase" | "figma" | "storybook"
+  adapter: SourceAdapter
   file?: string
   line?: number
   metadata?: Record<string, unknown>
@@ -314,15 +334,51 @@ export interface PropDefinition {
 
 export interface Conflict {
   type: "token" | "component"
+  // New writers always set scope. Optional only so contracts written before
+  // scoped findings were introduced remain readable.
+  scope?: ConflictScope
   name: string
-  sources: Array<{
-    source: SourceProvenance
-    value: string
-  }>
+  sources: ConflictEvidence[]
+  // Structured component field identity. The array is authoritative; `name`
+  // remains a human-facing compatibility label and must never be parsed.
+  fieldPath?: string[]
+  // Every durable component ID whose evidence participates in this field finding.
+  componentIds?: string[]
+  comparison?: "exact" | "subset"
+  // Field governance is deliberately separate from `resolved`, which remains
+  // an identity-level selected component ID for legacy component conflicts.
+  fieldResolution?: {
+    adapter: SourceAdapter
+    componentIds: string[]
+    fieldPath: string[]
+    structuredValue: ConflictStructuredValue
+  }
   resolved?: string
   resolution?: "auto" | "manual" | "pending"
   suggestedFix?: string
   actionable?: boolean
+}
+
+export type ConflictScope = "cross-source" | "within-source"
+
+export type ConflictStructuredValue =
+  | string
+  | number
+  | boolean
+  | null
+  | ConflictStructuredValue[]
+  | { [key: string]: ConflictStructuredValue }
+
+export interface ConflictEvidence {
+  source: SourceProvenance
+  // Bounded, escaped display value retained for existing string consumers.
+  value: string
+  // Optional type-preserving value for field-level machine consumers.
+  structuredValue?: ConflictStructuredValue
+  componentId?: string
+  // Actual source evidence path. It may differ from Conflict.fieldPath for
+  // directional observed/demonstrated checks.
+  factPath?: string[]
 }
 
 export interface InferredRule {
@@ -373,6 +429,13 @@ export interface Violation {
 // `tokens`/`components` are validated only as objects, their values left opaque.
 
 const figmaStableKeyMappings = z.record(z.string().min(1), z.string().min(1))
+const machineIdentifierSchema = z
+  .string()
+  .min(1, "must be a non-empty machine identifier")
+  .max(DEFAULT_MAX_IDENTIFIER_CHARS, `must be at most ${DEFAULT_MAX_IDENTIFIER_CHARS} characters`)
+  .refine((value) => isSafeNonEmptyIdentifier(value), {
+    message: "must not contain control or bidirectional formatting code points"
+  })
 
 export const primitivConfigSchema = z.looseObject({
   sources: z.looseObject({
@@ -408,17 +471,203 @@ export const primitivConfigSchema = z.looseObject({
     sourceOfTruth: z.enum(["codebase", "figma", "storybook", "manual"]),
     onConflict: z.enum(["error", "warn", "auto-resolve"])
   }),
-  output: z.looseObject({ path: z.string() })
+  output: z.looseObject({ path: z.string() }),
+  reconciliation: z
+    .looseObject({
+      componentMappings: z
+        .array(
+          z
+            .looseObject({
+              codebase: machineIdentifierSchema.optional(),
+              figma: machineIdentifierSchema.optional(),
+              storybook: machineIdentifierSchema.optional()
+            })
+            .refine(
+              (mapping) =>
+                [mapping.codebase, mapping.figma, mapping.storybook].filter((id) => id !== undefined).length >= 2,
+              { message: "must link at least two component adapters" }
+            )
+        )
+        .optional()
+    })
+    .optional()
 })
 
-export const primitivContractSchema = z.looseObject({
-  version: z.string(),
-  generatedAt: z.string(),
-  sources: z.array(z.string()),
-  tokens: z.record(z.string(), z.unknown()),
-  components: z.record(z.string(), z.unknown()),
-  conflicts: z.array(z.unknown())
-})
+export const primitivContractSchema = z
+  .looseObject({
+    version: z.string(),
+    generatedAt: z.string(),
+    sources: z.array(z.string()),
+    tokens: z.record(z.string(), z.unknown()),
+    components: z.record(z.string(), z.unknown()),
+    conflicts: z.array(z.unknown())
+  })
+  .superRefine((contract, context) => {
+    for (const issue of contractIdentifierBoundaryIssues(contract)) {
+      context.addIssue({ code: "custom", path: issue.path, message: issue.message })
+    }
+  })
+
+type BoundaryPath = Array<string | number>
+
+interface BoundaryIssue {
+  path: BoundaryPath
+  message: string
+}
+
+interface BoundaryValueValidation {
+  issues: BoundaryIssue[]
+  value: unknown
+  path: BoundaryPath
+}
+
+interface BoundaryRecordFieldValidation {
+  issues: BoundaryIssue[]
+  record: Record<string, unknown>
+  field: string
+  path: BoundaryPath
+}
+
+interface IdentifierIndexValidation extends BoundaryValueValidation {
+  valueShape: "array" | "single"
+}
+
+function contractIdentifierBoundaryIssues(contract: Record<string, unknown>): BoundaryIssue[] {
+  const issues: BoundaryIssue[] = []
+
+  // A map key is itself the durable component ID. Address bad keys by ordinal so
+  // diagnostics never reproduce the unsafe key text.
+  for (const [index, componentId] of Object.keys(contract.components as Record<string, unknown>).entries()) {
+    addIdentifierIssue({ issues, value: componentId, path: ["components", index, "(key)"] })
+  }
+
+  validateIdentifierIndex({
+    issues,
+    value: contract.componentNameIndex,
+    path: ["componentNameIndex"],
+    valueShape: "array"
+  })
+  validateIdentifierIndex({
+    issues,
+    value: contract.componentNameResolutions,
+    path: ["componentNameResolutions"],
+    valueShape: "single"
+  })
+
+  for (const [conflictIndex, conflictValue] of (contract.conflicts as unknown[]).entries()) {
+    if (!isUnknownRecord(conflictValue)) continue
+    const conflictPath: BoundaryPath = ["conflicts", conflictIndex]
+    addOptionalIdentifierIssue({ issues, record: conflictValue, field: "resolved", path: conflictPath })
+    validateParticipantList({
+      issues,
+      value: conflictValue.componentIds,
+      path: [...conflictPath, "componentIds"]
+    })
+    addOptionalPathIssue({ issues, record: conflictValue, field: "fieldPath", path: conflictPath })
+
+    if (Array.isArray(conflictValue.sources)) {
+      for (const [sourceIndex, sourceValue] of conflictValue.sources.entries()) {
+        if (!isUnknownRecord(sourceValue)) continue
+        const sourcePath = [...conflictPath, "sources", sourceIndex]
+        addOptionalIdentifierIssue({ issues, record: sourceValue, field: "componentId", path: sourcePath })
+        addOptionalPathIssue({ issues, record: sourceValue, field: "factPath", path: sourcePath })
+      }
+    }
+
+    if (isUnknownRecord(conflictValue.fieldResolution)) {
+      const resolutionPath = [...conflictPath, "fieldResolution"]
+      validateParticipantList({
+        issues,
+        value: conflictValue.fieldResolution.componentIds,
+        path: [...resolutionPath, "componentIds"]
+      })
+      addOptionalPathIssue({
+        issues,
+        record: conflictValue.fieldResolution,
+        field: "fieldPath",
+        path: resolutionPath
+      })
+    }
+  }
+
+  return issues
+}
+
+function validateIdentifierIndex({ issues, value, path, valueShape }: IdentifierIndexValidation): void {
+  if (value === undefined) return
+  if (!isUnknownRecord(value)) {
+    issues.push({ path, message: "must be an object when present" })
+    return
+  }
+
+  for (const [entryIndex, [key, ids]] of Object.entries(value).entries()) {
+    // Retain useful legacy schema paths for safe display-name keys, but fall
+    // back to an ordinal when the key itself would make the error unsafe or unbounded.
+    const entryPath = [...path, isSafeNonEmptyIdentifier(key) ? key : entryIndex]
+    if (valueShape === "array") {
+      if (!Array.isArray(ids)) {
+        issues.push({ path: entryPath, message: "must contain an array of machine identifiers" })
+        continue
+      }
+      for (const [idIndex, id] of ids.entries()) {
+        addIdentifierIssue({ issues, value: id, path: [...entryPath, idIndex] })
+      }
+    } else {
+      addIdentifierIssue({ issues, value: ids, path: entryPath })
+    }
+  }
+}
+
+function validateParticipantList({ issues, value, path }: BoundaryValueValidation): void {
+  if (value === undefined) return
+  if (!Array.isArray(value)) {
+    issues.push({ path, message: "must be an array of machine identifiers when present" })
+    return
+  }
+  for (const [idIndex, id] of value.entries()) {
+    addIdentifierIssue({ issues, value: id, path: [...path, idIndex] })
+  }
+}
+
+function addOptionalIdentifierIssue({ issues, record, field, path }: BoundaryRecordFieldValidation): void {
+  if (record[field] !== undefined) {
+    addIdentifierIssue({ issues, value: record[field], path: [...path, field] })
+  }
+}
+
+function addIdentifierIssue({ issues, value, path }: BoundaryValueValidation): void {
+  if (typeof value !== "string" || !isSafeNonEmptyIdentifier(value)) {
+    issues.push({
+      path,
+      message: `must be a non-empty machine identifier of at most ${DEFAULT_MAX_IDENTIFIER_CHARS} characters without control or bidirectional formatting code points`
+    })
+  }
+}
+
+function addOptionalPathIssue({ issues, record, field, path }: BoundaryRecordFieldValidation): void {
+  const value = record[field]
+  if (value === undefined) return
+  if (isSafeIdentifierPath(value)) return
+  const fieldPath = [...path, field]
+  if (!Array.isArray(value)) {
+    issues.push({ path: fieldPath, message: "must be an array of machine-identifier path segments when present" })
+    return
+  }
+  if (value.length === 0 || value.length > MAX_IDENTIFIER_PATH_SEGMENTS) {
+    issues.push({
+      path: fieldPath,
+      message: `must contain between 1 and ${MAX_IDENTIFIER_PATH_SEGMENTS} path segments`
+    })
+    return
+  }
+  for (const [segmentIndex, segment] of value.entries()) {
+    addIdentifierIssue({ issues, value: segment, path: [...fieldPath, segmentIndex] })
+  }
+}
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
 
 // Compact, human-readable reason a config/contract failed validation — the
 // actionable tail of every boundary error/warning. Caps at three issues so the

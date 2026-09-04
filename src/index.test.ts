@@ -112,51 +112,111 @@ describe("loadConfig — boundary validation", () => {
 }`)
     expect(() => loadConfig(undefined, tempDir)).toThrow(/Invalid config/)
   })
+
+  test("accepts durable component mappings with at least two adapters", () => {
+    writeConfig(`module.exports = {
+  sources: {},
+  governance: { sourceOfTruth: "codebase", onConflict: "warn" },
+  reconciliation: {
+    componentMappings: [
+      { codebase: "components/Button", figma: "figma:published-button", storybook: "storybook:UI/Button" }
+    ]
+  },
+  output: { path: "./primitiv.contract.json" }
+}`)
+    expect(loadConfig(undefined, tempDir).reconciliation?.componentMappings?.[0]).toEqual({
+      codebase: "components/Button",
+      figma: "figma:published-button",
+      storybook: "storybook:UI/Button"
+    })
+  })
+
+  test("preserves valid opaque component mapping IDs without Unicode normalization", () => {
+    const decomposed = "component/e\u0301"
+    writeConfig(`module.exports = {
+  sources: {},
+  governance: { sourceOfTruth: "codebase", onConflict: "warn" },
+  reconciliation: {
+    componentMappings: [{ codebase: "__proto__.size", figma: "${decomposed}" }]
+  },
+  output: { path: "./primitiv.contract.json" }
+}`)
+
+    expect(loadConfig(undefined, tempDir).reconciliation?.componentMappings?.[0]).toEqual({
+      codebase: "__proto__.size",
+      figma: decomposed
+    })
+  })
+
+  test("rejects unsafe component mapping IDs without echoing their value", () => {
+    const unsafeId = "figma:safe\u202eevil"
+    writeConfig(`module.exports = {
+  sources: {},
+  governance: { sourceOfTruth: "codebase", onConflict: "warn" },
+  reconciliation: { componentMappings: [{ codebase: "components/Button", figma: "${unsafeId}" }] },
+  output: { path: "./primitiv.contract.json" }
+}`)
+
+    let message = ""
+    try {
+      loadConfig(undefined, tempDir)
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error)
+    }
+    expect(message).toContain("reconciliation.componentMappings.0.figma")
+    expect(message).toContain("control or bidirectional")
+    expect(message).not.toContain(unsafeId)
+  })
+
+  test("rejects empty and oversized component mapping IDs", () => {
+    const configWith = (figmaId: string) => `module.exports = {
+  sources: {},
+  governance: { sourceOfTruth: "codebase", onConflict: "warn" },
+  reconciliation: { componentMappings: [{ codebase: "components/Button", figma: ${JSON.stringify(figmaId)} }] },
+  output: { path: "./primitiv.contract.json" }
+}`
+
+    writeConfig(configWith(""))
+    expect(() => loadConfig(undefined, tempDir)).toThrow(/non-empty machine identifier/)
+    writeConfig(configWith("x".repeat(4_097)))
+    expect(() => loadConfig(undefined, tempDir)).toThrow(/at most 4096 characters/)
+  })
+
+  test("rejects a component mapping that names fewer than two adapters", () => {
+    writeConfig(`module.exports = {
+  sources: {},
+  governance: { sourceOfTruth: "codebase", onConflict: "warn" },
+  reconciliation: { componentMappings: [{ codebase: "components/Button" }] },
+  output: { path: "./primitiv.contract.json" }
+}`)
+    expect(() => loadConfig(undefined, tempDir)).toThrow(/must link at least two component adapters/)
+  })
 })
 
 describe("build — onConflict exit codes", () => {
-  // Anti-rot: one fixture with a real cross-source conflict (codebase Button vs a
-  // stubbed Storybook Button), built under "error" then "warn" — the exit codes must
-  // differ, or the onConflict wiring has gone inert again.
+  // Anti-rot: one fixture with a real pending token redefinition, built under
+  // "error" then "warn" — the exit codes must differ, or the onConflict wiring
+  // has gone inert again.
   test('"error" exits 2 on a pending conflict and still writes the contract; "warn" exits 0 on the same fixture', async () => {
-    const manifest = {
-      entries: {
-        "components-button--default": {
-          type: "story",
-          id: "components-button--default",
-          title: "Components/Button",
-          name: "Default",
-          importPath: "./Button.stories.tsx"
-        }
-      }
-    }
-    const server = Bun.serve({ port: 0, fetch: () => Response.json(manifest) })
-    try {
-      fs.writeFileSync(
-        path.join(tempDir, "Button.tsx"),
-        `export function Button({ label }: { label: string }) {\n  return <button>{label}</button>\n}\n`
-      )
-      const configBody = (onConflict: string) => `module.exports = {
+    fs.writeFileSync(path.join(tempDir, "a.css"), ":root { --color-primary: #0055ff; }")
+    fs.writeFileSync(path.join(tempDir, "b.css"), ":root { --color-primary: #ff5500; }")
+    const configBody = (onConflict: string) => `module.exports = {
   sources: {
-    codebase: { root: ".", patterns: ["**/*.tsx"], ignore: ["node_modules/**"] },
-    storybook: { url: "http://localhost:${server.port}" }
+    codebase: { root: ".", patterns: ["**/*.css"], ignore: [] }
   },
   governance: { sourceOfTruth: "codebase", onConflict: "${onConflict}" },
   output: { path: "./primitiv.contract.json" }
 }`
-      const configPath = path.join(tempDir, "primitiv.config.js")
-      const contractPath = path.join(tempDir, "primitiv.contract.json")
+    const configPath = path.join(tempDir, "primitiv.config.js")
+    const contractPath = path.join(tempDir, "primitiv.contract.json")
 
-      fs.writeFileSync(configPath, configBody("error"))
-      expect(await build(configPath)).toBe(2)
-      // Failing the build never withholds the artifact that explains the failure.
-      expect(fs.existsSync(contractPath)).toBe(true)
+    fs.writeFileSync(configPath, configBody("error"))
+    expect(await build(configPath)).toBe(2)
+    // Failing the build never withholds the artifact that explains the failure.
+    expect(fs.existsSync(contractPath)).toBe(true)
 
-      fs.writeFileSync(configPath, configBody("warn"))
-      expect(await build(configPath)).toBe(0)
-    } finally {
-      server.stop()
-    }
+    fs.writeFileSync(configPath, configBody("warn"))
+    expect(await build(configPath)).toBe(0)
   })
 })
 
@@ -243,6 +303,86 @@ describe("package root — public type surface", () => {
     expect(primitivContractSchema.safeParse(opaqueNestedValues).success).toBe(true)
   })
 
+  test("contract boundary preserves valid opaque IDs while leaving display text opaque", () => {
+    const decomposed = "component/e\u0301"
+    const unsafeDisplayText = "display\ntext\u202e"
+    const contract = {
+      version: "0.3.0",
+      generatedAt: new Date().toISOString(),
+      sources: ["codebase"],
+      tokens: {},
+      components: { "__proto__.size": null, [decomposed]: null },
+      componentNameIndex: { [unsafeDisplayText]: ["__proto__.size", decomposed] },
+      componentNameResolutions: { [unsafeDisplayText]: decomposed },
+      conflicts: [
+        {
+          name: unsafeDisplayText,
+          suggestedFix: unsafeDisplayText,
+          resolved: "__proto__.size",
+          componentIds: ["__proto__.size", decomposed],
+          fieldPath: ["props", "__proto__.size"],
+          sources: [
+            {
+              source: { adapter: "codebase", file: unsafeDisplayText },
+              value: unsafeDisplayText,
+              componentId: decomposed,
+              factPath: ["usage", "props", "size[compact]"]
+            }
+          ],
+          fieldResolution: {
+            componentIds: [decomposed],
+            fieldPath: ["props", "size"],
+            adapter: "codebase",
+            structuredValue: "sm"
+          }
+        }
+      ]
+    }
+
+    const parsed = primitivContractSchema.safeParse(contract)
+    expect(parsed.success).toBe(true)
+    if (parsed.success) {
+      expect((parsed.data.componentNameIndex as Record<string, string[]>)[unsafeDisplayText]).toEqual([
+        "__proto__.size",
+        decomposed
+      ])
+    }
+  })
+
+  test("contract boundary rejects every selected unsafe ID and path leaf without echoing it", () => {
+    const unsafeId = "safe\u0000hidden"
+    const base = () => ({
+      version: "0.3.0",
+      generatedAt: new Date().toISOString(),
+      sources: ["codebase"],
+      tokens: {},
+      components: {},
+      conflicts: [] as unknown[]
+    })
+    const mutations: Array<(contract: ReturnType<typeof base>) => void> = [
+      (contract) => {
+        contract.components = Object.fromEntries([[unsafeId, null]])
+      },
+      (contract) => Object.assign(contract, { componentNameIndex: { Button: [unsafeId] } }),
+      (contract) => Object.assign(contract, { componentNameResolutions: { Button: unsafeId } }),
+      (contract) => contract.conflicts.push({ resolved: unsafeId }),
+      (contract) => contract.conflicts.push({ componentIds: [unsafeId] }),
+      (contract) => contract.conflicts.push({ fieldPath: ["props", unsafeId] }),
+      (contract) => contract.conflicts.push({ sources: [{ componentId: unsafeId }] }),
+      (contract) => contract.conflicts.push({ sources: [{ factPath: ["props", unsafeId] }] }),
+      (contract) => contract.conflicts.push({ fieldResolution: { componentIds: [unsafeId] } }),
+      (contract) => contract.conflicts.push({ fieldResolution: { fieldPath: ["props", unsafeId] } })
+    ]
+
+    for (const mutate of mutations) {
+      const contract = base()
+      mutate(contract)
+      const parsed = primitivContractSchema.safeParse(contract)
+      expect(parsed.success).toBe(false)
+      if (!parsed.success) expect(JSON.stringify(parsed.error.issues)).not.toContain(unsafeId)
+    }
+  })
+
   test("Component exposes optional static relationship facts from the package root", () => {
     const uses: NonNullable<Component["uses"]> = { "components/Icon": 2 }
     const usage: NonNullable<Component["usage"]> = { sites: 4 }
@@ -327,27 +467,18 @@ describe("package root — public type surface", () => {
 })
 
 describe("buildContract — source scan statuses", () => {
-  // A port that was just bound and released — connecting to it refuses, which is the
-  // cheapest deterministic "remote source is down" a test can produce.
-  function unreachablePort(): number {
-    const s = Bun.serve({ port: 0, fetch: () => new Response("") })
-    const port = s.port
-    s.stop(true)
-    return port
-  }
-
   function writeSources() {
     fs.writeFileSync(path.join(tempDir, "tokens.css"), ":root { --color-primary: #3b82f6; }")
   }
 
-  function configWith(opts: { sourceOfTruth?: string; storybookExtra?: string; port: number }): string {
+  function configWith(opts: { sourceOfTruth?: string; storybookExtra?: string } = {}): string {
     const configPath = path.join(tempDir, "primitiv.config.js")
     fs.writeFileSync(
       configPath,
       `module.exports = {
   sources: {
     codebase: { root: ".", patterns: ["**/*.css"], ignore: ["node_modules/**"] },
-    storybook: { url: "http://localhost:${opts.port}"${opts.storybookExtra ?? ""} }
+    storybook: { url: "http://127.0.0.1:9"${opts.storybookExtra ?? ""} }
   },
   governance: { sourceOfTruth: "${opts.sourceOfTruth ?? "codebase"}", onConflict: "warn" },
   output: { path: "./primitiv.contract.json" }
@@ -358,7 +489,7 @@ describe("buildContract — source scan statuses", () => {
 
   test("a failed optional source is recorded as failed; the build continues and the others read ok/skipped", async () => {
     writeSources()
-    const configPath = configWith({ port: unreachablePort() })
+    const configPath = configWith()
 
     const contract = await buildContract(configPath, { silent: true, cwd: tempDir })
 
@@ -373,14 +504,14 @@ describe("buildContract — source scan statuses", () => {
 
   test("build exits 0 and still writes the contract when an optional source fails", async () => {
     writeSources()
-    const configPath = configWith({ port: unreachablePort() })
+    const configPath = configWith()
     expect(await build(configPath)).toBe(0)
     expect(fs.existsSync(path.join(tempDir, "primitiv.contract.json"))).toBe(true)
   })
 
   test("hard-fails without writing a contract when the failed source IS governance.sourceOfTruth", async () => {
     writeSources()
-    const configPath = configWith({ sourceOfTruth: "storybook", port: unreachablePort() })
+    const configPath = configWith({ sourceOfTruth: "storybook" })
 
     await expect(buildContract(configPath, { silent: true, cwd: tempDir })).rejects.toThrow(/sourceOfTruth/)
     expect(fs.existsSync(path.join(tempDir, "primitiv.contract.json"))).toBe(false)
@@ -388,7 +519,7 @@ describe("buildContract — source scan statuses", () => {
 
   test("hard-fails when a failed source is marked required (optional: false)", async () => {
     writeSources()
-    const configPath = configWith({ port: unreachablePort(), storybookExtra: ", optional: false" })
+    const configPath = configWith({ storybookExtra: ", optional: false" })
 
     await expect(buildContract(configPath, { silent: true, cwd: tempDir })).rejects.toThrow(/optional: false/)
     expect(fs.existsSync(path.join(tempDir, "primitiv.contract.json"))).toBe(false)

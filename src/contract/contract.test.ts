@@ -87,6 +87,73 @@ describe("component merge (path-qualified identity)", () => {
     expect(contract.componentNameIndex?.constructor).toEqual(["figma:constructor-key"])
   })
 
+  test("opaque punctuation and prototype-like component IDs survive the generated-contract boundary", () => {
+    const decomposed = "component/e\u0301"
+    const contract = buildWith([
+      {
+        name: "codebase",
+        components: {
+          "__proto__.size": codebaseComponent("PrototypeSize", "components/PrototypeSize.tsx"),
+          [decomposed]: codebaseComponent("Decomposed", "components/Decomposed.tsx")
+        }
+      }
+    ])
+
+    expect(Object.keys(contract.components)).toEqual(["__proto__.size", decomposed])
+    expect(contract.componentNameIndex?.Decomposed).toEqual([decomposed])
+  })
+
+  test("generated contracts reject unsafe component IDs without echoing them", () => {
+    const unsafeId = "components/safe\u202ehidden"
+    let message = ""
+    try {
+      buildWith([
+        {
+          name: "codebase",
+          components: { [unsafeId]: codebaseComponent("Button", "components/Button.tsx") }
+        }
+      ])
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error)
+    }
+
+    expect(message).toContain("Generated contract rejected unsafe or oversized machine identifiers")
+    expect(message).toContain("components.0.(key)")
+    expect(message).not.toContain(unsafeId)
+  })
+
+  test("the write boundary rejects a newly unsafe nested ID before replacing the output", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "primitiv-contract-boundary-"))
+    const outputPath = path.join(tempDir, "primitiv.contract.json")
+    const builder = new ContractBuilder({ ...config(), output: { path: outputPath } })
+    const contract = builder.build([])
+    const unsafeId = "figma:button\nconcealed"
+    contract.conflicts.push({
+      type: "component",
+      scope: "cross-source",
+      name: "Button.props.size",
+      sources: [],
+      componentIds: [unsafeId]
+    })
+    fs.writeFileSync(outputPath, "existing-contract", "utf-8")
+
+    let message = ""
+    try {
+      builder.save(contract)
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error)
+    }
+
+    try {
+      expect(message).toContain("Contract write rejected unsafe or oversized machine identifiers")
+      expect(message).toContain("conflicts.0.componentIds.0")
+      expect(message).not.toContain(unsafeId)
+      expect(fs.readFileSync(outputPath, "utf-8")).toBe("existing-contract")
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
   test("relationship facts survive construction and serialization without creating a conflict", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "primitiv-contract-relationships-"))
     const outputPath = path.join(tempDir, "primitiv.contract.json")
@@ -301,9 +368,15 @@ describe("same-source redefinition conflicts", () => {
     expect(conflict?.resolution).toBe("pending")
     expect(conflict?.actionable).toBe(true)
     expect(conflict?.sources).toHaveLength(2)
-    expect(conflict?.suggestedFix).toContain("a.css:1")
-    expect(conflict?.suggestedFix).toContain("b.css:3")
-    expect(conflict?.suggestedFix).toContain("keeps the first")
+    expect(conflict?.sources.map((source) => source.source)).toEqual(
+      expect.arrayContaining([
+        { adapter: "codebase", file: "a.css", line: 1 },
+        { adapter: "codebase", file: "b.css", line: 3 }
+      ])
+    )
+    expect(conflict?.suggestedFix).toContain("labelled source evidence")
+    expect(conflict?.suggestedFix).not.toContain("#ffffff")
+    expect(conflict?.suggestedFix).not.toContain("#000000")
   })
 
   test("auto-resolve never self-arbitrates: a same-source conflict stays pending even when the source IS the source of truth", () => {

@@ -1,3 +1,4 @@
+import { safeDisplayText } from "../../safe-display"
 import type {
   Component,
   ComponentMap,
@@ -9,6 +10,17 @@ import type {
   TokenMap
 } from "../../types"
 import { emptyTokenMap } from "../../types"
+import {
+  FIGMA_MAX_DESCRIPTION_BYTES,
+  FIGMA_MAX_METADATA_STRING_BYTES,
+  FIGMA_MAX_PROPERTY_DEFINITIONS,
+  FIGMA_MAX_PROPERTY_NAME_BYTES,
+  FIGMA_MAX_PROPERTY_VALUE_STRING_BYTES,
+  FIGMA_MAX_PROPERTY_VALUES,
+  FIGMA_MAX_PUBLISHED_ASSETS,
+  FIGMA_MAX_RESPONSE_BYTES,
+  FIGMA_MAX_SCAN_RESPONSE_BYTES
+} from "./limits"
 
 type FigmaRawValue =
   | number
@@ -124,10 +136,13 @@ export class FigmaAdapter implements Source {
   // endpoints and either one may stall. Keep this internal until a demonstrated project
   // need calls for a configurable policy.
   private requestTimeoutMs = 30_000
+  private maxScanResponseBytes = FIGMA_MAX_SCAN_RESPONSE_BYTES
+  private scanResponseBytes = 0
 
   constructor(private config: FigmaSource) {}
 
   async scan(): Promise<{ tokens: TokenMap; components: ComponentMap }> {
+    this.scanResponseBytes = 0
     const [tokens, components] = await Promise.all([this.extractTokens(), this.extractComponents()])
     return { tokens, components }
   }
@@ -140,7 +155,7 @@ export class FigmaAdapter implements Source {
         headers: { "X-Figma-Token": this.config.token },
         signal
       })
-    } catch (err) {
+    } catch {
       if (signal.aborted) {
         // This error is persisted in sourceStatuses, so keep it actionable but never
         // include the endpoint, response body, or authentication details.
@@ -148,14 +163,25 @@ export class FigmaAdapter implements Source {
           `Figma API request timed out after ${this.requestTimeoutMs}ms. Check your network connection and try again.`
         )
       }
-      throw err
+      throw new Error("Figma API request failed. Check your network connection and try again.")
     }
     if (!res.ok) {
       // Status code + statusText only — never the response body. This message ends up in
       // the persisted contract's sourceStatuses, which gets committed and fed to LLMs.
-      throw new Error(`Figma API error (${res.status}): ${res.statusText}. ${figmaErrorGuidance(res)}`)
+      throw new Error(
+        `Figma API error (${res.status}): ${safeDisplayText(res.statusText, 128)}. ${figmaErrorGuidance(res)}`
+      )
     }
-    return (await res.json()) as T
+    const body = await readFigmaResponseBody(res)
+    this.scanResponseBytes += body.byteLength
+    if (this.scanResponseBytes > this.maxScanResponseBytes) {
+      throw new Error(`Figma API scan responses exceed the ${this.maxScanResponseBytes}-byte aggregate limit.`)
+    }
+    try {
+      return JSON.parse(body.text) as T
+    } catch {
+      throw new Error("Figma API returned invalid JSON.")
+    }
   }
 
   private async extractTokens(): Promise<TokenMap> {
@@ -166,22 +192,39 @@ export class FigmaAdapter implements Source {
     const collections = data.meta?.variableCollections || {}
 
     for (const variable of Object.values(variables)) {
+      if (!variable || typeof variable !== "object" || Array.isArray(variable)) continue
       if (variable.remote) continue
+      if (
+        !boundedRequiredMetadata(variable.id) ||
+        !boundedRequiredMetadata(variable.name) ||
+        !boundedRequiredMetadata(variable.resolvedType) ||
+        !boundedRequiredMetadata(variable.variableCollectionId) ||
+        (variable.key !== undefined && !boundedRequiredMetadata(variable.key))
+      ) {
+        continue
+      }
 
-      const collection = collections[variable.variableCollectionId]
+      const rawCollection = collections[variable.variableCollectionId]
+      const collection =
+        rawCollection && typeof rawCollection === "object" && !Array.isArray(rawCollection) ? rawCollection : undefined
       const defaultModeId = collection?.defaultModeId
-      if (!defaultModeId) continue
+      if (!boundedRequiredMetadata(defaultModeId)) continue
 
-      const rawValue = variable.valuesByMode?.[defaultModeId]
+      const valuesByMode =
+        variable.valuesByMode && typeof variable.valuesByMode === "object" && !Array.isArray(variable.valuesByMode)
+          ? variable.valuesByMode
+          : {}
+      const rawValue = valuesByMode[defaultModeId]
       if (rawValue === undefined || rawValue === null) continue
 
       // Skip alias variables (references to other variables)
       if (typeof rawValue === "object" && "type" in rawValue && rawValue.type === "VARIABLE_ALIAS") continue
 
       const resolved = this.resolveValue(variable.resolvedType, rawValue, variable.key)
-      if (!resolved) continue
+      if (!resolved || !withinUtf8Limit(resolved, FIGMA_MAX_PROPERTY_VALUE_STRING_BYTES)) continue
 
       const name = this.normalizeName(this.mappingFor(this.config.tokenAliases, variable.key) ?? variable.name)
+      if (!withinUtf8Limit(name, FIGMA_MAX_METADATA_STRING_BYTES)) continue
       const category = this.categorize(variable.resolvedType, name)
       if (!tokens[category]) tokens[category] = {}
       const source: SourceProvenance = {
@@ -192,7 +235,10 @@ export class FigmaAdapter implements Source {
           variableId: variable.id,
           variableKey: variable.key,
           hiddenFromPublishing: variable.hiddenFromPublishing,
-          collectionName: collection?.name
+          collectionName:
+            typeof collection?.name === "string" && withinUtf8Limit(collection.name, FIGMA_MAX_METADATA_STRING_BYTES)
+              ? collection.name
+              : undefined
         }
       }
       const existing = tokens[category][name]
@@ -206,20 +252,26 @@ export class FigmaAdapter implements Source {
       const modes: Record<string, string> = {}
       const modeSources: Record<string, SourceProvenance> = {}
       const modeOrigins: Record<string, { id: string; name: string }> = {}
+      const candidateModes = Array.isArray(collection?.modes) ? collection.modes : []
+      const boundedModes = candidateModes.length <= FIGMA_MAX_PROPERTY_VALUES ? candidateModes : []
       const namedModes = new Map(
-        (collection?.modes ?? [])
-          .filter((mode): mode is { modeId: string; name: string } => Boolean(mode.modeId && mode.name))
+        boundedModes
+          .filter(
+            (mode): mode is { modeId: string; name: string } =>
+              boundedRequiredMetadata(mode.modeId) && boundedRequiredMetadata(mode.name)
+          )
           .map((mode) => [mode.modeId, mode.name])
       )
 
-      for (const [modeId, modeRawValue] of Object.entries(variable.valuesByMode ?? {})) {
+      const modeEntries = Object.entries(valuesByMode).sort(([a], [b]) => compareStrings(a, b))
+      for (const [modeId, modeRawValue] of modeEntries.slice(0, FIGMA_MAX_PROPERTY_VALUES)) {
         if (modeId === defaultModeId) continue
         const rawModeName = namedModes.get(modeId)
         if (!rawModeName) continue
         // Normalization is lexical only: "Night" becomes "night", never "dark". Semantic
         // aliases are an explicit future configuration decision, not an adapter guess.
         const mode = this.normalizeModeName(this.config.modeAliases?.[modeId] ?? rawModeName)
-        if (!mode) continue
+        if (!mode || !withinUtf8Limit(mode, FIGMA_MAX_METADATA_STRING_BYTES)) continue
         if (typeof modeRawValue === "object" && "type" in modeRawValue && modeRawValue.type === "VARIABLE_ALIAS") {
           continue
         }
@@ -230,7 +282,7 @@ export class FigmaAdapter implements Source {
           )
         }
         const modeValue = this.resolveValue(variable.resolvedType, modeRawValue, variable.key)
-        if (!modeValue) continue
+        if (!modeValue || !withinUtf8Limit(modeValue, FIGMA_MAX_PROPERTY_VALUE_STRING_BYTES)) continue
         modes[mode] = modeValue
         modeOrigins[mode] = { id: modeId, name: rawModeName }
         modeSources[mode] = {
@@ -261,6 +313,9 @@ export class FigmaAdapter implements Source {
     const componentSetEntries = componentSetResponse.meta?.component_sets
     if (!Array.isArray(componentEntries) || !Array.isArray(componentSetEntries)) {
       throw new Error("Figma published component discovery returned a malformed asset list.")
+    }
+    if (componentEntries.length + componentSetEntries.length > FIGMA_MAX_PUBLISHED_ASSETS) {
+      throw new Error(`Figma published component discovery exceeds the ${FIGMA_MAX_PUBLISHED_ASSETS}-asset limit.`)
     }
     const discoveredAssets = this.collectPublishedAssets(componentEntries, "component")
     discoveredAssets.push(...this.collectPublishedAssets(componentSetEntries, "component-set"))
@@ -293,7 +348,7 @@ export class FigmaAdapter implements Source {
       }
       const existingNode = byNodeId.get(asset.nodeId)
       if (existingNode && existingNode.key !== asset.key) {
-        throw new Error(`Figma node '${asset.nodeId}' maps to multiple published asset keys.`)
+        throw new Error(`Figma node '${safeDisplayText(asset.nodeId, 128)}' maps to multiple published asset keys.`)
       }
       byKey.set(asset.key, asset)
       byNodeId.set(asset.nodeId, asset)
@@ -347,17 +402,31 @@ export class FigmaAdapter implements Source {
       if (!key || !nodeId) {
         throw new Error(`Figma published ${kind} discovery result is missing a stable key or node ID.`)
       }
+      if (
+        !withinUtf8Limit(key, FIGMA_MAX_METADATA_STRING_BYTES) ||
+        !withinUtf8Limit(nodeId, FIGMA_MAX_METADATA_STRING_BYTES)
+      ) {
+        throw new Error(`Figma published ${kind} discovery contains oversized identity metadata.`)
+      }
       const fileKey = nonEmptyString(entry.file_key)
       if (!fileKey || fileKey !== this.config.fileId) {
-        throw new Error(`Figma published asset '${key}' reports an invalid file key.`)
+        throw new Error(`Figma published asset '${safeDisplayText(key, 128)}' reports an invalid file key.`)
+      }
+      const name = nonEmptyString(entry.name) ?? key
+      if (!withinUtf8Limit(name, FIGMA_MAX_METADATA_STRING_BYTES)) {
+        throw new Error(`Figma published ${kind} discovery contains oversized name metadata.`)
       }
       assets.push({
         key,
         nodeId,
-        name: typeof entry.name === "string" ? entry.name : key,
+        name,
         kind,
-        ...(typeof entry.description === "string" ? { description: entry.description } : {}),
-        ...(typeof entry.updated_at === "string" ? { updatedAt: entry.updated_at } : {})
+        ...(typeof entry.description === "string" && withinUtf8Limit(entry.description, FIGMA_MAX_DESCRIPTION_BYTES)
+          ? { description: entry.description }
+          : {}),
+        ...(typeof entry.updated_at === "string" && withinUtf8Limit(entry.updated_at, FIGMA_MAX_METADATA_STRING_BYTES)
+          ? { updatedAt: entry.updated_at }
+          : {})
       })
     }
     return assets
@@ -384,7 +453,7 @@ export class FigmaAdapter implements Source {
       )
       responses.push(response)
 
-      const responseVersion = nonEmptyString(response.version)
+      const responseVersion = boundedMetadataString(response.version)
       if (responseVersion !== undefined) {
         if (pinnedVersion && responseVersion !== pinnedVersion) {
           throw new Error("Figma component evidence returned conflicting file versions.")
@@ -393,14 +462,14 @@ export class FigmaAdapter implements Source {
       } else if (index > 0) {
         throw new Error("Figma component evidence returned no version for a pinned node batch.")
       }
-      const responseName = nonEmptyString(response.name)
+      const responseName = boundedMetadataString(response.name)
       if (responseName !== undefined) {
         if (fileName !== undefined && fileName !== responseName) {
           throw new Error("Figma component evidence returned conflicting file metadata.")
         }
         fileName = responseName
       }
-      const responseLastModified = nonEmptyString(response.lastModified)
+      const responseLastModified = boundedMetadataString(response.lastModified)
       if (responseLastModified !== undefined) {
         if (lastModified !== undefined && lastModified !== responseLastModified) {
           throw new Error("Figma component evidence returned conflicting file metadata.")
@@ -497,7 +566,15 @@ export class FigmaAdapter implements Source {
   ): void {
     if (!source || typeof source !== "object" || Array.isArray(source)) return
     for (const [nodeId, metadata] of Object.entries(source)) {
+      if (!withinUtf8Limit(nodeId, FIGMA_MAX_METADATA_STRING_BYTES)) {
+        throw new Error("Figma component evidence contains oversized identity metadata.")
+      }
       if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) continue
+      for (const value of [metadata.key, metadata.name, metadata.componentSetId, metadata.component_set_id]) {
+        if (typeof value === "string" && !withinUtf8Limit(value, FIGMA_MAX_METADATA_STRING_BYTES)) {
+          throw new Error("Figma component evidence contains oversized metadata.")
+        }
+      }
       const existing = target.get(nodeId)
       if (existing && !sameNodeMetadata(existing, metadata)) {
         throw new Error("Figma component evidence returned conflicting metadata.")
@@ -547,8 +624,12 @@ export class FigmaAdapter implements Source {
   ): Record<string, PropDefinition> {
     const props: Record<string, PropDefinition> = Object.create(null) as Record<string, PropDefinition>
     if (!definitions || typeof definitions !== "object" || Array.isArray(definitions)) return props
+    // Definitions are a formal set: dropping the complete set is safer than
+    // presenting a plausible but incomplete component contract.
+    if (Object.keys(definitions).length > FIGMA_MAX_PROPERTY_DEFINITIONS) return props
     for (const name of Object.keys(definitions).sort(compareStrings)) {
       if (!name || name.trim().length === 0) continue
+      if (!withinUtf8Limit(name, FIGMA_MAX_PROPERTY_NAME_BYTES)) continue
       const definition = definitions[name]
       if (
         !definition ||
@@ -582,13 +663,17 @@ export class FigmaAdapter implements Source {
         return {
           type: "string",
           kind: "text",
-          ...(typeof value === "string" ? { default: value } : {})
+          ...(typeof value === "string" && withinUtf8Limit(value, FIGMA_MAX_PROPERTY_VALUE_STRING_BYTES)
+            ? { default: value }
+            : {})
         }
       }
       case "VARIANT": {
         if (!Array.isArray(definition.variantOptions)) return undefined
+        if (definition.variantOptions.length > FIGMA_MAX_PROPERTY_VALUES) return undefined
         if (!definition.variantOptions.every((value) => typeof value === "string")) return undefined
         const values = definition.variantOptions as string[]
+        if (!values.every((value) => withinUtf8Limit(value, FIGMA_MAX_PROPERTY_VALUE_STRING_BYTES))) return undefined
         if (values.length === 0) return undefined
         const sorted = sortPrimitiveValues(values)
         const defaultValue =
@@ -598,18 +683,20 @@ export class FigmaAdapter implements Source {
         return { kind: "variant", values: sorted, ...(defaultValue !== undefined ? { default: defaultValue } : {}) }
       }
       case "INSTANCE_SWAP": {
-        const preferredValues = Array.isArray(definition.preferredValues)
-          ? definition.preferredValues.filter(isPreferredValue).map((value) => ({
-              type: value.type === "COMPONENT_SET" ? "component-set" : "component",
-              key: value.key
-            }))
-          : []
+        const preferredValues =
+          Array.isArray(definition.preferredValues) && definition.preferredValues.length <= FIGMA_MAX_PROPERTY_VALUES
+            ? definition.preferredValues.filter(isBoundedPreferredValue).map((value) => ({
+                type: value.type === "COMPONENT_SET" ? "component-set" : "component",
+                key: value.key
+              }))
+            : []
         const unique = new Map(preferredValues.map((value) => [`${value.type}:${value.key}`, value]))
         const sorted = [...unique.values()].sort(
           (a, b) => compareStrings(a.type, b.type) || compareStrings(a.key, b.key)
         )
         const defaultValue =
-          typeof definition.defaultValue === "string"
+          typeof definition.defaultValue === "string" &&
+          withinUtf8Limit(definition.defaultValue, FIGMA_MAX_METADATA_STRING_BYTES)
             ? (lookups.byKey.get(definition.defaultValue)?.key ?? lookups.byNodeId.get(definition.defaultValue)?.key)
             : undefined
         return {
@@ -684,8 +771,25 @@ function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined
 }
 
+function boundedMetadataString(value: unknown): string | undefined {
+  const string = nonEmptyString(value)
+  if (string === undefined) return undefined
+  if (!withinUtf8Limit(string, FIGMA_MAX_METADATA_STRING_BYTES)) {
+    throw new Error("Figma component evidence contains oversized metadata.")
+  }
+  return string
+}
+
+function boundedRequiredMetadata(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0 && withinUtf8Limit(value, FIGMA_MAX_METADATA_STRING_BYTES)
+}
+
+function withinUtf8Limit(value: string, maxBytes: number): boolean {
+  return new TextEncoder().encode(value).byteLength <= maxBytes
+}
+
 function safeIdentity(asset: PublishedAsset): string {
-  return asset.key
+  return safeDisplayText(asset.key, 128)
 }
 
 function compareStrings(a: string, b: string): number {
@@ -729,6 +833,10 @@ function isPreferredValue(value: unknown): value is { type: "COMPONENT" | "COMPO
   )
 }
 
+function isBoundedPreferredValue(value: unknown): value is { type: "COMPONENT" | "COMPONENT_SET"; key: string } {
+  return isPreferredValue(value) && withinUtf8Limit(value.key, FIGMA_MAX_METADATA_STRING_BYTES)
+}
+
 function sameNodeMetadata(a: FigmaNodeMetadata, b: FigmaNodeMetadata): boolean {
   const membershipA = a.componentSetId ?? a.component_set_id
   const membershipB = b.componentSetId ?? b.component_set_id
@@ -764,4 +872,49 @@ function retryAfterGuidance(value: string | null): string {
 
 function sameOptional(a: string | undefined, b: string | undefined): boolean {
   return a === undefined || b === undefined || a === b
+}
+
+async function readFigmaResponseBody(response: Response): Promise<{ text: string; byteLength: number }> {
+  const contentLength = response.headers.get("Content-Length")
+  if (contentLength !== null && /^(0|[1-9]\d*)$/.test(contentLength.trim())) {
+    const declaredLength = Number(contentLength.trim())
+    if (Number.isSafeInteger(declaredLength) && declaredLength > FIGMA_MAX_RESPONSE_BYTES) {
+      throw new Error(`Figma API response exceeds the ${FIGMA_MAX_RESPONSE_BYTES}-byte limit.`)
+    }
+  }
+
+  // Read the stream ourselves because Content-Length is advisory (and is often
+  // absent for chunked responses). The bytes actually received are authoritative.
+  // A null body represents zero bytes in the Fetch response model.
+  if (!response.body) return { text: "", byteLength: 0 }
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let totalBytes = 0
+  try {
+    while (true) {
+      const result = await reader.read()
+      if (result.done) break
+      totalBytes += result.value.byteLength
+      if (totalBytes > FIGMA_MAX_RESPONSE_BYTES) {
+        try {
+          await reader.cancel()
+        } catch {
+          // The response is already over the cap; cancellation failure does not
+          // change the safe, deterministic error reported to callers.
+        }
+        throw new Error(`Figma API response exceeds the ${FIGMA_MAX_RESPONSE_BYTES}-byte limit.`)
+      }
+      chunks.push(result.value)
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("Figma API response exceeds")) throw error
+    throw new Error("Figma API response could not be read.")
+  }
+  const bytes = new Uint8Array(totalBytes)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return { text: new TextDecoder().decode(bytes), byteLength: totalBytes }
 }

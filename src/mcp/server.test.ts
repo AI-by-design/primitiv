@@ -896,7 +896,128 @@ describe("omittable args are declared optional", () => {
   })
 })
 
+describe("bounded conflict projections", () => {
+  test("conflict display fields escape terminal and bidirectional controls", async () => {
+    const c = await connect(
+      writeContract({
+        conflicts: [
+          {
+            type: "component",
+            name: "Button\u202e",
+            sources: [{ source: { adapter: "figma", file: "remote\nfile" }, value: "\u001b[31mred" }],
+            resolution: "pending",
+            suggestedFix: "Review\rthe evidence"
+          }
+        ]
+      })
+    )
+    const result = await c.callTool({ name: "get_conflicts", arguments: {} })
+    const conflict = JSON.parse((result.content as Array<{ type: string; text: string }>)[0].text).conflicts[0]
+    expect(conflict.name).toContain("\\u{202e}")
+    expect(conflict.sources[0].source.file).toContain("\\u{000a}")
+    expect(conflict.sources[0].value).toContain("\\u{001b}")
+    expect(conflict.suggestedFix).toContain("\\u{000d}")
+  })
+
+  test("get_design_context keeps a large durable conflict set behind a fixed bound", async () => {
+    const conflicts = Array.from({ length: 1_000 }, (_, index) => ({
+      type: "component" as const,
+      name: `Component${String(index).padStart(4, "0")}`,
+      sources: [
+        { source: { adapter: "codebase" as const }, value: `"code-${index}"` },
+        { source: { adapter: "figma" as const }, value: `"figma-${index}"` }
+      ],
+      resolution: "pending" as const
+    }))
+    const c = await connect(writeContract({ conflicts }))
+
+    const result = await c.callTool({ name: "get_design_context", arguments: { category: "conflicts" } })
+    const text = (result.content as Array<{ type: string; text: string }>)[0].text
+    const payload = JSON.parse(text)
+    expect(payload.conflictCount).toBe(1_000)
+    expect(payload.conflicts).toHaveLength(25)
+    expect(payload.conflictsTruncated).toBe(true)
+    expect(text.length).toBeLessThan(100_000)
+  })
+
+  test("refuses a valid bounded page whose aggregate evidence exceeds the response budget", async () => {
+    const conflicts = Array.from({ length: 25 }, (_, index) => ({
+      type: "component" as const,
+      name: `Component${index}`,
+      sources: [
+        {
+          source: { adapter: "codebase" as const },
+          value: "bounded",
+          structuredValue: "x".repeat(30_000)
+        }
+      ],
+      resolution: "pending" as const
+    }))
+    const c = await connect(writeContract({ conflicts }))
+
+    const result = await c.callTool({ name: "get_conflicts", arguments: {} })
+    expect(result.isError).toBe(true)
+    expect((result.content as Array<{ type: string; text: string }>)[0].text).toContain("projection exceeds")
+  })
+})
+
 describe("contract boundary validation", () => {
+  test("validates malformed conflicts before projection", async () => {
+    const c = await connect(
+      writeContract({
+        conflicts: [null as unknown as PrimitivContract["conflicts"][number]]
+      })
+    )
+    const result = await c.callTool({ name: "get_conflicts", arguments: {} })
+    expect(result.isError).toBe(true)
+    expect((result.content as Array<{ type: string; text: string }>)[0].text).toContain(
+      "Conflict projection is malformed"
+    )
+  })
+
+  test("rejects deeply nested structured conflict evidence without recursive parsing", async () => {
+    let structuredValue: unknown = "value"
+    for (let depth = 0; depth < 18; depth += 1) structuredValue = { nested: structuredValue }
+    const c = await connect(
+      writeContract({
+        conflicts: [
+          {
+            type: "component",
+            name: "Button",
+            fieldPath: ["props", "size", "default"],
+            sources: [{ source: { adapter: "figma" }, value: "bounded", structuredValue }],
+            resolution: "pending"
+          }
+        ]
+      })
+    )
+    const result = await c.callTool({ name: "get_conflicts", arguments: {} })
+    expect(result.isError).toBe(true)
+    expect((result.content as Array<{ type: string; text: string }>)[0].text).toContain("at most 16 levels deep")
+  })
+
+  test("rejects a field conflict that carries an identity resolution", async () => {
+    const c = await connect(
+      writeContract({
+        conflicts: [
+          {
+            type: "component",
+            name: "Button",
+            fieldPath: ["props", "size", "default"],
+            resolved: "ui/Button",
+            sources: [{ source: { adapter: "codebase" }, value: '"sm"' }],
+            resolution: "manual"
+          }
+        ]
+      })
+    )
+    const result = await c.callTool({ name: "get_conflicts", arguments: { status: "all" } })
+    expect(result.isError).toBe(true)
+    expect((result.content as Array<{ type: string; text: string }>)[0].text).toContain(
+      "field conflicts cannot carry an identity resolution"
+    )
+  })
+
   test("a structurally malformed contract degrades to the setup error instead of crashing", async () => {
     const contractPath = path.join(tempDir, "primitiv.contract.json")
     // Valid JSON, but missing the fields the tools dereference (conflicts/tokens/components).

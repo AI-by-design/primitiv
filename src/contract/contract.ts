@@ -1,17 +1,19 @@
 import * as fs from "node:fs"
 import { inferRules } from "../inferrer"
 import { valuesEquivalent } from "../normalize/value"
+import { safeDisplayText } from "../safe-display"
 import type {
   ComponentMap,
   Conflict,
   PrimitivConfig,
   PrimitivContract,
   SourceProvenance,
+  SourceStatus,
   Token,
   TokenMap,
   TokenRedefinition
 } from "../types"
-import { emptyTokenMap } from "../types"
+import { emptyTokenMap, primitivContractSchema, summarizeValidationIssues } from "../types"
 
 export class ContractBuilder {
   constructor(private config: PrimitivConfig) {}
@@ -25,7 +27,8 @@ export class ContractBuilder {
       // cross-source merge below (each source's map is collapsed before it), so the source
       // reports them and they surface as conflicts here (rule 11).
       redefinitions?: TokenRedefinition[]
-    }>
+    }>,
+    options: { sourceStatuses?: Record<string, SourceStatus> } = {}
   ): PrimitivContract {
     const conflicts: Conflict[] = []
     const mergedTokens = this.mergeTokens(sources, conflicts)
@@ -35,6 +38,7 @@ export class ContractBuilder {
     // existing conflicts by name, and a same-source dispute must never share a record with
     // (or be auto-resolved alongside) a cross-source one — a source can't arbitrate itself.
     conflicts.push(...this.redefinitionConflicts(sources))
+    assertGeneratedConflictScopes(conflicts)
     const inferredRules = inferRules(mergedTokens, components)
 
     const contract: PrimitivContract = {
@@ -48,13 +52,16 @@ export class ContractBuilder {
       components,
       componentNameIndex: nameIndex,
       conflicts,
-      inferredRules
+      inferredRules,
+      ...(options.sourceStatuses ? { sourceStatuses: sortSourceStatuses(options.sourceStatuses) } : {})
     }
 
+    assertValidContractBoundary(contract, "Generated contract")
     return contract
   }
 
   save(contract: PrimitivContract): void {
+    assertValidContractBoundary(contract, "Contract write")
     fs.writeFileSync(this.config.output.path, JSON.stringify(contract, null, 2), "utf-8")
   }
 
@@ -90,6 +97,7 @@ export class ContractBuilder {
                 const fix = this.buildFixMessage("token", `${category}.${name}`, conflictSources)
                 conflicts.push({
                   type: "token",
+                  scope: "cross-source",
                   name: `${category}.${name}`,
                   sources: conflictSources,
                   resolution: "pending",
@@ -173,6 +181,7 @@ export class ContractBuilder {
         const fix = this.buildFixMessage("token", conflictName, conflictSources)
         conflicts.push({
           type: "token",
+          scope: "cross-source",
           name: conflictName,
           sources: conflictSources,
           resolution: "pending",
@@ -233,6 +242,7 @@ export class ContractBuilder {
       const sotIds = ids.filter((id) => merged[id].source.adapter === this.config.governance.sourceOfTruth)
       conflicts.push({
         type: "component",
+        scope: "cross-source",
         name,
         sources: conflictSources,
         // When the source of truth owns exactly one contender, record the governed winner
@@ -259,7 +269,12 @@ export class ContractBuilder {
       // A source can never arbitrate a dispute within itself: a conflict whose sources all
       // share one adapter (a same-source redefinition) stays pending regardless of
       // sourceOfTruth — the `some(adapter === sot)` check below would wrongly self-resolve it.
-      if (new Set(conflict.sources.map((s) => s.source.adapter)).size < 2) continue
+      if (
+        conflict.scope === "within-source" ||
+        (conflict.scope === undefined && new Set(conflict.sources.map((s) => s.source.adapter)).size < 2)
+      ) {
+        continue
+      }
       const sotDecided =
         conflict.type === "component"
           ? conflict.resolved !== undefined
@@ -276,18 +291,18 @@ export class ContractBuilder {
     for (const source of sources) {
       for (const redef of source.redefinitions ?? []) {
         const all = [redef.kept, ...redef.discarded]
-        const where = all
-          .map((d) => `${d.source.file ?? source.name}${d.source.line ? `:${d.source.line}` : ""}: '${d.value}'`)
-          .join(", ")
+        const displayName = safeDisplayText(`${redef.category}.${redef.name}`)
+        const displaySource = safeDisplayText(source.name)
         out.push({
           type: "token",
+          scope: "within-source",
           name: `${redef.category}.${redef.name}`,
           sources: all.map((d) => ({ source: d.source, value: d.value })),
           resolution: "pending",
           actionable: true,
           suggestedFix:
-            `Token '${redef.category}.${redef.name}' is defined ${all.length} times within '${source.name}' ` +
-            `with different values (${where}). The contract keeps the first (value: '${redef.kept.value}'). ` +
+            `Token '${displayName}' is defined ${all.length} times within '${displaySource}' with different values. ` +
+            `Review the labelled source evidence. ` +
             `Remove the other definition${redef.discarded.length === 1 ? "" : "s"} so one value remains.`
         })
       }
@@ -303,22 +318,24 @@ export class ContractBuilder {
     const sot = this.config.governance.sourceOfTruth
     const winner = sources.find((s) => s.source.adapter === sot)
     const losers = sources.filter((s) => s.source.adapter !== sot)
+    const displayName = safeDisplayText(name)
+    const displaySourceOfTruth = safeDisplayText(sot)
 
     if (conflictType === "token") {
       if (winner) {
         return {
           suggestedFix:
-            `Token '${name}' conflicts across sources. ` +
-            `'${sot}' is the source of truth (value: '${winner.value}'). ` +
-            `Update ${losers.map((s) => `'${s.source.adapter}'`).join(", ")} to match, ` +
+            `Token '${displayName}' conflicts across sources. ` +
+            `'${displaySourceOfTruth}' is the source of truth. Review the labelled source evidence, then ` +
+            `update ${losers.map((s) => `'${safeDisplayText(s.source.adapter)}'`).join(", ")} to match, ` +
             `or change \`governance.sourceOfTruth\` in primitiv.config.js.`,
           actionable: true
         }
       }
       return {
         suggestedFix:
-          `Token '${name}' conflicts across sources (${sources.map((s) => `${s.source.adapter}: '${s.value}'`).join(", ")}). ` +
-          `No source of truth is configured for these sources. ` +
+          `Token '${displayName}' conflicts across sources. Review the labelled source evidence. ` +
+          `No source of truth is configured for the participating sources. ` +
           `Set \`governance.sourceOfTruth\` in primitiv.config.js to resolve.`,
         actionable: false
       }
@@ -327,18 +344,48 @@ export class ContractBuilder {
     if (winner) {
       return {
         suggestedFix:
-          `Component '${name}' is defined in multiple sources. ` +
-          `'${sot}' is the source of truth (path: '${winner.value}'). ` +
-          `Remove the duplicate from ${losers.map((s) => `'${s.source.adapter}'`).join(", ")}, ` +
+          `Component '${displayName}' is defined in multiple sources. ` +
+          `'${displaySourceOfTruth}' is the source of truth. Review the labelled source evidence, then ` +
+          `remove the duplicate from ${losers.map((s) => `'${safeDisplayText(s.source.adapter)}'`).join(", ")}, ` +
           `or change \`governance.sourceOfTruth\` in primitiv.config.js.`,
         actionable: true
       }
     }
     return {
       suggestedFix:
-        `Component '${name}' is defined in multiple sources (${sources.map((s) => `${s.source.adapter}: '${s.value}'`).join(", ")}). ` +
+        `Component '${displayName}' is defined in multiple sources. Review the labelled source evidence. ` +
         `Set \`governance.sourceOfTruth\` in primitiv.config.js to resolve.`,
       actionable: false
     }
   }
+}
+
+function compareStrings(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
+function assertGeneratedConflictScopes(conflicts: Conflict[]): void {
+  if (conflicts.some((conflict) => conflict.scope === undefined)) {
+    throw new Error("Internal conflict construction error: every newly generated conflict must declare its scope.")
+  }
+}
+
+function assertValidContractBoundary(
+  contract: PrimitivContract,
+  operation: "Generated contract" | "Contract write"
+): void {
+  const result = primitivContractSchema.safeParse(contract)
+  if (result.success) return
+  throw new Error(
+    `${operation} rejected unsafe or oversized machine identifiers (${summarizeValidationIssues(result.error)}). ` +
+      "Fix the source IDs or reconciliation.componentMappings, then rebuild."
+  )
+}
+
+function sortSourceStatuses(statuses: Record<string, SourceStatus>): Record<string, SourceStatus> {
+  return Object.fromEntries(
+    Object.keys(statuses)
+      .sort(compareStrings)
+      .map((name) => [name, { ...statuses[name] }])
+  )
 }

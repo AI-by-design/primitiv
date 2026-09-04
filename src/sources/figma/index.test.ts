@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test"
 import { FigmaAdapter } from "./index"
+import {
+  FIGMA_MAX_DESCRIPTION_BYTES,
+  FIGMA_MAX_METADATA_STRING_BYTES,
+  FIGMA_MAX_PROPERTY_DEFINITIONS,
+  FIGMA_MAX_PROPERTY_NAME_BYTES,
+  FIGMA_MAX_PROPERTY_VALUE_STRING_BYTES,
+  FIGMA_MAX_PROPERTY_VALUES,
+  FIGMA_MAX_RESPONSE_BYTES
+} from "./limits"
 
 function adapterWithTimeout(timeoutMs: number): FigmaAdapter {
   const adapter = new FigmaAdapter({ token: "test-token", fileId: "file123" })
@@ -23,6 +32,13 @@ describe("FigmaAdapter — durable identity capture", () => {
             variableCollectionId: "VariableCollectionId:1:1",
             hiddenFromPublishing: true,
             valuesByMode: { "1:0": { r: 1, g: 0, b: 0, a: 1 } }
+          },
+          oversized: {
+            id: "oversized",
+            name: "x".repeat(FIGMA_MAX_METADATA_STRING_BYTES + 1),
+            resolvedType: "COLOR",
+            variableCollectionId: "VariableCollectionId:1:1",
+            valuesByMode: { "1:0": { r: 0, g: 0, b: 0, a: 1 } }
           }
         },
         variableCollections: {
@@ -30,18 +46,15 @@ describe("FigmaAdapter — durable identity capture", () => {
         }
       }
     }
-    const server = Bun.serve({
-      port: 0,
-      fetch: (req) => {
-        const pathname = new URL(req.url).pathname
-        if (pathname.endsWith("/variables/local")) return Response.json(variablesResponse)
-        if (pathname.endsWith("/component_sets")) return Response.json({ meta: { component_sets: [] } })
-        return Response.json({ meta: { components: [] } })
-      }
-    })
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : input.toString()
+      if (url.endsWith("/variables/local")) return Response.json(variablesResponse)
+      if (url.endsWith("/component_sets")) return Response.json({ meta: { component_sets: [] } })
+      return Response.json({ meta: { components: [] } })
+    }) as typeof fetch
     try {
       const adapter = new FigmaAdapter({ token: "test-token", fileId: "file123" })
-      ;(adapter as unknown as { baseUrl: string }).baseUrl = `http://localhost:${server.port}`
 
       const { tokens } = await adapter.scan()
       const token = tokens.colors?.["colors-primary-500"]
@@ -50,8 +63,9 @@ describe("FigmaAdapter — durable identity capture", () => {
         variableKey: "durable-key-abc123",
         hiddenFromPublishing: true
       })
+      expect(Object.keys(tokens.colors)).toEqual(["colors-primary-500"])
     } finally {
-      server.stop(true)
+      globalThis.fetch = originalFetch
     }
   })
 })
@@ -125,6 +139,84 @@ describe("FigmaAdapter — error sanitization", () => {
       expect(message).toContain("published main-file key")
       expect(message).toContain("branch keys")
       expect(message).not.toContain("SECRET-BODY-DO-NOT-PERSIST")
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+})
+
+describe("FigmaAdapter — bounded response reading", () => {
+  test("enforces one aggregate byte budget across a scan", async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : input.toString()
+      if (url.endsWith("/variables/local")) return Response.json({ meta: { variables: {}, variableCollections: {} } })
+      if (url.endsWith("/component_sets")) return Response.json({ meta: { component_sets: [] } })
+      return Response.json({ meta: { components: [] } })
+    }) as typeof fetch
+    try {
+      const adapter = new FigmaAdapter({ token: "test-token", fileId: "file123" })
+      ;(adapter as unknown as { maxScanResponseBytes: number }).maxScanResponseBytes = 64
+      await expect(adapter.scan()).rejects.toThrow(/aggregate limit/)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("rejects a response whose Content-Length exceeds the named cap before reading it", async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => {
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          controller.enqueue(new TextEncoder().encode('{"meta":{}}'))
+          controller.close()
+        }
+      })
+      return new Response(body, {
+        headers: { "Content-Length": String(FIGMA_MAX_RESPONSE_BYTES + 1) }
+      })
+    }) as typeof fetch
+    try {
+      await expect(new FigmaAdapter({ token: "secret-token", fileId: "file123" }).scan()).rejects.toThrow(
+        `Figma API response exceeds the ${FIGMA_MAX_RESPONSE_BYTES}-byte limit.`
+      )
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("rejects actual streamed bytes over the cap without Content-Length", async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array(FIGMA_MAX_RESPONSE_BYTES + 1))
+          controller.close()
+        }
+      })
+      return new Response(body)
+    }) as typeof fetch
+    try {
+      let message = ""
+      try {
+        await new FigmaAdapter({ token: "secret-token", fileId: "file123" }).scan()
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error)
+      }
+      expect(message).toContain(`Figma API response exceeds the ${FIGMA_MAX_RESPONSE_BYTES}-byte limit.`)
+      expect(message).not.toContain("secret-token")
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("sanitizes malformed JSON failures", async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => new Response('{"body":"secret-token"} trailing SECRET-BODY')) as typeof fetch
+    try {
+      await expect(new FigmaAdapter({ token: "secret-token", fileId: "file123" }).scan()).rejects.toThrow(
+        "Figma API returned invalid JSON."
+      )
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -451,6 +543,39 @@ describe("FigmaAdapter — explicit mapping safety", () => {
 })
 
 describe("FigmaAdapter — published component evidence", () => {
+  test("omits formal property evidence when definition or value counts exceed their caps", () => {
+    const adapter = new FigmaAdapter({ token: "test-token", fileId: "file123" })
+    const extract = (
+      adapter as unknown as {
+        extractPropertyDefinitions: (
+          definitions: Record<string, unknown>,
+          lookups: { byKey: Map<string, unknown>; byNodeId: Map<string, unknown> }
+        ) => Record<string, unknown>
+      }
+    ).extractPropertyDefinitions.bind(adapter)
+    const lookups = { byKey: new Map<string, unknown>(), byNodeId: new Map<string, unknown>() }
+    const tooManyDefinitions = Object.fromEntries(
+      Array.from({ length: FIGMA_MAX_PROPERTY_DEFINITIONS + 1 }, (_, index) => [
+        `prop${index}`,
+        { type: "BOOLEAN", defaultValue: false }
+      ])
+    )
+
+    expect(extract(tooManyDefinitions, lookups)).toEqual({})
+    expect(
+      extract(
+        {
+          Crowded: {
+            type: "VARIANT",
+            variantOptions: Array.from({ length: FIGMA_MAX_PROPERTY_VALUES + 1 }, (_, index) => `value${index}`)
+          },
+          Disabled: { type: "BOOLEAN", defaultValue: false }
+        },
+        lookups
+      )
+    ).toEqual({ Disabled: { type: "boolean", kind: "boolean", default: "false" } })
+  })
+
   test("assembles component sets and standalone components from targeted nodes", async () => {
     const originalFetch = globalThis.fetch
     globalThis.fetch = (async (input: RequestInfo | URL) => {
@@ -586,6 +711,93 @@ describe("FigmaAdapter — published component evidence", () => {
       await expect(new FigmaAdapter({ token: "test-token", fileId: "file123" }).scan()).rejects.toThrow(
         /missing targeted node evidence/i
       )
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("bounds component metadata and omits unsafe optional evidence", async () => {
+    const originalFetch = globalThis.fetch
+    const oversizedDescription = "d".repeat(FIGMA_MAX_DESCRIPTION_BYTES + 1)
+    const oversizedPropertyName = "p".repeat(FIGMA_MAX_PROPERTY_NAME_BYTES + 1)
+    const oversizedChoice = "v".repeat(FIGMA_MAX_PROPERTY_VALUE_STRING_BYTES + 1)
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString())
+      if (url.pathname.endsWith("/variables/local")) {
+        return Response.json({ meta: { variables: {}, variableCollections: {} } })
+      }
+      if (url.pathname.endsWith("/components")) return Response.json({ meta: { components: [] } })
+      if (url.pathname.endsWith("/component_sets")) {
+        return Response.json({
+          meta: {
+            component_sets: [
+              {
+                key: "set-key",
+                node_id: "2:1",
+                name: "Button",
+                description: oversizedDescription,
+                file_key: "file123"
+              }
+            ]
+          }
+        })
+      }
+      return Response.json({
+        version: "snapshot-1",
+        nodes: {
+          "2:1": {
+            document: {
+              id: "2:1",
+              type: "COMPONENT_SET",
+              componentPropertyDefinitions: {
+                [oversizedPropertyName]: { type: "BOOLEAN", defaultValue: false },
+                Size: { type: "VARIANT", variantOptions: ["Small", oversizedChoice] },
+                Label: { type: "TEXT", defaultValue: oversizedChoice },
+                Disabled: { type: "BOOLEAN", defaultValue: false }
+              }
+            }
+          }
+        }
+      })
+    }) as typeof fetch
+
+    try {
+      const { components } = await new FigmaAdapter({ token: "test-token", fileId: "file123" }).scan()
+      expect(components["figma:set-key"]?.description).toBeUndefined()
+      expect(components["figma:set-key"]?.props).toEqual({
+        Disabled: { type: "boolean", kind: "boolean", default: "false" },
+        Label: { type: "string", kind: "text" }
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("rejects oversized required identity metadata without echoing it", async () => {
+    const originalFetch = globalThis.fetch
+    const oversizedName = `SECRET-${"n".repeat(FIGMA_MAX_METADATA_STRING_BYTES)}`
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString())
+      if (url.pathname.endsWith("/variables/local")) {
+        return Response.json({ meta: { variables: {}, variableCollections: {} } })
+      }
+      if (url.pathname.endsWith("/components")) {
+        return Response.json({
+          meta: { components: [{ key: "key", node_id: "2:1", name: oversizedName, file_key: "file123" }] }
+        })
+      }
+      return Response.json({ meta: { component_sets: [] } })
+    }) as typeof fetch
+
+    try {
+      let message = ""
+      try {
+        await new FigmaAdapter({ token: "test-token", fileId: "file123" }).scan()
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error)
+      }
+      expect(message).toContain("oversized name metadata")
+      expect(message).not.toContain("SECRET")
     } finally {
       globalThis.fetch = originalFetch
     }

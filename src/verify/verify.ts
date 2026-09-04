@@ -3,6 +3,7 @@ import * as path from "node:path"
 import { glob } from "glob"
 import { buildContract, loadConfig } from "../index"
 import { valuesEquivalent } from "../normalize/value"
+import { safeDisplayText } from "../safe-display"
 import type { Conflict, PrimitivConfig, PrimitivContract, Violation } from "../types"
 import { primitivContractSchema, summarizeValidationIssues } from "../types"
 import { verifyDefaultContractSchema, verifyFastContractSchema, verifySharedContractSchema } from "./contract-schema"
@@ -148,9 +149,10 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
   if (hasFailedSources) {
     const severity = options.strict ? "✗" : "!"
     for (const failed of failedSources) {
-      messages.push(
-        `${severity} Source '${failed.name}' failed to scan${failed.error ? ` (${failed.error})` : ""} — its data may be missing; drift for its entries is not evaluated.`
-      )
+      const line = `${severity} Source '${safeDisplayText(failed.name)}' failed to scan${
+        failed.error ? ` (${safeDisplayText(failed.error)})` : ""
+      } — its data may be missing; drift for its entries is not evaluated.`
+      messages.push(safeDisplayText(line, 1_024))
     }
     if (!options.strict) {
       messages.push(`  Does not fail verify by default; --strict escalates failed sources to a hard failure.`)
@@ -158,16 +160,26 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
   }
 
   if (hasUnresolvedConflicts) {
+    const conflictIsBlocking = options.strict || config.governance.onConflict === "error"
+    const severity = conflictIsBlocking ? "✗" : "!"
     messages.push(
-      `✗ ${pendingConflicts.length} pending conflict${pendingConflicts.length === 1 ? "" : "s"} require resolution:`
+      `${severity} ${pendingConflicts.length} pending conflict${pendingConflicts.length === 1 ? "" : "s"} require resolution:`
     )
     for (const conflict of pendingConflicts.slice(0, MAX_REPORTED_CONFLICTS)) {
-      messages.push(`  - ${conflict.type}: ${conflict.name}`)
-      if (conflict.suggestedFix) messages.push(`    → ${conflict.suggestedFix}`)
+      const field = conflict.fieldPath?.map((segment) => safeDisplayText(segment, 128)).join(" → ")
+      messages.push(
+        safeDisplayText(`  - ${conflict.type}: ${safeDisplayText(conflict.name)}${field ? ` [${field}]` : ""}`, 1_024)
+      )
+      if (conflict.suggestedFix) messages.push(safeDisplayText(`    → ${conflict.suggestedFix}`, 1_024))
     }
     if (pendingConflicts.length > MAX_REPORTED_CONFLICTS) {
       messages.push(
         `  ... and ${pendingConflicts.length - MAX_REPORTED_CONFLICTS} more. Call get_conflicts via the MCP server for the full list.`
+      )
+    }
+    if (!conflictIsBlocking) {
+      messages.push(
+        `  Does not fail verify by default; governance.onConflict is "${config.governance.onConflict}". --strict escalates pending conflicts to a hard failure.`
       )
     }
   }
@@ -181,9 +193,14 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
       // here. `use --color-destructive` reads as a CLI flag rather than a custom property;
       // leading dashes are stripped first so a `--`-prefixed name can't yield `var(----x)`.
       const suggestion = v.suggestion
-        ? ` → use var(--${v.suggestion.token.replace(/^-+/, "")})`
+        ? ` → use var(--${safeDisplayText(v.suggestion.token.replace(/^-+/, ""), 128)})`
         : ` → no matching token`
-      messages.push(`  - ${v.source.file}:${v.source.line}  ${v.context}${suggestion}`)
+      messages.push(
+        safeDisplayText(
+          `  - ${safeDisplayText(v.source.file)}:${v.source.line}  ${safeDisplayText(v.context, 512)}${suggestion}`,
+          1_024
+        )
+      )
     }
     if (violations.length > MAX_REPORTED_VIOLATIONS) {
       messages.push(
@@ -197,7 +214,7 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
     const noun = drift.changes.length === 1 ? "change" : "changes"
     messages.push(`${severity} Contract is stale: ${drift.changes.length} ${noun} detected since contract was built.`)
     for (const change of drift.changes.slice(0, MAX_REPORTED_CHANGES)) {
-      messages.push(`  - ${change}`)
+      messages.push(safeDisplayText(`  - ${change}`, 1_024))
     }
     if (drift.changes.length > MAX_REPORTED_CHANGES) {
       messages.push(`  ... and ${drift.changes.length - MAX_REPORTED_CHANGES} more.`)
@@ -221,6 +238,7 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
   const { status, exitCode } = decideStatus({
     isStale: drift.isStale,
     hasUnresolvedConflicts,
+    conflictPolicy: config.governance.onConflict,
     hasViolations,
     hasFailedSources,
     strict: options.strict === true
@@ -533,6 +551,7 @@ async function findSourceFilesNewerThan(
 function decideStatus(params: {
   isStale: boolean
   hasUnresolvedConflicts: boolean
+  conflictPolicy: PrimitivConfig["governance"]["onConflict"]
   hasViolations: boolean
   hasFailedSources: boolean
   strict: boolean
@@ -544,10 +563,23 @@ function decideStatus(params: {
   // > usage (violations) > freshness (stale). A failed source is warn-and-continue by
   // default — codebase is usually the source of truth and a transient Storybook outage
   // shouldn't fail every build — but under --strict an incomplete picture is a failure.
-  if (params.hasUnresolvedConflicts) return { status: "unresolved-conflicts", exitCode: 2 }
+  // Keep unresolved conflicts as the primary status for compatibility, while the
+  // configured governance policy controls whether they fail verify. Other findings
+  // still determine the exit code when conflicts are warn-only.
+  if (params.hasUnresolvedConflicts && (params.strict || params.conflictPolicy === "error")) {
+    return { status: "unresolved-conflicts", exitCode: 2 }
+  }
   if (params.strict && params.hasFailedSources) return { status: "source-scan-failed", exitCode: 2 }
-  if (params.hasViolations) return { status: "token-misuse-detected", exitCode: params.strict ? 2 : 1 }
-  if (params.isStale) return { status: "stale", exitCode: params.strict ? 2 : 1 }
+  if (params.hasViolations) {
+    return {
+      status: params.hasUnresolvedConflicts ? "unresolved-conflicts" : "token-misuse-detected",
+      exitCode: params.strict ? 2 : 1
+    }
+  }
+  if (params.isStale) {
+    return { status: params.hasUnresolvedConflicts ? "unresolved-conflicts" : "stale", exitCode: params.strict ? 2 : 1 }
+  }
+  if (params.hasUnresolvedConflicts) return { status: "unresolved-conflicts", exitCode: 0 }
   return { status: "clean", exitCode: 0 }
 }
 
