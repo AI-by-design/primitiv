@@ -64,6 +64,126 @@ describe("component merge (path-qualified identity)", () => {
     expect(contract.componentNameIndex?.Card).toEqual(["Card"])
   })
 
+  test("an explicit mapping supplies the governance lookup winner when the source of truth has several candidates", () => {
+    const builder = new ContractBuilder({
+      ...config(),
+      reconciliation: {
+        componentMappings: [{ codebase: "checkout/Button", figma: "figma:button" }]
+      }
+    })
+    const contract = builder.build([
+      {
+        name: "codebase",
+        tokens: emptyTokenMap(),
+        components: {
+          "checkout/Button": codebaseComponent("Button", "checkout/Button.tsx"),
+          "marketing/Button": codebaseComponent("Button", "marketing/Button.tsx")
+        }
+      },
+      {
+        name: "figma",
+        tokens: emptyTokenMap(),
+        components: {
+          "figma:button": { name: "Button", displayName: "Button", source: { adapter: "figma" } }
+        }
+      }
+    ])
+
+    expect(contract.componentNameResolutions?.Button).toBe("checkout/Button")
+  })
+
+  test("an explicit mapping remains non-blocking when its optional partner failed to scan", () => {
+    const builder = new ContractBuilder({
+      ...config(),
+      reconciliation: {
+        componentMappings: [{ codebase: "ui/Button", figma: "figma:button" }]
+      }
+    })
+    const contract = builder.build(
+      [
+        {
+          name: "codebase",
+          tokens: emptyTokenMap(),
+          components: { "ui/Button": codebaseComponent("Button", "ui/Button.tsx") }
+        }
+      ],
+      { sourceStatuses: { codebase: { status: "ok" }, figma: { status: "failed" } } }
+    )
+
+    expect(contract.components["ui/Button"]).toBeDefined()
+    expect(contract.sourceStatuses?.figma?.status).toBe("failed")
+    expect(contract.conflicts).toEqual([])
+  })
+
+  test("source and status insertion order cannot change the serialized component contract", () => {
+    const sources = [
+      {
+        name: "storybook",
+        tokens: emptyTokenMap(),
+        components: {
+          "storybook:UI/Button": {
+            name: "Button",
+            displayName: "Button",
+            source: { adapter: "storybook" as const },
+            props: { size: { values: ["xl", "sm"] } }
+          }
+        }
+      },
+      {
+        name: "codebase",
+        tokens: emptyTokenMap(),
+        components: {
+          "ui/Button": {
+            ...codebaseComponent("Button", "ui/Button.tsx"),
+            props: { size: { values: ["md", "sm"] } }
+          }
+        }
+      },
+      {
+        name: "figma",
+        tokens: emptyTokenMap(),
+        components: {
+          "figma:button": {
+            name: "Button",
+            displayName: "Button",
+            source: { adapter: "figma" as const },
+            props: { size: { values: ["lg", "sm"] } }
+          }
+        }
+      }
+    ]
+    const builder = new ContractBuilder(config())
+    const first = builder.build(sources, {
+      sourceStatuses: { storybook: { status: "ok" }, codebase: { status: "ok" }, figma: { status: "ok" } }
+    })
+    const second = builder.build([...sources].reverse(), {
+      sourceStatuses: { figma: { status: "ok" }, codebase: { status: "ok" }, storybook: { status: "ok" } }
+    })
+    const normalize = (contract: PrimitivContract) => {
+      const serialized = JSON.parse(JSON.stringify(contract))
+      delete serialized.generatedAt
+      return serialized
+    }
+
+    expect(normalize(first)).toEqual(normalize(second))
+  })
+
+  test("component insertion order cannot change serialized name-index bytes", () => {
+    const entries = [
+      ["z/Zed", codebaseComponent("Zed", "z/Zed.tsx")],
+      ["a/Alpha", codebaseComponent("Alpha", "a/Alpha.tsx")]
+    ] as const
+    const first = buildWith([{ name: "codebase", components: Object.fromEntries(entries) }])
+    const second = buildWith([{ name: "codebase", components: Object.fromEntries([...entries].reverse()) }])
+    const serialize = (contract: PrimitivContract) => {
+      const copy = { ...contract, generatedAt: "stable" }
+      return JSON.stringify(copy)
+    }
+
+    expect(serialize(first)).toBe(serialize(second))
+    expect(Object.keys(first.componentNameIndex ?? {})).toEqual(["Alpha", "Zed"])
+  })
+
   test("prototype-like component names remain ordinary lookup keys", () => {
     const contract = buildWith([
       {
@@ -120,6 +240,38 @@ describe("component merge (path-qualified identity)", () => {
     expect(message).toContain("Generated contract rejected unsafe or oversized machine identifiers")
     expect(message).toContain("components.0.(key)")
     expect(message).not.toContain(unsafeId)
+  })
+
+  test("generated contracts fail visibly when a conflict exceeds the durable participant ceiling", () => {
+    const codebaseComponents = Object.fromEntries(
+      Array.from({ length: 10_000 }, (_, index) => {
+        const id = `components/${String(index).padStart(5, "0")}/Button`
+        return [
+          id,
+          {
+            ...codebaseComponent("Button", `${id}.tsx`),
+            props: { size: { default: "sm" } }
+          }
+        ]
+      })
+    ) as ComponentMap
+
+    expect(() =>
+      buildWith([
+        { name: "codebase", components: codebaseComponents },
+        {
+          name: "figma",
+          components: {
+            "figma:button": {
+              name: "Button",
+              displayName: "Button",
+              source: { adapter: "figma" },
+              props: { size: { default: "lg" } }
+            }
+          }
+        }
+      ])
+    ).toThrow("Generated contract rejected unsafe or oversized machine identifiers")
   })
 
   test("the write boundary rejects a newly unsafe nested ID before replacing the output", () => {
@@ -234,45 +386,65 @@ describe("component merge (path-qualified identity)", () => {
     }
   })
 
-  test("cross-source same-name is a conflict via displayName grouping, both stay in the map", () => {
+  test("cross-source same-name components are complementary evidence, not unconditional duplicates", () => {
     const figmaCard: Component = { name: "Card", displayName: "Card", source: { adapter: "figma" } }
     const contract = buildWith([
       { name: "codebase", components: { "components/ui/Card": codebaseComponent("Card", "components/ui/Card.tsx") } },
       { name: "figma", components: { "figma:Card": figmaCard } }
     ])
-    const conflict = contract.conflicts.find((c) => c.type === "component" && c.name === "Card")
-    expect(conflict).toBeDefined()
-    expect(conflict?.sources).toHaveLength(2)
-    // Provenance of both contenders survives — neither is silently dropped.
+    expect(contract.conflicts).toHaveLength(0)
+    expect(contract.componentNameResolutions?.Card).toBe("components/ui/Card")
     expect(contract.components["components/ui/Card"]).toBeDefined()
     expect(contract.components["figma:Card"]).toBeDefined()
   })
 
-  test("governance.sourceOfTruth owning exactly one contender records it as the resolved id", () => {
-    const figmaCard: Component = { name: "Card", displayName: "Card", source: { adapter: "figma" } }
+  test("cross-source same-name components disagree at an exact structured field path", () => {
+    const codeCard: Component = {
+      ...codebaseComponent("Card", "components/ui/Card.tsx"),
+      props: { size: { default: "md" } }
+    }
+    const figmaCard: Component = {
+      name: "Card",
+      displayName: "Card",
+      source: { adapter: "figma" },
+      props: { size: { default: "lg" } }
+    }
     const contract = buildWith([
-      { name: "codebase", components: { "components/ui/Card": codebaseComponent("Card", "components/ui/Card.tsx") } },
+      { name: "codebase", components: { "components/ui/Card": codeCard } },
       { name: "figma", components: { "figma:Card": figmaCard } }
     ])
     const conflict = contract.conflicts.find((c) => c.type === "component" && c.name === "Card")
-    expect(conflict?.resolved).toBe("components/ui/Card")
+    expect(conflict?.fieldPath).toEqual(["props", "size", "default"])
+    expect(conflict?.comparison).toBe("exact")
+    expect(conflict?.sources.map((source) => source.structuredValue)).toEqual(["md", "lg"])
   })
 
-  test("no resolved id when the source of truth owns several contenders", () => {
-    const figmaCard: Component = { name: "Card", displayName: "Card", source: { adapter: "figma" } }
+  test("multiple same-source candidates reconcile only their unanimous complete fields", () => {
+    const figmaCard: Component = {
+      name: "Card",
+      displayName: "Card",
+      source: { adapter: "figma" },
+      props: { tone: { default: "dark" }, size: { default: "lg" } }
+    }
     const contract = buildWith([
       {
         name: "codebase",
         components: {
-          "marketing/Card": codebaseComponent("Card", "marketing/Card.tsx"),
-          "product/Card": codebaseComponent("Card", "product/Card.tsx")
+          "marketing/Card": {
+            ...codebaseComponent("Card", "marketing/Card.tsx"),
+            props: { tone: { default: "light" }, size: { default: "sm" } }
+          },
+          "product/Card": {
+            ...codebaseComponent("Card", "product/Card.tsx"),
+            props: { tone: { default: "light" }, size: { default: "lg" } }
+          }
         }
       },
       { name: "figma", components: { "figma:Card": figmaCard } }
     ])
-    const conflict = contract.conflicts.find((c) => c.type === "component" && c.name === "Card")
-    expect(conflict).toBeDefined()
-    expect(conflict?.resolved).toBeUndefined()
+    expect(contract.conflicts).toHaveLength(1)
+    expect(contract.conflicts[0].fieldPath).toEqual(["props", "tone", "default"])
+    expect(contract.conflicts[0].sources).toHaveLength(3)
   })
 })
 
@@ -321,31 +493,31 @@ describe("onConflict policy (governance.onConflict)", () => {
     }
   })
 
-  test('auto-resolve marks a component conflict with a governed winner "auto", but not one without', () => {
-    const figmaCard: Component = { name: "Card", displayName: "Card", source: { adapter: "figma" } }
+  test('auto-resolve marks a field conflict with a governed formal value "auto"', () => {
+    const figmaCard: Component = {
+      name: "Card",
+      displayName: "Card",
+      source: { adapter: "figma" },
+      props: { size: { default: "lg" } }
+    }
     const decided = new ContractBuilder(config("codebase", "auto-resolve")).build([
       {
         name: "codebase",
         tokens: emptyTokenMap(),
-        components: { "components/ui/Card": codebaseComponent("Card", "components/ui/Card.tsx") }
-      },
-      { name: "figma", tokens: emptyTokenMap(), components: { "figma:Card": figmaCard } }
-    ])
-    expect(decided.conflicts.find((c) => c.type === "component" && c.name === "Card")?.resolution).toBe("auto")
-
-    // SoT owning two contenders means no single governed winner — stays pending.
-    const standoff = new ContractBuilder(config("codebase", "auto-resolve")).build([
-      {
-        name: "codebase",
-        tokens: emptyTokenMap(),
         components: {
-          "marketing/Card": codebaseComponent("Card", "marketing/Card.tsx"),
-          "product/Card": codebaseComponent("Card", "product/Card.tsx")
+          "components/ui/Card": {
+            ...codebaseComponent("Card", "components/ui/Card.tsx"),
+            props: { size: { default: "md" } }
+          }
         }
       },
       { name: "figma", tokens: emptyTokenMap(), components: { "figma:Card": figmaCard } }
     ])
-    expect(standoff.conflicts.find((c) => c.type === "component" && c.name === "Card")?.resolution).toBe("pending")
+    const conflict = decided.conflicts.find(
+      (candidate) => candidate.fieldPath?.[candidate.fieldPath.length - 1] === "default"
+    )
+    expect(conflict?.resolution).toBe("auto")
+    expect(conflict?.fieldResolution?.structuredValue).toBe("md")
   })
 })
 

@@ -383,6 +383,34 @@ describe("package root — public type surface", () => {
     }
   })
 
+  test("contract boundary enforces durable participant count and UTF-8 byte ceilings", () => {
+    const contractWith = (componentIds: string[]) => ({
+      version: "0.3.0",
+      generatedAt: new Date().toISOString(),
+      sources: ["codebase"],
+      tokens: {},
+      components: {},
+      conflicts: [{ componentIds }]
+    })
+
+    expect(primitivContractSchema.safeParse(contractWith(Array.from({ length: 10_000 }, () => "id"))).success).toBe(
+      true
+    )
+    const tooMany = primitivContractSchema.safeParse(contractWith(Array.from({ length: 10_001 }, () => "id")))
+    expect(tooMany.success).toBe(false)
+    if (!tooMany.success) expect(tooMany.error.issues[0]?.message).toContain("at most 10000")
+
+    const exactByteLimit = primitivContractSchema.safeParse(
+      contractWith(Array.from({ length: 128 }, () => "x".repeat(4_096)))
+    )
+    expect(exactByteLimit.success).toBe(true)
+    const tooManyBytes = primitivContractSchema.safeParse(
+      contractWith(Array.from({ length: 129 }, () => "x".repeat(4_096)))
+    )
+    expect(tooManyBytes.success).toBe(false)
+    if (!tooManyBytes.success) expect(tooManyBytes.error.issues[0]?.message).toContain("524288 UTF-8 bytes")
+  })
+
   test("Component exposes optional static relationship facts from the package root", () => {
     const uses: NonNullable<Component["uses"]> = { "components/Icon": 2 }
     const usage: NonNullable<Component["usage"]> = { sites: 4 }

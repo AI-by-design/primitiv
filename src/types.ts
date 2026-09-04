@@ -4,6 +4,9 @@ import {
   DEFAULT_MAX_IDENTIFIER_CHARS,
   isSafeIdentifierPath,
   isSafeNonEmptyIdentifier,
+  isWithinDurableParticipantBounds,
+  MAX_CONFLICT_COMPONENT_ID_BYTES,
+  MAX_CONFLICT_COMPONENT_IDS,
   MAX_IDENTIFIER_PATH_SEGMENTS
 } from "./safe-identifier"
 
@@ -136,6 +139,10 @@ export interface PrimitivContract {
   // displayName → component ids. The lookup bridge from the bare names agents know
   // ("Card") to the qualified keys in `components`. Optional so pre-0.3 contracts load.
   componentNameIndex?: Record<string, string[]>
+  // Optional governance-only lookup winner for a bare component name. Kept
+  // separate from conflicts because complementary cross-source components are
+  // no longer unconditional identity conflicts.
+  componentNameResolutions?: Record<string, string>
   conflicts: Conflict[]
   inferredRules?: InferredRules
   // Optional so older contract files (pre-1.6) load without crashing.
@@ -357,6 +364,10 @@ export interface Conflict {
   resolution?: "auto" | "manual" | "pending"
   suggestedFix?: string
   actionable?: boolean
+  // Present when the bounded sources array is a representative subset of the
+  // complete evidence used to establish this conflict.
+  evidenceTotal?: number
+  evidenceTruncated?: true
 }
 
 export type ConflictScope = "cross-source" | "within-source"
@@ -624,8 +635,17 @@ function validateParticipantList({ issues, value, path }: BoundaryValueValidatio
     issues.push({ path, message: "must be an array of machine identifiers when present" })
     return
   }
+  if (value.length > MAX_CONFLICT_COMPONENT_IDS) {
+    issues.push({ path, message: `must contain at most ${MAX_CONFLICT_COMPONENT_IDS} machine identifiers` })
+    return
+  }
+
+  const allStrings = value.every((id) => typeof id === "string")
   for (const [idIndex, id] of value.entries()) {
     addIdentifierIssue({ issues, value: id, path: [...path, idIndex] })
+  }
+  if (allStrings && !isWithinDurableParticipantBounds(value as string[])) {
+    issues.push({ path, message: `must contain at most ${MAX_CONFLICT_COMPONENT_ID_BYTES} UTF-8 bytes of ID text` })
   }
 }
 

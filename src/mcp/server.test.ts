@@ -210,6 +210,29 @@ describe("get_component resolution", () => {
     expect(payload.resolvedBy).toBe("governance.sourceOfTruth")
   })
 
+  test("a conflict-free governance lookup winner resolves complementary source representations", async () => {
+    const c = await connect(
+      writeContract({
+        components: {
+          "code/Banner": {
+            name: "Banner",
+            displayName: "Banner",
+            source: { adapter: "codebase", file: "code/Banner.tsx" }
+          },
+          "figma:Banner": { name: "Banner", displayName: "Banner", source: { adapter: "figma" } }
+        },
+        componentNameIndex: { Banner: ["code/Banner", "figma:Banner"] },
+        componentNameResolutions: { Banner: "code/Banner" },
+        conflicts: []
+      })
+    )
+    const { text } = await getComponent(c, { name: "Banner" })
+    expect(JSON.parse(text)).toMatchObject({
+      id: "code/Banner",
+      resolvedBy: "governance.sourceOfTruth"
+    })
+  })
+
   test("pre-0.3 contracts (bare-name keys, no index) still resolve name lookups", async () => {
     const c = await connect(
       writeContract({

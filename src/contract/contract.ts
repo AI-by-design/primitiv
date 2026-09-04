@@ -1,10 +1,12 @@
 import * as fs from "node:fs"
+import { compareConflictsCanonical } from "../conflict-order"
 import { inferRules } from "../inferrer"
 import { valuesEquivalent } from "../normalize/value"
 import { safeDisplayText } from "../safe-display"
 import type {
   ComponentMap,
   Conflict,
+  ConflictEvidence,
   PrimitivConfig,
   PrimitivContract,
   SourceProvenance,
@@ -14,6 +16,11 @@ import type {
   TokenRedefinition
 } from "../types"
 import { emptyTokenMap, primitivContractSchema, summarizeValidationIssues } from "../types"
+import {
+  type ComponentReconciliationGroup,
+  componentReconciliationGroups,
+  reconcileComponentFields
+} from "./component-reconciliation"
 
 export class ContractBuilder {
   constructor(private config: PrimitivConfig) {}
@@ -30,27 +37,44 @@ export class ContractBuilder {
     }>,
     options: { sourceStatuses?: Record<string, SourceStatus> } = {}
   ): PrimitivContract {
+    const orderedSources = [...sources].sort((a, b) => compareStrings(a.name, b.name))
     const conflicts: Conflict[] = []
-    const mergedTokens = this.mergeTokens(sources, conflicts)
-    const { components, nameIndex } = this.mergeComponents(sources, conflicts)
+    const mergedTokens = this.mergeTokens(orderedSources, conflicts)
+    const { components, nameIndex } = this.mergeComponents(orderedSources)
+    const groups = componentReconciliationGroups(
+      components,
+      nameIndex,
+      this.config.reconciliation?.componentMappings,
+      options.sourceStatuses
+    )
+    const nameResolutions = this.componentNameResolutions(components, nameIndex, groups)
+    conflicts.push(
+      ...reconcileComponentFields({
+        groups,
+        config: this.config,
+        sourceStatuses: options.sourceStatuses
+      })
+    )
     if (this.config.governance.onConflict === "auto-resolve") this.autoResolveConflicts(conflicts)
     // Folded in AFTER the merge + auto-resolve passes on purpose: mergeTokens appends to
     // existing conflicts by name, and a same-source dispute must never share a record with
     // (or be auto-resolved alongside) a cross-source one — a source can't arbitrate itself.
-    conflicts.push(...this.redefinitionConflicts(sources))
+    conflicts.push(...this.redefinitionConflicts(orderedSources))
     assertGeneratedConflictScopes(conflicts)
+    this.sortConflicts(conflicts)
     const inferredRules = inferRules(mergedTokens, components)
 
     const contract: PrimitivContract = {
       // 0.3.0: component keys went bare-name → qualified id (breaking shape change).
       version: "0.3.0",
       generatedAt: new Date().toISOString(),
-      sources: sources.map((s) => s.name),
+      sources: orderedSources.map((source) => source.name),
       sourceRoot: "",
       configPath: "",
       tokens: mergedTokens,
       components,
       componentNameIndex: nameIndex,
+      ...(Object.keys(nameResolutions).length > 0 ? { componentNameResolutions: nameResolutions } : {}),
       conflicts,
       inferredRules,
       ...(options.sourceStatuses ? { sourceStatuses: sortSourceStatuses(options.sourceStatuses) } : {})
@@ -197,10 +221,10 @@ export class ContractBuilder {
     }
   }
 
-  private mergeComponents(
-    sources: Array<{ name: string; tokens: TokenMap; components: ComponentMap }>,
-    conflicts: Conflict[]
-  ): { components: ComponentMap; nameIndex: Record<string, string[]> } {
+  private mergeComponents(sources: Array<{ name: string; tokens: TokenMap; components: ComponentMap }>): {
+    components: ComponentMap
+    nameIndex: Record<string, string[]>
+  } {
     const merged: ComponentMap = Object.create(null) as ComponentMap
 
     for (const source of sources) {
@@ -220,42 +244,47 @@ export class ContractBuilder {
       if (!(name in nameIndex)) nameIndex[name] = []
       nameIndex[name].push(id)
     }
-    for (const ids of Object.values(nameIndex)) ids.sort()
-
-    // Cross-source conflict detection moved from key-equality to displayName grouping —
-    // keys stopped colliding across sources once they became qualified ids. Same-name
-    // within one source is coexistence (surfaced via the index and resolved at lookup
-    // time by scope/rationale), never a conflict; hard COMPONENT conflicts stay reserved
-    // for cross-source disagreements. (Tokens differ: a same-source token redefinition IS
-    // a conflict — see redefinitionConflicts — because two values can't coexist under one
-    // token name the way two Cards coexist under qualified ids.)
-    for (const [name, ids] of Object.entries(nameIndex)) {
-      if (ids.length < 2) continue
-      const adapters = new Set(ids.map((id) => merged[id].source.adapter))
-      if (adapters.size < 2) continue
-
-      const conflictSources = ids.map((id) => ({
-        source: merged[id].source,
-        value: merged[id].source.file || merged[id].source.adapter
-      }))
-      const fix = this.buildFixMessage("component", name, conflictSources)
-      const sotIds = ids.filter((id) => merged[id].source.adapter === this.config.governance.sourceOfTruth)
-      conflicts.push({
-        type: "component",
-        scope: "cross-source",
-        name,
-        sources: conflictSources,
-        // When the source of truth owns exactly one contender, record the governed winner
-        // so get_component returns it instead of escalating. Every contender stays in the
-        // component map either way — provenance is never dropped.
-        ...(sotIds.length === 1 ? { resolved: sotIds[0] } : {}),
-        resolution: "pending",
-        suggestedFix: fix.suggestedFix,
-        actionable: fix.actionable
-      })
+    const sortedNameIndex = Object.create(null) as Record<string, string[]>
+    for (const name of Object.keys(nameIndex).sort(compareStrings)) {
+      sortedNameIndex[name] = nameIndex[name].sort(compareStrings)
     }
+    const sortedComponents = Object.create(null) as ComponentMap
+    for (const id of Object.keys(merged).sort(compareStrings)) sortedComponents[id] = merged[id]
 
-    return { components: merged, nameIndex }
+    return { components: sortedComponents, nameIndex: sortedNameIndex }
+  }
+
+  private componentNameResolutions(
+    components: ComponentMap,
+    nameIndex: Record<string, string[]>,
+    groups: ComponentReconciliationGroup[]
+  ): Record<string, string> {
+    const sourceOfTruth = this.config.governance.sourceOfTruth
+    const resolutions: Record<string, string> = Object.create(null) as Record<string, string>
+    if (sourceOfTruth === "manual") return resolutions
+    for (const name of Object.keys(nameIndex).sort(compareStrings)) {
+      const authoritative = nameIndex[name].filter((id) => components[id]?.source.adapter === sourceOfTruth)
+      if (authoritative.length === 1) {
+        resolutions[name] = authoritative[0]
+        continue
+      }
+      const explicitlyMapped = groups
+        .filter(
+          (group) =>
+            group.explicitlyMapped &&
+            group.members.some((member) => (member.component.displayName ?? member.component.name) === name)
+        )
+        .flatMap((group) => group.members)
+        .filter(
+          (member) =>
+            member.component.source.adapter === sourceOfTruth &&
+            (member.component.displayName ?? member.component.name) === name
+        )
+        .map((member) => member.id)
+      const uniqueMapped = [...new Set(explicitlyMapped)].sort(compareStrings)
+      if (uniqueMapped.length === 1) resolutions[name] = uniqueMapped[0]
+    }
+    return resolutions
   }
 
   // Under onConflict: "auto-resolve", a conflict the source of truth already decides is
@@ -277,10 +306,17 @@ export class ContractBuilder {
       }
       const sotDecided =
         conflict.type === "component"
-          ? conflict.resolved !== undefined
+          ? conflict.fieldPath !== undefined
+            ? conflict.fieldResolution !== undefined
+            : conflict.resolved !== undefined
           : conflict.sources.some((s) => s.source.adapter === sot)
       if (sotDecided) conflict.resolution = "auto"
     }
+  }
+
+  private sortConflicts(conflicts: Conflict[]): void {
+    for (const conflict of conflicts) conflict.sources.sort(compareConflictEvidence)
+    conflicts.sort(compareConflictsCanonical)
   }
 
   // A token defined more than once with different values inside ONE source becomes a
@@ -358,6 +394,15 @@ export class ContractBuilder {
       actionable: false
     }
   }
+}
+
+function compareConflictEvidence(a: ConflictEvidence, b: ConflictEvidence): number {
+  return (
+    compareStrings(a.source.adapter, b.source.adapter) ||
+    compareStrings(a.componentId ?? "", b.componentId ?? "") ||
+    compareStrings(JSON.stringify(a.factPath ?? []), JSON.stringify(b.factPath ?? [])) ||
+    compareStrings(a.value, b.value)
+  )
 }
 
 function compareStrings(a: string, b: string): number {
