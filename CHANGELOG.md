@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.19.0](https://github.com/AI-by-design/primitiv/compare/v2.18.0...v2.19.0) (2026-09-09)
+
+
+### Features
+
+* detect component API drift during verification ([#145](https://github.com/AI-by-design/primitiv/issues/145)) ([a0d485d](https://github.com/AI-by-design/primitiv/commit/a0d485d647524f1087e87ad2826696692188306f))
+* explain incomplete component comparisons ([#143](https://github.com/AI-by-design/primitiv/issues/143)) ([a00ea4f](https://github.com/AI-by-design/primitiv/commit/a00ea4f01864f31650f70f9f76b46d40afe9f7d6))
+* validate local component usage against declared domains ([#144](https://github.com/AI-by-design/primitiv/issues/144)) ([88f85a8](https://github.com/AI-by-design/primitiv/commit/88f85a857e2e833dd8403cae1e0b54cc51d7ea0d))
+
 ## [2.18.0](https://github.com/AI-by-design/primitiv/compare/v2.17.0...v2.18.0) (2026-09-04)
 
 
