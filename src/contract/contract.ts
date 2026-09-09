@@ -19,7 +19,7 @@ import { emptyTokenMap, primitivContractSchema, summarizeValidationIssues } from
 import {
   type ComponentReconciliationGroup,
   componentReconciliationGroups,
-  reconcileComponentFields
+  reconcileComponentFieldsWithDiagnostics
 } from "./component-reconciliation"
 
 export class ContractBuilder {
@@ -48,13 +48,12 @@ export class ContractBuilder {
       options.sourceStatuses
     )
     const nameResolutions = this.componentNameResolutions(components, nameIndex, groups)
-    conflicts.push(
-      ...reconcileComponentFields({
-        groups,
-        config: this.config,
-        sourceStatuses: options.sourceStatuses
-      })
-    )
+    const componentReconciliation = reconcileComponentFieldsWithDiagnostics({
+      groups,
+      config: this.config,
+      sourceStatuses: options.sourceStatuses
+    })
+    conflicts.push(...componentReconciliation.conflicts)
     if (this.config.governance.onConflict === "auto-resolve") this.autoResolveConflicts(conflicts)
     // Folded in AFTER the merge + auto-resolve passes on purpose: mergeTokens appends to
     // existing conflicts by name, and a same-source dispute must never share a record with
@@ -77,6 +76,9 @@ export class ContractBuilder {
       ...(Object.keys(nameResolutions).length > 0 ? { componentNameResolutions: nameResolutions } : {}),
       conflicts,
       inferredRules,
+      ...(componentReconciliation.comparisonDiagnostics
+        ? { comparisonDiagnostics: componentReconciliation.comparisonDiagnostics }
+        : {}),
       ...(options.sourceStatuses ? { sourceStatuses: sortSourceStatuses(options.sourceStatuses) } : {})
     }
 

@@ -690,6 +690,121 @@ describe("get_design_context", () => {
     expect(Object.keys(payload.tokenCounts)).toContain("motion")
   })
 
+  test("summary reports full and retained diagnostic counts without embedding diagnostic items", async () => {
+    const c = await connect(
+      writeContract({
+        comparisonDiagnostics: {
+          total: 124,
+          truncated: true,
+          byReason: { "ambiguous-identity": 120, "incomplete-formal-evidence": 4 },
+          items: [
+            {
+              type: "could-not-compare",
+              reason: "ambiguous-identity",
+              name: "Button",
+              componentIds: ["code/Button", "figma:Button"]
+            }
+          ]
+        }
+      })
+    )
+
+    const result = await c.callTool({ name: "get_design_context", arguments: {} })
+    const content = result.content as Array<{ type: string; text: string }>
+    const payload = JSON.parse(content[0].text)
+
+    expect(payload.comparisonDiagnosticSummary).toEqual({
+      total: 124,
+      retained: 1,
+      truncated: true,
+      byReason: { "ambiguous-identity": 120, "incomplete-formal-evidence": 4 }
+    })
+    expect(payload.diagnostics).toBeUndefined()
+    expect(content[0].text).not.toContain("code/Button")
+  })
+
+  test("legacy contracts without diagnostics keep the summary compact", async () => {
+    const c = await connect(writeContract())
+    const result = await c.callTool({ name: "get_design_context", arguments: {} })
+    const content = result.content as Array<{ type: string; text: string }>
+    const payload = JSON.parse(content[0].text)
+
+    expect(payload.comparisonDiagnosticSummary).toBeUndefined()
+  })
+
+  test("diagnostics category pages retained items while preserving the full total", async () => {
+    const items = Array.from({ length: 30 }, (_, index) => ({
+      type: "could-not-compare" as const,
+      reason: "unsupported-type-vocabulary" as const,
+      name: `Component${String(index).padStart(2, "0")}`,
+      adapters: ["figma" as const],
+      fieldPath: ["props", "size", "values"]
+    }))
+    const c = await connect(
+      writeContract({
+        comparisonDiagnostics: {
+          total: 35,
+          truncated: true,
+          byReason: { "unsupported-type-vocabulary": 35 },
+          items
+        }
+      })
+    )
+
+    const result = await c.callTool({
+      name: "get_design_context",
+      arguments: { category: "diagnostics", offset: 25, limit: 10 }
+    })
+    const content = result.content as Array<{ type: string; text: string }>
+    const payload = JSON.parse(content[0].text)
+
+    expect(payload.diagnostics).toHaveLength(5)
+    expect(payload.diagnostics[0].name).toBe("Component25")
+    expect(payload.comparisonDiagnosticSummary).toMatchObject({ total: 35, retained: 30, truncated: true })
+    expect(payload.diagnosticPage).toEqual({ total: 30, returned: 5, offset: 25, hasMore: false })
+    expect(payload.conflicts).toBeUndefined()
+  })
+
+  test("diagnostics category enforces the shared maximum page size", async () => {
+    const c = await connect(writeContract())
+    const result = await c.callTool({
+      name: "get_design_context",
+      arguments: { category: "diagnostics", limit: 101 }
+    })
+
+    expect(result.isError).toBe(true)
+  })
+
+  test("all includes paged diagnostics without changing proven conflict counts", async () => {
+    const c = await connect(
+      writeContract({
+        conflicts: [
+          {
+            type: "component",
+            name: "Button",
+            sources: [{ source: { adapter: "codebase" }, value: "Button" }],
+            resolution: "pending"
+          }
+        ],
+        comparisonDiagnostics: {
+          total: 1,
+          truncated: false,
+          byReason: { "ambiguous-identity": 1 },
+          items: [{ type: "could-not-compare", reason: "ambiguous-identity", name: "Card" }]
+        }
+      })
+    )
+
+    const result = await c.callTool({ name: "get_design_context", arguments: { category: "all" } })
+    const content = result.content as Array<{ type: string; text: string }>
+    const payload = JSON.parse(content[0].text)
+
+    expect(payload.diagnostics).toHaveLength(1)
+    expect(payload.conflictCount).toBe(1)
+    expect(payload.pendingConflicts).toBe(1)
+    expect(payload.conflicts).toHaveLength(1)
+  })
+
   test("theme modes pass through to the token payload", async () => {
     const tokens = emptyTokenMap()
     tokens.colors["color-bg"] = {

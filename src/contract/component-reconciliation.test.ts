@@ -3,7 +3,8 @@ import type { Component, ComponentMap, PrimitivConfig } from "../types"
 import {
   type ComponentReconciliationGroup,
   componentReconciliationGroups,
-  reconcileComponentFields
+  reconcileComponentFields,
+  reconcileComponentFieldsWithDiagnostics
 } from "./component-reconciliation"
 
 function config(sourceOfTruth: PrimitivConfig["governance"]["sourceOfTruth"] = "codebase"): PrimitivConfig {
@@ -124,6 +125,185 @@ describe("component field association", () => {
     )
 
     expect(result).toEqual([])
+  })
+})
+
+describe("comparison diagnostics", () => {
+  test("explains withheld comparisons when neither adapter can form a consensus", () => {
+    const components = {
+      "code/a/Button": component("codebase", { size: { default: "sm" } }),
+      "code/b/Button": component("codebase", { size: { default: "lg" } }),
+      "figma:a": component("figma", { size: { default: "sm" } }),
+      "figma:b": component("figma", { size: { default: "md" } })
+    }
+    const result = reconcileComponentFieldsWithDiagnostics({ groups: groups(components), config: config() })
+
+    expect(result.conflicts).toEqual([])
+    expect(result.comparisonDiagnostics?.byReason).toEqual({ "within-adapter-disagreement": 2 })
+
+    const partial = {
+      ...components,
+      "code/b/Button": component("codebase"),
+      "figma:b": component("figma")
+    }
+    expect(
+      reconcileComponentFieldsWithDiagnostics({ groups: groups(partial), config: config() }).comparisonDiagnostics
+        ?.byReason
+    ).toEqual({ "ambiguous-identity": 1 })
+  })
+
+  test("reports ambiguous identity only when it prevents a directional comparison", () => {
+    const ambiguous = {
+      "code/a/Button": component(
+        "codebase",
+        { size: { values: ["sm"] } },
+        { usage: { sites: 1, props: { size: ["xl"] } } }
+      ),
+      "code/b/Button": component("codebase", { size: { values: ["sm"] } }),
+      "figma:button": component("figma", { size: { values: ["sm"] } })
+    }
+    const completeConsensus = {
+      "code/a/Button": component("codebase", { size: { default: "sm" } }),
+      "code/b/Button": component("codebase", { size: { default: "sm" } }),
+      "figma:button": component("figma", { size: { default: "sm" } })
+    }
+
+    expect(
+      reconcileComponentFieldsWithDiagnostics({ groups: groups(ambiguous), config: config() }).comparisonDiagnostics
+        ?.items
+    ).toEqual([
+      {
+        type: "could-not-compare",
+        reason: "ambiguous-identity",
+        name: "Button",
+        adapters: ["codebase", "figma"],
+        componentIds: ["code/a/Button", "code/b/Button", "figma:button"]
+      }
+    ])
+    expect(
+      reconcileComponentFieldsWithDiagnostics({ groups: groups(completeConsensus), config: config() })
+        .comparisonDiagnostics
+    ).toBeUndefined()
+  })
+
+  test("reports proven same-adapter disagreement even when another candidate omits the field", () => {
+    const components = {
+      "code/a/Button": component("codebase", { size: { default: "sm" } }),
+      "code/b/Button": component("codebase", { size: { default: "lg" } }),
+      "code/c/Button": component("codebase"),
+      "figma:button": component("figma", { size: { default: "md" } })
+    }
+    const diagnostics = reconcileComponentFieldsWithDiagnostics({
+      groups: groups(components),
+      config: config()
+    }).comparisonDiagnostics
+
+    expect(diagnostics?.items).toContainEqual({
+      type: "could-not-compare",
+      reason: "within-adapter-disagreement",
+      name: "Button",
+      adapters: ["codebase"],
+      componentIds: ["code/a/Button", "code/b/Button"],
+      fieldPath: ["props", "size", "default"]
+    })
+  })
+
+  test("reports ambiguous identity when partial candidate evidence withholds a formal comparison", () => {
+    const components = {
+      "code/a/Button": component("codebase", { size: { type: "string" } }),
+      "code/b/Button": component("codebase"),
+      "figma:button": component("figma", { size: { type: "boolean" } })
+    }
+
+    expect(
+      reconcileComponentFieldsWithDiagnostics({ groups: groups(components), config: config() }).comparisonDiagnostics
+        ?.items
+    ).toContainEqual({
+      type: "could-not-compare",
+      reason: "ambiguous-identity",
+      name: "Button",
+      adapters: ["codebase", "figma"],
+      componentIds: ["code/a/Button", "code/b/Button", "figma:button"]
+    })
+  })
+
+  test("reports explicit incomplete and unsupported Figma field evidence", () => {
+    const components = {
+      "code/Button": component("codebase", { size: { type: "string", values: ["sm"] } }),
+      "figma:button": component("figma", {
+        size: { kind: "variant", incompleteFields: ["values"] }
+      })
+    }
+    const diagnostics = reconcileComponentFieldsWithDiagnostics({
+      groups: groups(components),
+      config: config()
+    }).comparisonDiagnostics
+
+    expect(diagnostics?.byReason).toEqual({
+      "incomplete-formal-evidence": 1,
+      "unsupported-type-vocabulary": 1
+    })
+    expect(diagnostics?.items.map((item) => item.fieldPath)).toEqual([
+      ["props", "size", "values"],
+      ["props", "size", "type"]
+    ])
+  })
+
+  test("does not report supported primitive types merely because a prop also has a source kind", () => {
+    const components = {
+      "code/Button": component("codebase", { size: { type: "boolean" } }),
+      "figma:button": component("figma", { size: { type: "string", kind: "variant" } })
+    }
+    const result = reconcileComponentFieldsWithDiagnostics({ groups: groups(components), config: config() })
+
+    expect(result.conflicts).toHaveLength(1)
+    expect(result.comparisonDiagnostics).toBeUndefined()
+  })
+
+  test("does not diagnose ordinary missing or explicitly unresolved observations", () => {
+    const components = {
+      "code/Button": component("codebase", { size: { values: ["sm"] } }),
+      "storybook:Button": component("storybook", undefined, {
+        demonstrated: {
+          title: "Button",
+          extraction: "source",
+          storyCount: 1,
+          unresolvedDefaultArgs: ["size"],
+          hasUnresolvedDefaultArgsSpread: true
+        }
+      })
+    }
+
+    expect(
+      reconcileComponentFieldsWithDiagnostics({ groups: groups(components), config: config() }).comparisonDiagnostics
+    ).toBeUndefined()
+  })
+
+  test("sorts and caps diagnostics while preserving complete counts", () => {
+    const diagnosticGroups = Array.from({ length: 124 }, (_, index): ComponentReconciliationGroup => {
+      const name = `Button${String(index).padStart(3, "0")}`
+      return {
+        name,
+        explicitlyMapped: false,
+        members: [
+          { id: `code/a/${name}`, component: component("codebase", { size: { default: "sm" } }, { name }) },
+          { id: `code/b/${name}`, component: component("codebase", { size: { default: "lg" } }, { name }) },
+          { id: `figma:${name}`, component: component("figma", { size: { default: "md" } }, { name }) }
+        ]
+      }
+    })
+    const result = reconcileComponentFieldsWithDiagnostics({
+      groups: [...diagnosticGroups].reverse(),
+      config: config()
+    }).comparisonDiagnostics
+
+    expect(result?.total).toBe(124)
+    expect(result?.items).toHaveLength(100)
+    expect(result?.truncated).toBe(true)
+    expect(result?.byReason).toEqual({ "within-adapter-disagreement": 124 })
+    expect(result).toEqual(
+      reconcileComponentFieldsWithDiagnostics({ groups: diagnosticGroups, config: config() }).comparisonDiagnostics
+    )
   })
 })
 

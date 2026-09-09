@@ -1,7 +1,10 @@
 import { type PrimitiveValue, primitiveValueKey, sortPrimitiveValues } from "../normalize/component-evidence-values"
 import { safeDisplayText, safeDisplayValue, structuredValueText } from "../safe-display"
+import { isSafeNonEmptyIdentifier, isWithinDurableParticipantBounds } from "../safe-identifier"
 import { deriveEffectiveStoryArgs, type StaticArgsEvidence } from "../sources/storybook/effectiveArgs"
 import type {
+  ComparisonDiagnostic,
+  ComparisonDiagnostics,
   Component,
   ComponentMap,
   ComponentMapping,
@@ -16,6 +19,7 @@ import type {
 
 const SOURCE_ADAPTERS: SourceAdapter[] = ["codebase", "figma", "storybook"]
 const MAX_CONFLICT_EVIDENCE = 100
+const MAX_COMPARISON_DIAGNOSTIC_ITEMS = 100
 
 interface ComponentMember {
   id: string
@@ -113,7 +117,17 @@ export function reconcileComponentFields(params: {
   config: PrimitivConfig
   sourceStatuses?: Record<string, SourceStatus>
 }): Conflict[] {
+  return reconcileComponentFieldsWithDiagnostics(params).conflicts
+}
+
+/** Reconcile fields and retain bounded reasons for comparisons that could not run. */
+export function reconcileComponentFieldsWithDiagnostics(params: {
+  groups: ComponentReconciliationGroup[]
+  config: PrimitivConfig
+  sourceStatuses?: Record<string, SourceStatus>
+}): { conflicts: Conflict[]; comparisonDiagnostics?: ComparisonDiagnostics } {
   const conflicts: Conflict[] = []
+  const diagnostics: ComparisonDiagnostic[] = []
   for (const group of params.groups) {
     const healthyGroup = {
       ...group,
@@ -124,12 +138,36 @@ export function reconcileComponentFields(params: {
     }
     if (new Set(healthyGroup.members.map((member) => member.component.source.adapter)).size < 2) continue
     const consensus = formalConsensus(healthyGroup)
-    conflicts.push(...exactConflicts(healthyGroup, consensus, params.config, params.sourceStatuses))
+    diagnostics.push(...comparisonDiagnosticsForGroup(healthyGroup, consensus))
+    const groupConflicts = exactConflicts(healthyGroup, consensus, params.config, params.sourceStatuses)
+    conflicts.push(...retainBoundedConflicts({ conflicts: groupConflicts, group: healthyGroup, diagnostics }))
     if (healthyGroup.explicitlyMapped || everyAdapterIsUnique(healthyGroup)) {
-      conflicts.push(...subsetConflicts(healthyGroup, consensus, params.config, params.sourceStatuses))
+      const subset = subsetConflicts(healthyGroup, consensus, params.config, params.sourceStatuses)
+      conflicts.push(...retainBoundedConflicts({ conflicts: subset, group: healthyGroup, diagnostics }))
+    } else if (hasSkippedIdentityComparison(healthyGroup)) {
+      diagnostics.push(identityDiagnostic(healthyGroup))
     }
   }
-  return conflicts.sort(compareConflicts)
+  const comparisonDiagnostics = canonicalizeComparisonDiagnostics(diagnostics)
+  return {
+    conflicts: conflicts.sort(compareConflicts),
+    ...(comparisonDiagnostics.total > 0 ? { comparisonDiagnostics } : {})
+  }
+}
+
+/** Canonicalize, deduplicate, count, and bound diagnostics for persistence and comparison. */
+function canonicalizeComparisonDiagnostics(items: ComparisonDiagnostic[]): ComparisonDiagnostics {
+  const normalized = items.map(normalizeDiagnostic).sort(compareDiagnostics)
+  const distinct = [...new Map(normalized.map((item) => [diagnosticKey(item), item])).values()]
+  const retained = distinct.slice(0, MAX_COMPARISON_DIAGNOSTIC_ITEMS)
+  const byReason: ComparisonDiagnostics["byReason"] = {}
+  for (const item of distinct) byReason[item.reason] = (byReason[item.reason] ?? 0) + 1
+  return {
+    total: distinct.length,
+    truncated: retained.length < distinct.length,
+    byReason,
+    items: retained
+  }
 }
 
 function formalConsensus(group: ComponentReconciliationGroup): Map<SourceAdapter, Map<string, ConsensusFact>> {
@@ -162,6 +200,220 @@ function formalConsensus(group: ComponentReconciliationGroup): Map<SourceAdapter
   }
 
   return result
+}
+
+function comparisonDiagnosticsForGroup(
+  group: ComponentReconciliationGroup,
+  consensus: Map<SourceAdapter, Map<string, ConsensusFact>>
+): ComparisonDiagnostic[] {
+  const diagnostics: ComparisonDiagnostic[] = []
+  const byAdapter = membersByAdapter(group.members)
+  const fieldAdapters = formalFieldAdapters(group)
+
+  for (const adapter of SOURCE_ADAPTERS) {
+    const members = byAdapter.get(adapter) ?? []
+    if (members.length > 1) {
+      const byPath = formalFactsByPath(members)
+      for (const key of [...byPath.keys()].sort(compareStrings)) {
+        const present = byPath.get(key) ?? []
+        if (present.length < 2 || new Set(present.map((fact) => structuredValueText(fact.value))).size < 2) continue
+        if ((fieldAdapters.get(key)?.size ?? 0) < 2) continue
+        diagnostics.push({
+          type: "could-not-compare",
+          reason: "within-adapter-disagreement",
+          name: group.name,
+          adapters: [adapter],
+          componentIds: present.map((fact) => fact.componentId),
+          fieldPath: present[0].fieldPath
+        })
+      }
+    }
+  }
+
+  for (const member of group.members) {
+    for (const propName of Object.keys(member.component.props ?? {}).sort(compareStrings)) {
+      const definition = member.component.props?.[propName]
+      if (!definition) continue
+      if (
+        definition.incompleteFields?.includes("values") &&
+        hasComparableField({ consensus, member, propName, field: "values" })
+      ) {
+        diagnostics.push(
+          fieldDiagnostic({ group, member, propName, field: "values", reason: "incomplete-formal-evidence" })
+        )
+      }
+      const unsupportedType =
+        definition.unsupportedFields?.includes("type") ||
+        definition.kind === "variant" ||
+        definition.kind === "instance-swap"
+      const normalizedType = definition.type?.trim()
+      const hasSupportedType =
+        normalizedType === "string" || normalizedType === "number" || normalizedType === "boolean"
+      if (unsupportedType && !hasSupportedType && hasComparableField({ consensus, member, propName, field: "type" })) {
+        diagnostics.push(
+          fieldDiagnostic({ group, member, propName, field: "type", reason: "unsupported-type-vocabulary" })
+        )
+      }
+    }
+  }
+  return diagnostics
+}
+
+function hasComparableField({
+  consensus,
+  member,
+  propName,
+  field
+}: {
+  consensus: Map<SourceAdapter, Map<string, ConsensusFact>>
+  member: ComponentMember
+  propName: string
+  field: "type" | "values"
+}): boolean {
+  const key = pathKey(["props", propName, field])
+  return SOURCE_ADAPTERS.some(
+    (adapter) => adapter !== member.component.source.adapter && consensus.get(adapter)?.has(key) === true
+  )
+}
+
+function fieldDiagnostic({
+  group,
+  member,
+  propName,
+  field,
+  reason
+}: {
+  group: ComponentReconciliationGroup
+  member: ComponentMember
+  propName: string
+  field: "type" | "values"
+  reason: ComparisonDiagnostic["reason"]
+}): ComparisonDiagnostic {
+  return {
+    type: "could-not-compare",
+    reason,
+    name: group.name,
+    adapters: [member.component.source.adapter],
+    componentIds: [member.id],
+    fieldPath: ["props", propName, field]
+  }
+}
+
+function identityDiagnostic(group: ComponentReconciliationGroup): ComparisonDiagnostic {
+  return {
+    type: "could-not-compare",
+    reason: "ambiguous-identity",
+    ...(isSafeNonEmptyIdentifier(group.name) ? { name: group.name } : {}),
+    adapters: sortedAdapters(group.members.map((member) => member.component.source.adapter)),
+    componentIds: sortedUnique(group.members.map((member) => member.id))
+  }
+}
+
+function hasSkippedIdentityComparison(group: ComponentReconciliationGroup): boolean {
+  const fieldAdapters = formalFieldAdapters(group)
+  for (const members of membersByAdapter(group.members).values()) {
+    if (members.length < 2) continue
+    for (const [key, facts] of formalFactsByPath(members)) {
+      const presentCount = facts.length
+      if (presentCount === 0 || presentCount === members.length) continue
+      if ((fieldAdapters.get(key)?.size ?? 0) > 1) return true
+    }
+  }
+
+  const domains = group.members.flatMap((member) =>
+    [...formalFacts(member).values()].filter(
+      (fact) => fact.fieldPath[fact.fieldPath.length - 1] === "values" && Array.isArray(fact.value)
+    )
+  )
+  return group.members.some((member) =>
+    observationalFacts(member).some((observation) =>
+      domains.some(
+        (domain) =>
+          domain.adapter !== observation.adapter && pathKey(domain.fieldPath) === pathKey(observation.fieldPath)
+      )
+    )
+  )
+}
+
+function formalFieldAdapters(group: ComponentReconciliationGroup): Map<string, Set<SourceAdapter>> {
+  const result = new Map<string, Set<SourceAdapter>>()
+  for (const member of group.members) {
+    for (const key of formalFacts(member).keys()) {
+      const adapters = result.get(key) ?? new Set<SourceAdapter>()
+      adapters.add(member.component.source.adapter)
+      result.set(key, adapters)
+    }
+  }
+  return result
+}
+
+function formalFactsByPath(members: ComponentMember[]): Map<string, ComponentFact[]> {
+  const result = new Map<string, ComponentFact[]>()
+  for (const member of members) {
+    for (const [key, fact] of formalFacts(member)) {
+      const current = result.get(key) ?? []
+      current.push(fact)
+      result.set(key, current)
+    }
+  }
+  return result
+}
+
+function retainBoundedConflicts({
+  conflicts,
+  group,
+  diagnostics
+}: {
+  conflicts: Conflict[]
+  group: ComponentReconciliationGroup
+  diagnostics: ComparisonDiagnostic[]
+}): Conflict[] {
+  const retained: Conflict[] = []
+  for (const conflict of conflicts) {
+    const ids = conflict.componentIds ?? []
+    if (isWithinDurableParticipantBounds(ids)) {
+      retained.push(conflict)
+      continue
+    }
+    diagnostics.push({
+      type: "could-not-compare",
+      reason: "participant-bound-exceeded",
+      name: group.name,
+      adapters: sortedAdapters(group.members.map((member) => member.component.source.adapter)),
+      fieldPath: conflict.fieldPath
+    })
+  }
+  return retained
+}
+
+function normalizeDiagnostic(item: ComparisonDiagnostic): ComparisonDiagnostic {
+  const componentIds = item.componentIds ? sortedUnique(item.componentIds) : undefined
+  return {
+    type: "could-not-compare",
+    reason: item.reason,
+    ...(item.name !== undefined && isSafeNonEmptyIdentifier(item.name) ? { name: item.name } : {}),
+    ...(item.adapters ? { adapters: sortedAdapters(item.adapters) } : {}),
+    ...(componentIds && isWithinDurableParticipantBounds(componentIds) ? { componentIds } : {}),
+    ...(item.fieldPath ? { fieldPath: [...item.fieldPath] } : {})
+  }
+}
+
+function diagnosticKey(item: ComparisonDiagnostic): string {
+  return JSON.stringify([
+    item.reason,
+    item.adapters ?? [],
+    item.componentIds ?? [],
+    item.componentIds === undefined ? (item.name ?? "") : "",
+    item.fieldPath ?? []
+  ])
+}
+
+function compareDiagnostics(a: ComparisonDiagnostic, b: ComparisonDiagnostic): number {
+  return compareStrings(diagnosticKey(a), diagnosticKey(b)) || compareStrings(a.name ?? "", b.name ?? "")
+}
+
+function sortedAdapters(adapters: SourceAdapter[]): SourceAdapter[] {
+  return [...new Set(adapters)].sort(compareStrings)
 }
 
 function exactConflicts(
@@ -602,7 +854,9 @@ function compareConflicts(a: Conflict, b: Conflict): number {
   return (
     compareStrings(a.name, b.name) ||
     compareStrings(pathKey(a.fieldPath ?? []), pathKey(b.fieldPath ?? [])) ||
-    compareStrings(a.comparison ?? "", b.comparison ?? "")
+    compareStrings(a.comparison ?? "", b.comparison ?? "") ||
+    compareStrings(a.scope ?? "", b.scope ?? "") ||
+    compareStrings(JSON.stringify(a.componentIds ?? []), JSON.stringify(b.componentIds ?? []))
   )
 }
 

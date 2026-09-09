@@ -16,6 +16,9 @@ export { valuesEquivalent } from "./normalize/value"
 // export is a maintained contract). Curated, not `export *` — config internals
 // (Source, FigmaSource, …) stay private until a consumer needs them.
 export type {
+  ComparisonDiagnostic,
+  ComparisonDiagnosticReason,
+  ComparisonDiagnostics,
   Component,
   ComponentKind,
   ComponentMap,

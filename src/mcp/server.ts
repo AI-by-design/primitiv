@@ -273,7 +273,7 @@ export class PrimitivMCPServer {
       "get_design_context",
       {
         description:
-          "Get the resolved design system context before building UI. Read-only, no side effects. Default (no category) returns a JSON summary of token counts, component names, conflict counts, and contract metadata. Pass category: 'all' | 'tokens' | 'components' | 'conflicts' to get full detail. Pass tokenCategory to filter tokens: " +
+          "Get the resolved design system context before building UI. Read-only, no side effects. Default (no category) returns a JSON summary of token counts, component names, conflict counts, comparison diagnostic counts, and contract metadata. Pass category: 'all' | 'tokens' | 'components' | 'conflicts' | 'diagnostics' to get detail. Pass tokenCategory to filter tokens: " +
           `${TOKEN_CATEGORIES.join(", ")} (unknown/aliased categories return an actionable error, not a silent empty result). ` +
           "Use this as the first call to understand what exists. For lookups by name, use get_token or get_component instead.",
         annotations: { readOnlyHint: true },
@@ -296,6 +296,7 @@ export class PrimitivMCPServer {
           const ageMs = Date.now() - new Date(this.contract.generatedAt).getTime()
           const contractAgeHours = Math.floor(ageMs / (1000 * 60 * 60))
           const warnings = this.getContractWarnings()
+          const diagnostics = this.contract.comparisonDiagnostics
           return this.json({
             ...(warnings.length > 0 ? { warnings } : {}),
             contractVersion: this.contract.version,
@@ -311,6 +312,16 @@ export class PrimitivMCPServer {
             componentCount: Object.keys(this.contract.components).length,
             conflictCount: this.contract.conflicts.length,
             pendingConflicts: this.contract.conflicts.filter((c) => c.resolution === "pending").length,
+            ...(diagnostics
+              ? {
+                  comparisonDiagnosticSummary: {
+                    total: diagnostics.total,
+                    retained: diagnostics.items.length,
+                    truncated: diagnostics.truncated,
+                    byReason: diagnostics.byReason
+                  }
+                }
+              : {}),
             violationCount: (this.contract.violations ?? []).length
           })
         }
@@ -382,6 +393,21 @@ export class PrimitivMCPServer {
           result.conflictPage = pageMeta(page.total, page.items.length, page.offset)
           result.conflictInstruction =
             "Call get_conflicts to filter by component or structured field path and retrieve additional pages."
+        }
+        if (category === "all" || category === "diagnostics") {
+          const diagnostics = this.contract.comparisonDiagnostics
+          const retainedItems = diagnostics?.items ?? []
+          const offset = args.offset ?? 0
+          const limit = args.limit ?? DEFAULT_PAGE_LIMIT
+          const items = retainedItems.slice(offset, offset + limit)
+          result.diagnostics = items
+          result.comparisonDiagnosticSummary = {
+            total: diagnostics?.total ?? 0,
+            retained: retainedItems.length,
+            truncated: diagnostics?.truncated ?? false,
+            byReason: diagnostics?.byReason ?? {}
+          }
+          result.diagnosticPage = pageMeta(retainedItems.length, items.length, offset)
         }
         result.generatedAt = this.contract.generatedAt
         result.sources = this.contract.sources

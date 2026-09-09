@@ -573,7 +573,10 @@ describe("FigmaAdapter — published component evidence", () => {
         },
         lookups
       )
-    ).toEqual({ Disabled: { type: "boolean", kind: "boolean", default: "false" } })
+    ).toEqual({
+      Crowded: { kind: "variant", incompleteFields: ["values"] },
+      Disabled: { type: "boolean", kind: "boolean", default: "false" }
+    })
   })
 
   test("assembles component sets and standalone components from targeted nodes", async () => {
@@ -665,7 +668,8 @@ describe("FigmaAdapter — published component evidence", () => {
               { type: "component", key: "standalone-key" },
               { type: "component-set", key: "set-key" }
             ]
-          }
+          },
+          Unsupported: { unsupportedFields: ["type"] }
         },
         source: {
           metadata: {
@@ -765,6 +769,7 @@ describe("FigmaAdapter — published component evidence", () => {
       const { components } = await new FigmaAdapter({ token: "test-token", fileId: "file123" }).scan()
       expect(components["figma:set-key"]?.description).toBeUndefined()
       expect(components["figma:set-key"]?.props).toEqual({
+        Size: { kind: "variant", incompleteFields: ["values"] },
         Disabled: { type: "boolean", kind: "boolean", default: "false" },
         Label: { type: "string", kind: "text" }
       })

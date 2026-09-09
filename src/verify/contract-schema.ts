@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { primitivContractSchema } from "../types"
 
 // Internal schema dependencies precede the exported schemas they initialize eagerly at module load.
 const sourceAdapterSchema = z.enum(["codebase", "figma", "storybook"])
@@ -54,7 +55,8 @@ const conflictSchema = z
 export const verifySharedContractSchema = z.looseObject({
   generatedAt: validTimestampSchema,
   conflicts: z.array(conflictSchema),
-  componentNameIndex: z.record(z.string(), z.array(z.string())).optional()
+  componentNameIndex: z.record(z.string(), z.array(z.string())).optional(),
+  comparisonDiagnostics: primitivContractSchema.shape.comparisonDiagnostics
 })
 
 // Token provenance is deliberately optional here: default verify already treats

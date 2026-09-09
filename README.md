@@ -39,6 +39,10 @@ See the [Primitiv documentation](https://primitiv.design/docs) for installation,
 - Provide read-only access from MCP-compatible agents and editors
 - Verify that the contract stays current in CI
 
+When component evidence cannot be compared, `primitiv verify` reports a short diagnostic summary. Use `primitiv verify --verbose` for the reasons, or `--json` for a structured report. Diagnostics explain uncertainty and do not count as conflicts or directly fail verification; changes to them can still make the saved contract stale. `--fast` reports saved diagnostics instead of rebuilding them.
+
+Agents can read diagnostic counts in the MCP summary and paginated details through `get_design_context` with `category: "diagnostics"`.
+
 ## Project links
 
 - [Documentation](https://primitiv.design/docs)
