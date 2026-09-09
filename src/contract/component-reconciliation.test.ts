@@ -308,6 +308,155 @@ describe("comparison diagnostics", () => {
 })
 
 describe("component field comparison", () => {
+  test("validates each codebase component's retained usage against its own finite domain", () => {
+    const components = {
+      "code/marketing/Button": component(
+        "codebase",
+        { size: { values: ["sm", "md"] } },
+        { usage: { sites: 3, props: { size: ["xl", "sm", "xl"] } } }
+      ),
+      "code/product/Button": component(
+        "codebase",
+        { size: { values: ["sm", "md"] } },
+        { usage: { sites: 1, props: { size: ["md"] } } }
+      )
+    }
+
+    const conflicts = reconcileComponentFields({ groups: [], components, config: config() })
+
+    expect(conflicts).toHaveLength(1)
+    expect(conflicts[0]).toMatchObject({
+      type: "component",
+      scope: "within-source",
+      name: "Button",
+      componentIds: ["code/marketing/Button"],
+      fieldPath: ["props", "size", "values"],
+      comparison: "subset",
+      resolution: "pending",
+      actionable: true,
+      evidenceTotal: 2
+    })
+    expect(conflicts[0].fieldResolution).toBeUndefined()
+    expect(conflicts[0].sources.map((source) => source.factPath)).toEqual([
+      ["props", "size", "values"],
+      ["usage", "props", "size"]
+    ])
+    expect(conflicts[0].suggestedFix).toContain("Align the JSX usage or widen the declared domain.")
+  })
+
+  test("makes no local claim for broad, missing, or explicitly incomplete domains", () => {
+    const components = {
+      "code/Broad": component("codebase", { size: { type: "string" } }, { usage: { sites: 1 } }),
+      "code/Missing": component(
+        "codebase",
+        { size: { type: "string" } },
+        { usage: { sites: 1, props: { size: ["xl"] } } }
+      ),
+      "code/Incomplete": component(
+        "codebase",
+        { size: { values: ["sm"], incompleteFields: ["values"] } },
+        { usage: { sites: 1, props: { size: ["xl"] } } }
+      )
+    }
+
+    expect(reconcileComponentFields({ groups: [], components, config: config() })).toEqual([])
+    expect(
+      reconcileComponentFieldsWithDiagnostics({ groups: [], components, config: config() }).comparisonDiagnostics?.items
+    ).toEqual([
+      {
+        type: "could-not-compare",
+        reason: "incomplete-formal-evidence",
+        name: "Button",
+        adapters: ["codebase"],
+        componentIds: ["code/Incomplete"],
+        fieldPath: ["props", "size", "values"]
+      }
+    ])
+  })
+
+  test("preserves primitive types and ignores demonstrated or truncated in-domain evidence", () => {
+    const components = {
+      "code/Typed": component(
+        "codebase",
+        { value: { values: [1, "1", true] } },
+        { usage: { sites: 5, props: { value: [1, "1", true, false, null] } } }
+      ),
+      "code/Truncated": component(
+        "codebase",
+        { size: { values: ["sm", "md"] } },
+        { usage: { sites: 30, props: { size: ["sm", "md"] }, truncatedProps: ["size"] } }
+      ),
+      "code/Demonstrated": component(
+        "codebase",
+        { size: { values: ["sm"] } },
+        {
+          demonstrated: {
+            title: "Demonstrated",
+            extraction: "source",
+            storyCount: 1,
+            stories: [{ id: "demonstrated--default", args: { size: "xl" } }]
+          }
+        }
+      )
+    }
+
+    const conflicts = reconcileComponentFields({ groups: [], components, config: config() })
+
+    expect(conflicts).toHaveLength(1)
+    expect(conflicts[0].componentIds).toEqual(["code/Typed"])
+    expect(conflicts[0].sources.map((source) => source.structuredValue)).toEqual([[true, 1, "1"], false, null])
+  })
+
+  test("retains a deterministic bounded proof for aggregated local offenders", () => {
+    const offenders = Array.from({ length: 101 }, (_, index) => `unexpected-${String(index).padStart(3, "0")}`)
+    const makeComponents = (values: string[]): ComponentMap => ({
+      "code/Button": component(
+        "codebase",
+        { size: { values: ["allowed"] } },
+        { usage: { sites: values.length, props: { size: values }, truncatedProps: ["size"] } }
+      )
+    })
+    const first = reconcileComponentFields({ groups: [], components: makeComponents(offenders), config: config() })[0]
+    const second = reconcileComponentFields({
+      groups: [],
+      components: makeComponents([...offenders].reverse()),
+      config: config()
+    })[0]
+
+    expect(first).toEqual(second)
+    expect(first.sources).toHaveLength(100)
+    expect(first.sources.some((source) => Array.isArray(source.structuredValue))).toBe(true)
+    expect(first.sources.some((source) => source.structuredValue === "unexpected-000")).toBe(true)
+    expect(first.evidenceTotal).toBe(102)
+    expect(first.evidenceTruncated).toBe(true)
+  })
+
+  test("keeps local and cross-source subset findings separate when both are proven", () => {
+    const components = {
+      "code/Button": component(
+        "codebase",
+        { size: { values: ["sm"] } },
+        { usage: { sites: 1, props: { size: ["xl"] } } }
+      ),
+      "figma:button": component("figma", { size: { values: ["sm"] } }),
+      "storybook:Button": component("storybook", undefined, {
+        demonstrated: {
+          title: "Button",
+          extraction: "source",
+          storyCount: 1,
+          stories: [{ id: "button--default", args: { size: "2xl" } }]
+        }
+      })
+    }
+    const conflicts = reconcileComponentFields({ groups: groups(components), components, config: config() })
+
+    expect(conflicts.filter((conflict) => conflict.comparison === "subset").map((conflict) => conflict.scope)).toEqual([
+      "cross-source",
+      "within-source"
+    ])
+    expect(conflicts.filter((conflict) => conflict.scope === "within-source")).toHaveLength(1)
+  })
+
   test("aggregates three source values once and serializes identically across input permutations", () => {
     const entries = [
       ["storybook:Button", component("storybook", { size: { values: ["md", "sm"], default: "md" } })],

@@ -114,6 +114,7 @@ export function componentReconciliationGroups(
 /** Produce deterministic field conflicts for mapped, unique, and consensus facts. */
 export function reconcileComponentFields(params: {
   groups: ComponentReconciliationGroup[]
+  components?: ComponentMap
   config: PrimitivConfig
   sourceStatuses?: Record<string, SourceStatus>
 }): Conflict[] {
@@ -123,11 +124,16 @@ export function reconcileComponentFields(params: {
 /** Reconcile fields and retain bounded reasons for comparisons that could not run. */
 export function reconcileComponentFieldsWithDiagnostics(params: {
   groups: ComponentReconciliationGroup[]
+  components?: ComponentMap
   config: PrimitivConfig
   sourceStatuses?: Record<string, SourceStatus>
 }): { conflicts: Conflict[]; comparisonDiagnostics?: ComparisonDiagnostics } {
   const conflicts: Conflict[] = []
   const diagnostics: ComparisonDiagnostic[] = []
+  const codebaseStatus = params.sourceStatuses?.codebase?.status
+  if (codebaseStatus === undefined || codebaseStatus === "ok") {
+    conflicts.push(...localComponentUsageConflicts(params.components ?? {}, diagnostics))
+  }
   for (const group of params.groups) {
     const healthyGroup = {
       ...group,
@@ -153,6 +159,85 @@ export function reconcileComponentFieldsWithDiagnostics(params: {
     conflicts: conflicts.sort(compareConflicts),
     ...(comparisonDiagnostics.total > 0 ? { comparisonDiagnostics } : {})
   }
+}
+
+/** Validate each codebase component's retained primitive usage against its own complete finite domains. */
+function localComponentUsageConflicts(components: ComponentMap, diagnostics: ComparisonDiagnostic[]): Conflict[] {
+  const conflicts: Conflict[] = []
+  for (const componentId of Object.keys(components).sort(compareStrings)) {
+    const component = components[componentId]
+    if (component.source.adapter !== "codebase") continue
+
+    for (const propName of Object.keys(component.props ?? {}).sort(compareStrings)) {
+      const definition = component.props?.[propName]
+      const observations = component.usage?.props?.[propName]
+      if (definition?.incompleteFields?.includes("values") && observations && observations.length > 0) {
+        diagnostics.push({
+          type: "could-not-compare",
+          reason: "incomplete-formal-evidence",
+          name: component.displayName ?? component.name,
+          adapters: ["codebase"],
+          componentIds: [componentId],
+          fieldPath: ["props", propName, "values"]
+        })
+      }
+      if (!definition?.values || definition.incompleteFields?.includes("values") || observations === undefined) {
+        continue
+      }
+
+      const fieldPath = ["props", propName, "values"]
+      const domain = sortPrimitiveValues(definition.values)
+      const domainFact: ComponentFact = {
+        componentId,
+        adapter: "codebase",
+        fieldPath,
+        factPath: fieldPath,
+        role: "formal",
+        value: domain,
+        source: component.source
+      }
+      const offenders = sortPrimitiveValues(observations)
+        .filter((value) => !domainContains(domain, value))
+        .map(
+          (value): ComponentFact => ({
+            componentId,
+            adapter: "codebase",
+            fieldPath,
+            factPath: ["usage", "props", propName],
+            role: "observed",
+            value,
+            source: component.source
+          })
+        )
+      if (offenders.length === 0) continue
+
+      const facts = dedupeFacts([domainFact, ...offenders]).sort(compareFacts)
+      const retainedFacts = retainSubsetConflictFacts(facts)
+      const displayName = component.displayName ?? component.name
+      const conflict: Conflict = {
+        type: "component",
+        scope: "within-source",
+        name: displayName,
+        componentIds: [componentId],
+        fieldPath,
+        comparison: "subset",
+        sources: retainedFacts.map(conflictEvidence).sort(compareEvidence),
+        evidenceTotal: facts.length,
+        ...(retainedFacts.length < facts.length ? { evidenceTruncated: true } : {}),
+        resolution: "pending",
+        actionable: true,
+        suggestedFix: localUsageFixMessage(displayName, fieldPath)
+      }
+      conflicts.push(
+        ...retainBoundedConflicts({
+          conflicts: [conflict],
+          group: { name: displayName, explicitlyMapped: false, members: [{ id: componentId, component }] },
+          diagnostics
+        })
+      )
+    }
+  }
+  return conflicts
 }
 
 /** Canonicalize, deduplicate, count, and bound diagnostics for persistence and comparison. */
@@ -685,6 +770,12 @@ function fieldFixMessage(name: string, fieldPath: string[], governed: boolean): 
   return governed
     ? `Component field disagreement for '${subject}' at ${path}. Review the labelled source evidence and align non-authoritative sources with the configured source of truth.`
     : `Component field disagreement for '${subject}' at ${path}. Review the labelled source evidence and choose the intended value or source of truth.`
+}
+
+function localUsageFixMessage(name: string, fieldPath: string[]): string {
+  const subject = safeDisplayText(name)
+  const path = safeDisplayText(fieldPath.map((segment) => JSON.stringify(segment)).join(" / "))
+  return `Local component usage contradicts the declared domain for '${subject}' at ${path}. Align the JSX usage or widen the declared domain.`
 }
 
 function membersByAdapter(members: ComponentMember[]): Map<SourceAdapter, ComponentMember[]> {

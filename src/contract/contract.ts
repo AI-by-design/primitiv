@@ -50,6 +50,7 @@ export class ContractBuilder {
     const nameResolutions = this.componentNameResolutions(components, nameIndex, groups)
     const componentReconciliation = reconcileComponentFieldsWithDiagnostics({
       groups,
+      components,
       config: this.config,
       sourceStatuses: options.sourceStatuses
     })
