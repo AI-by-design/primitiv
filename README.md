@@ -45,6 +45,18 @@ When component evidence cannot be compared, `primitiv verify` reports a short di
 
 Agents can read diagnostic counts in the MCP summary and paginated details through `get_design_context` with `category: "diagnostics"`.
 
+## Component drift in CI
+
+Run `primitiv verify` against your saved contract to check declared prop facts, finite variant values, observed JSX values, and component relationships. Verification also compares Storybook default args, story args, and control choices, including mapped values. Story labels and other presentation metadata do not count as API drift. Observations and examples describe static source evidence, not runtime frequency or breaking-change severity.
+
+For example, changing a `Button` usage from `size="sm"` to `size="lg"` is detected even when the number of JSX sites stays the same. Drift messages identify the component ID and field path, such as `components/Button` and `usage.props.size`.
+
+Normal verification scans current sources in memory and uses their current conflicts for reporting and governance. Introducing or fixing an out-of-domain JSX value takes effect in verification immediately. The saved contract remains the drift baseline and is never rewritten by verification: run `primitiv build` to refresh it, then verify again. MCP continues serving the saved contract until it is rebuilt and reloaded.
+
+Failed sources and incomplete or truncated evidence cannot prove that an unavailable fact was removed or that a conflict was resolved. Verification reports available changes and comparison uncertainty. Older contracts remain readable; newly available evidence makes them stale until rebuilt.
+
+Stale evidence exits with code 1, or 2 under `--strict`. Pending conflicts exit with code 2 under `error` governance or `--strict`; warn-only conflicts do not independently fail verification. `--fast` uses saved findings and file modification times instead of scanning current API evidence, so use normal verification in CI. Use `--json` for the verification result and `--verbose` for comparison diagnostic details.
+
 ## Project links
 
 - [Documentation](https://primitiv.design/docs)

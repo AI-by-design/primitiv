@@ -126,7 +126,7 @@ describe("verify", () => {
   test("warn policy reports pending conflicts without failing verify", async () => {
     writeConfig(tempDir)
     writeContract(tempDir, { conflicts: [pendingConflict()] })
-    const result = await verify(undefined, { cwd: tempDir })
+    const result = await verify(undefined, { cwd: tempDir, fast: true })
     expect(result.status).toBe("unresolved-conflicts")
     expect(result.exitCode).toBe(0)
     expect(result.conflicts.pending).toBe(1)
@@ -155,7 +155,7 @@ describe("verify", () => {
   ] as const)("pending conflicts follow governance.onConflict=%s by default", async (onConflict, exitCode) => {
     writeConfig(tempDir, ["**/*.css"], onConflict)
     writeContract(tempDir, { conflicts: [pendingConflict()] })
-    const result = await verify(undefined, { cwd: tempDir })
+    const result = await verify(undefined, { cwd: tempDir, fast: true })
     expect(result.status).toBe("unresolved-conflicts")
     expect(result.exitCode).toBe(exitCode)
     expect(result.conflicts).toEqual({ total: 1, pending: 1 })
@@ -164,9 +164,37 @@ describe("verify", () => {
   test("--strict escalates pending conflicts regardless of governance policy", async () => {
     writeConfig(tempDir, ["**/*.css"], "auto-resolve")
     writeContract(tempDir, { conflicts: [pendingConflict()] })
-    const result = await verify(undefined, { cwd: tempDir, strict: true })
+    const result = await verify(undefined, { cwd: tempDir, strict: true, fast: true })
     expect(result.status).toBe("unresolved-conflicts")
     expect(result.exitCode).toBe(2)
+  })
+
+  test("normal verification governs freshly rebuilt conflicts while --fast keeps saved findings", async () => {
+    writeConfig(tempDir, ["**/*.css"], "error")
+    fs.writeFileSync(path.join(tempDir, "a.css"), `:root { --color-primary: #000; }`)
+    fs.writeFileSync(path.join(tempDir, "b.css"), `:root { --color-primary: #fff; }`)
+    writeContract(tempDir)
+
+    const normal = await verify(undefined, { cwd: tempDir })
+    expect(normal.status).toBe("unresolved-conflicts")
+    expect(normal.exitCode).toBe(2)
+    expect(normal.conflicts).toEqual({ total: 1, pending: 1 })
+
+    const fast = await verify(undefined, { cwd: tempDir, fast: true })
+    expect(fast.conflicts).toEqual({ total: 0, pending: 0 })
+    expect(fast.status).toBe("clean")
+  })
+
+  test("normal verification does not retain a saved conflict that the fresh scan cannot prove", async () => {
+    writeConfig(tempDir)
+    writeContract(tempDir, { conflicts: [pendingConflict()] })
+
+    const normal = await verify(undefined, { cwd: tempDir })
+    expect(normal.conflicts).toEqual({ total: 0, pending: 0 })
+    expect(normal.messages.join("\n")).not.toContain("resolved")
+
+    const fast = await verify(undefined, { cwd: tempDir, fast: true })
+    expect(fast.conflicts).toEqual({ total: 1, pending: 1 })
   })
 
   test("returns stale (exit 1) when a token in source is missing from the contract", async () => {
@@ -245,9 +273,10 @@ describe("verify", () => {
   })
 
   test("unresolved conflicts take priority over staleness", async () => {
-    fs.writeFileSync(path.join(tempDir, "styles.css"), ":root { --color-primary: oklch(0.5 0.2 260); }")
+    fs.writeFileSync(path.join(tempDir, "a.css"), ":root { --color-primary: #000; }")
+    fs.writeFileSync(path.join(tempDir, "b.css"), ":root { --color-primary: #fff; }")
     writeConfig(tempDir)
-    writeContract(tempDir, { conflicts: [pendingConflict()] })
+    writeContract(tempDir)
 
     const result = await verify(undefined, { cwd: tempDir })
     // Even though both conditions hold, we report the conflict as the primary status.
@@ -500,7 +529,9 @@ describe("verify — hardcoded token values", () => {
   test("conflicts take precedence over violations in reported status", async () => {
     writeConfigWithJSX(tempDir)
     fs.writeFileSync(path.join(tempDir, "Button.tsx"), `<button className="bg-[#ff0000]" />`)
-    writeContract(tempDir, { conflicts: [pendingConflict()] })
+    fs.writeFileSync(path.join(tempDir, "a.css"), `:root { --color-primary: #000; }`)
+    fs.writeFileSync(path.join(tempDir, "b.css"), `:root { --color-primary: #fff; }`)
+    writeContract(tempDir)
 
     const result = await verify(undefined, { cwd: tempDir })
     expect(result.status).toBe("unresolved-conflicts")
@@ -700,6 +731,65 @@ describe("verify — component identity migration (0.2 → 0.3)", () => {
 })
 
 describe("verify — component relationship drift", () => {
+  test("legacy missing API evidence is stale once and clean after rebuilding", async () => {
+    writeConfig(tempDir, ["**/*.tsx"])
+    fs.writeFileSync(
+      path.join(tempDir, "Button.tsx"),
+      'export function Button({ size }: { size?: "sm" | "lg" }) { return <button /> }'
+    )
+    fs.writeFileSync(
+      path.join(tempDir, "Screen.tsx"),
+      'import { Button } from "./Button"; export function Screen() { return <Button size="sm" /> }'
+    )
+    const legacy = await buildContract(undefined, { cwd: tempDir, silent: true })
+    delete legacy.components.Button.props
+    delete legacy.components.Button.usage?.props
+    writeContract(tempDir, legacy)
+
+    const result = await verify(undefined, { cwd: tempDir })
+    expect(result.exitCode).toBe(1)
+    expect(result.drift.changes).toEqual([
+      "component prop added: Button props.size",
+      'component observed value added: Button usage.props.size ("sm")'
+    ])
+    const strict = await verify(undefined, { cwd: tempDir, strict: true })
+    expect(strict.exitCode).toBe(2)
+
+    writeContract(tempDir, await buildContract(undefined, { cwd: tempDir, silent: true }))
+    const refreshed = await verify(undefined, { cwd: tempDir })
+    expect(refreshed.status).toBe("clean")
+    expect(refreshed.drift.changes).toEqual([])
+  })
+
+  test.each(["constructor", "__proto__", "toString"])("treats %s as an own component ID during removal", async (id) => {
+    writeConfig(tempDir)
+    writeContract(tempDir, {
+      components: Object.fromEntries([[id, { name: "Old", source: { adapter: "codebase" as const } }]])
+    })
+
+    const result = await verify(undefined, { cwd: tempDir })
+    expect(result.drift.changes).toEqual([`component removed: ${id}`])
+    expect(result.exitCode).toBe(1)
+  })
+
+  test("compares own relationship keys without inheriting prototype counts or targets", async () => {
+    writeConfig(tempDir, ["**/*.tsx"])
+    fs.writeFileSync(path.join(tempDir, "Card.tsx"), "export function Card() { return <div /> }")
+    const saved = await buildContract(undefined, { cwd: tempDir, silent: true })
+    saved.components.Card.uses = Object.fromEntries([
+      ["__proto__", 1],
+      ["constructor", 2]
+    ])
+    writeContract(tempDir, saved)
+
+    const result = await verify(undefined, { cwd: tempDir })
+    expect(result.drift.changes).toEqual([
+      "component use removed: components.Card.uses.__proto__",
+      "component use removed: components.Card.uses.constructor"
+    ])
+    expect(result.exitCode).toBe(1)
+  })
+
   function writeTsxConfig(root: string) {
     const body = `module.exports = {
   sources: {
@@ -732,7 +822,7 @@ describe("verify — component relationship drift", () => {
       `import { Child } from "./Child"; export function Parent() { return <><Child /><Child /></> }`
     )
     let result = await verify(undefined, { cwd: tempDir })
-    expect(result.drift.changes).toContain("component use count changed: Parent → Child (1 → 2)")
+    expect(result.drift.changes).toContain("component use count changed: components.Parent.uses.Child (1 → 2)")
     expect(result.status).toBe("stale")
 
     fs.writeFileSync(
@@ -740,7 +830,7 @@ describe("verify — component relationship drift", () => {
       `import { Child } from "./Child"; export function Parent() { return <span /> }`
     )
     result = await verify(undefined, { cwd: tempDir })
-    expect(result.drift.changes).toContain("component use removed: Parent → Child")
+    expect(result.drift.changes).toContain("component use removed: components.Parent.uses.Child")
   })
 
   test("reports an added edge and usage-only changes independently", async () => {
@@ -754,8 +844,8 @@ describe("verify — component relationship drift", () => {
       `import { Child } from "./Child"; export function Parent() { return <Child /> }`
     )
     let result = await verify(undefined, { cwd: tempDir })
-    expect(result.drift.changes).toContain("component use added: Parent → Child (1 site)")
-    expect(result.drift.changes).toContain("component usage changed: Child (0 → 1 sites)")
+    expect(result.drift.changes).toContain("component use added: components.Parent.uses.Child (1 site)")
+    expect(result.drift.changes).toContain("component usage changed: components.Child.usage.sites (0 → 1 sites)")
 
     await commitCurrentBuild()
     fs.writeFileSync(
@@ -763,7 +853,7 @@ describe("verify — component relationship drift", () => {
       `import { Child } from "./Child"; export function Page() { return <Child /> }`
     )
     result = await verify(undefined, { cwd: tempDir })
-    expect(result.drift.changes).toContain("component usage changed: Child (1 → 2 sites)")
+    expect(result.drift.changes).toContain("component usage changed: components.Child.usage.sites (1 → 2 sites)")
     expect(result.drift.changes.some((change) => change.startsWith("component use "))).toBe(false)
   })
 
@@ -1069,6 +1159,46 @@ describe("verify — invalid contract", () => {
       {
         path: "components.Button.source",
         mutate: (contract) => (contract.components = { Button: { name: "Button", source: null } })
+      },
+      {
+        path: "components.Button.props.size.required",
+        mutate: (contract) =>
+          (contract.components = {
+            Button: { name: "Button", source: { adapter: "codebase" }, props: { size: { required: "yes" } } }
+          })
+      },
+      {
+        path: "components.Button.usage.props.size.0",
+        mutate: (contract) =>
+          (contract.components = {
+            Button: {
+              name: "Button",
+              source: { adapter: "codebase" },
+              usage: { sites: 1, props: { size: [{}] } }
+            }
+          })
+      },
+      {
+        path: "components.Button.demonstrated.extraction",
+        mutate: (contract) =>
+          (contract.components = {
+            Button: {
+              name: "Button",
+              source: { adapter: "storybook" },
+              demonstrated: { title: "Button", extraction: "partial", storyCount: 0 }
+            }
+          })
+      },
+      {
+        path: "components.Button.demonstrated.incomplete",
+        mutate: (contract) =>
+          (contract.components = {
+            Button: {
+              name: "Button",
+              source: { adapter: "storybook" },
+              demonstrated: { title: "Button", extraction: "source", storyCount: 0, incomplete: "yes" }
+            }
+          })
       }
     ]
 
@@ -1083,6 +1213,52 @@ describe("verify — invalid contract", () => {
       expect(result.exitCode).toBe(3)
       expect(result.messages.join("\n")).toContain(testCase.path)
     }
+  })
+
+  test("default verification validates opaque own __proto__ prop names", async () => {
+    writeConfig(tempDir)
+    const contract = rawContract(tempDir)
+    const props: Record<string, unknown> = {}
+    Object.defineProperty(props, "__proto__", { enumerable: true, value: { required: "yes" } })
+    contract.components = { Button: { name: "Button", source: { adapter: "codebase" }, props } }
+    writeRawContract(tempDir, contract)
+
+    const result = await verify(undefined, { cwd: tempDir })
+    expect(result.status).toBe("invalid-contract")
+    expect(result.messages.join("\n")).toContain("__proto__")
+  })
+
+  test("rejects excessively nested demonstrated values without a recursion error", async () => {
+    writeConfig(tempDir)
+    let value: unknown = "leaf"
+    for (let depth = 0; depth < 70; depth++) value = [value]
+    const contract = rawContract(tempDir)
+    contract.components = {
+      Button: {
+        name: "Button",
+        source: { adapter: "storybook" },
+        demonstrated: { title: "Button", extraction: "source", storyCount: 0, defaultArgs: { config: value } }
+      }
+    }
+    writeRawContract(tempDir, contract)
+
+    const result = await verify(undefined, { cwd: tempDir })
+    expect(result.status).toBe("invalid-contract")
+    expect(result.exitCode).toBe(3)
+    expect(result.messages.join("\n")).toContain("nested levels")
+  })
+
+  test("default verification validates an own __proto__ component entry", async () => {
+    writeConfig(tempDir)
+    const contract = rawContract(tempDir)
+    const components: Record<string, unknown> = {}
+    Object.defineProperty(components, "__proto__", { enumerable: true, value: null })
+    contract.components = components
+    writeRawContract(tempDir, contract)
+
+    const result = await verify(undefined, { cwd: tempDir })
+    expect(result.status).toBe("invalid-contract")
+    expect(result.messages.join("\n")).toContain("components.__proto__")
   })
 
   test("default verification accepts valid static relationship counts", async () => {
@@ -1274,7 +1450,7 @@ describe("verify — invalid contract", () => {
     }
   })
 
-  test("default verification ignores malformed fast-only fields because it rebuilds them", async () => {
+  test("default verification validates saved source health now used for comparison eligibility", async () => {
     writeConfig(tempDir)
     const contract = rawContract(tempDir)
     contract.sourceStatuses = { codebase: { status: "partial" } }
@@ -1283,8 +1459,8 @@ describe("verify — invalid contract", () => {
 
     const result = await verify(undefined, { cwd: tempDir })
 
-    expect(result.status).toBe("clean")
-    expect(result.exitCode).toBe(0)
+    expect(result.status).toBe("invalid-contract")
+    expect(result.exitCode).toBe(3)
     expect(result.violations.reported).toEqual([])
   })
 
