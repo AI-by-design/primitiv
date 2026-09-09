@@ -74,4 +74,73 @@ describe("boundDemonstratedEvidence", () => {
       { name: "Zed", importPath: "./z.stories.ts" }
     ])
   })
+
+  test("does not mark healthy ordinary evidence incomplete", () => {
+    const bounded = boundDemonstratedEvidence({
+      title: "Button",
+      extraction: "source",
+      storyCount: 1,
+      defaultArgs: { size: "sm" },
+      stories: [{ id: "button--primary", args: { disabled: false } }]
+    })
+
+    expect(bounded.incomplete).toBeUndefined()
+  })
+
+  test("carries an existing aggregate incomplete marker", () => {
+    const bounded = boundDemonstratedEvidence({
+      title: "Button",
+      extraction: "source",
+      storyCount: 0,
+      incomplete: true
+    })
+
+    expect(bounded.incomplete).toBe(true)
+  })
+
+  test("retains the aggregate marker when a scoped omission marker cannot fit", () => {
+    const omittedName = "x".repeat(200)
+    const bounded = boundDemonstratedEvidence(
+      {
+        title: "Button",
+        extraction: "source",
+        storyCount: 0,
+        defaultArgs: { [omittedName]: "value" }
+      },
+      90
+    )
+
+    expect(Buffer.byteLength(JSON.stringify(bounded), "utf8")).toBeLessThanOrEqual(90)
+    expect(bounded.defaultArgs).toBeUndefined()
+    expect(bounded.truncatedDefaultArgs).toBeUndefined()
+    expect(bounded.incomplete).toBe(true)
+  })
+
+  test("marks marker names lost beyond the scoped cap", () => {
+    const names = Array.from({ length: 25 }, (_, index) => `dynamic-${String(index).padStart(2, "0")}`)
+    const bounded = boundDemonstratedEvidence({
+      title: "Button",
+      extraction: "source",
+      storyCount: 0,
+      unresolvedDefaultArgs: names
+    })
+
+    expect(bounded.unresolvedDefaultArgs).toHaveLength(20)
+    expect(bounded.incomplete).toBe(true)
+  })
+
+  test("presentation-only metadata omission does not mark API evidence incomplete", () => {
+    const bounded = boundDemonstratedEvidence(
+      {
+        title: "Button",
+        extraction: "source",
+        storyCount: 1,
+        stories: [{ id: "button--primary", name: "P".repeat(200), importPath: "./Button.stories.tsx" }]
+      },
+      125
+    )
+
+    expect(bounded.stories?.[0]?.name).toBeUndefined()
+    expect(bounded.incomplete).toBeUndefined()
+  })
 })

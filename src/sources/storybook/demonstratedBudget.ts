@@ -17,6 +17,9 @@ export function boundDemonstratedEvidence(
     title: evidence.title,
     extraction: evidence.extraction,
     storyCount: evidence.storyCount,
+    // Reserve this signal before retaining optional evidence so a full budget can
+    // never crowd out the fact that comparison coverage was lost.
+    incomplete: true,
     ...(reserveStoryTruncation ? { truncatedStories: true } : {})
   }
 
@@ -62,7 +65,92 @@ export function boundDemonstratedEvidence(
     evidence.truncatedStories || retainedStories.length < (evidence.stories?.length ?? 0)
   )
   if (!storiesTruncated) delete bounded.truncatedStories
+  if (!evidence.incomplete && !lostUnmarkedApiEvidence(evidence, bounded)) delete bounded.incomplete
   return bounded
+}
+
+function lostUnmarkedApiEvidence(source: DemonstratedEvidence, retained: DemonstratedEvidence): boolean {
+  if (lostArgs(source.defaultArgs, retained.defaultArgs, retained.truncatedDefaultArgs)) return true
+  if (lostNames(source.truncatedDefaultArgs, retained.truncatedDefaultArgs)) return true
+  if (lostNames(source.unresolvedDefaultArgs, retained.unresolvedDefaultArgs)) return true
+  if (source.hasUnresolvedDefaultArgsSpread && !retained.hasUnresolvedDefaultArgsSpread) return true
+  if (lostControls(source.controls, retained.controls)) return true
+  if (source.truncatedStories && !retained.truncatedStories) return true
+
+  const retainedStories = new Map((retained.stories ?? []).map((story) => [story.id, story]))
+  for (const story of source.stories ?? []) {
+    const boundedStory = retainedStories.get(story.id)
+    if (!boundedStory) {
+      if (!retained.truncatedStories && storyHasApiEvidence(story)) return true
+      continue
+    }
+    if (lostArgs(story.args, boundedStory.args, boundedStory.truncatedArgs)) return true
+    if (lostNames(story.truncatedArgs, boundedStory.truncatedArgs)) return true
+    if (lostNames(story.unresolvedArgs, boundedStory.unresolvedArgs)) return true
+    if (story.hasUnresolvedArgsSpread && !boundedStory.hasUnresolvedArgsSpread) return true
+    if (lostControls(story.controls, boundedStory.controls)) return true
+  }
+  return false
+}
+
+function lostArgs(
+  source: Record<string, DemonstratedValue> | undefined,
+  retained: Record<string, DemonstratedValue> | undefined,
+  retainedMarkers: string[] | undefined
+): boolean {
+  const marked = new Set(retainedMarkers ?? [])
+  return Object.keys(source ?? {}).some((name) => !hasOwn(retained, name) && !marked.has(name))
+}
+
+function lostNames(source: string[] | undefined, retained: string[] | undefined): boolean {
+  const retainedNames = new Set(retained ?? [])
+  return [...new Set(source ?? [])].some((name) => !retainedNames.has(name))
+}
+
+function lostControls(
+  source: Record<string, StorybookControlEvidence> | undefined,
+  retained: Record<string, StorybookControlEvidence> | undefined
+): boolean {
+  for (const name of Object.keys(source ?? {})) {
+    const sourceControl = ownValue(source, name)
+    if (!sourceControl) continue
+    const retainedControl = ownValue(retained, name)
+    if (!retainedControl) {
+      if (controlHasApiEvidence(sourceControl)) return true
+      continue
+    }
+    if (sourceControl.unresolvedChoices && !retainedControl.unresolvedChoices) return true
+    if (sourceControl.truncatedChoices && !retainedControl.truncatedChoices) return true
+    if (
+      (sourceControl.choices?.length ?? 0) > (retainedControl.choices?.length ?? 0) &&
+      !retainedControl.truncatedChoices
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
+function hasOwn(value: object | undefined, key: string): boolean {
+  return value !== undefined && Object.getOwnPropertyDescriptor(value, key) !== undefined
+}
+
+function ownValue<T>(value: Record<string, T> | undefined, key: string): T | undefined {
+  return Object.getOwnPropertyDescriptor(value ?? {}, key)?.value as T | undefined
+}
+
+function storyHasApiEvidence(story: DemonstratedStory): boolean {
+  return Boolean(
+    Object.keys(story.args ?? {}).length ||
+      story.unresolvedArgs?.length ||
+      story.truncatedArgs?.length ||
+      story.hasUnresolvedArgsSpread ||
+      Object.values(story.controls ?? {}).some(controlHasApiEvidence)
+  )
+}
+
+function controlHasApiEvidence(control: StorybookControlEvidence): boolean {
+  return Boolean(control.choices?.length || control.unresolvedChoices || control.truncatedChoices)
 }
 
 function copyArgs<T extends DemonstratedEvidence>(

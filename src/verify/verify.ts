@@ -6,6 +6,7 @@ import { valuesEquivalent } from "../normalize/value"
 import { safeDisplayText } from "../safe-display"
 import type { Conflict, PrimitivConfig, PrimitivContract, Violation } from "../types"
 import { primitivContractSchema, summarizeValidationIssues } from "../types"
+import { compareComponentApi, formatComponentFieldPath } from "./component-api-drift"
 import { verifyDefaultContractSchema, verifyFastContractSchema, verifySharedContractSchema } from "./contract-schema"
 
 export interface VerifyOptions {
@@ -136,9 +137,6 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
   const generatedAt = new Date(contract.generatedAt)
   const ageHours = (Date.now() - generatedAt.getTime()) / (1000 * 60 * 60)
 
-  const pendingConflicts = contract.conflicts.filter((c) => c.resolution === "pending")
-  const hasUnresolvedConflicts = pendingConflicts.length > 0
-
   // In default (rebuild) mode, the rebuilt contract has fresh violations from
   // the current source tree. In --fast mode we trust the committed contract,
   // accepting that violations may be stale (same tradeoff as drift detection).
@@ -147,7 +145,9 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
         ...(await detectDriftByMtime(config, resolvedConfigPath, generatedAt)),
         violations: contract.violations ?? [],
         failedSources: collectFailedSources(contract.sourceStatuses),
-        comparisonDiagnostics: canonicalComparisonDiagnostics(contract.comparisonDiagnostics)
+        comparisonDiagnostics: canonicalComparisonDiagnostics(contract.comparisonDiagnostics),
+        conflicts: contract.conflicts,
+        componentNameIndex: contract.componentNameIndex
       }
     : await detectDriftAndLintByRebuild(contract, configPath, cwd)
   const drift = { isStale: driftAndLint.isStale, changes: driftAndLint.changes }
@@ -156,6 +156,9 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
   const failedSources = driftAndLint.failedSources
   const hasFailedSources = failedSources.length > 0
   const comparisonDiagnostics = driftAndLint.comparisonDiagnostics
+  const findingsConflicts = driftAndLint.conflicts
+  const pendingConflicts = findingsConflicts.filter((conflict) => conflict.resolution === "pending")
+  const hasUnresolvedConflicts = pendingConflicts.length > 0
 
   const messages: string[] = []
 
@@ -198,15 +201,29 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
       `${severity} ${pendingConflicts.length} pending conflict${pendingConflicts.length === 1 ? "" : "s"} require resolution:`
     )
     for (const conflict of pendingConflicts.slice(0, MAX_REPORTED_CONFLICTS)) {
-      const field = conflict.fieldPath?.map((segment) => safeDisplayText(segment, 128)).join(" → ")
+      const field = conflict.fieldPath?.length ? formatComponentFieldPath(conflict.fieldPath) : undefined
+      const componentIds =
+        conflict.type === "component" && conflict.componentIds?.length
+          ? ` (${[...conflict.componentIds]
+              .sort(compareIds)
+              .map((id) => safeDisplayText(id, 128))
+              .join(", ")})`
+          : ""
       messages.push(
-        safeDisplayText(`  - ${conflict.type}: ${safeDisplayText(conflict.name)}${field ? ` [${field}]` : ""}`, 1_024)
+        safeDisplayText(
+          `  - ${conflict.type}: ${safeDisplayText(conflict.name)}${componentIds}${field ? ` [${field}]` : ""}`,
+          1_024
+        )
       )
       if (conflict.suggestedFix) messages.push(safeDisplayText(`    → ${conflict.suggestedFix}`, 1_024))
     }
     if (pendingConflicts.length > MAX_REPORTED_CONFLICTS) {
       messages.push(
-        `  ... and ${pendingConflicts.length - MAX_REPORTED_CONFLICTS} more. Call get_conflicts via the MCP server for the full list.`
+        `  ... and ${pendingConflicts.length - MAX_REPORTED_CONFLICTS} more.${
+          options.fast
+            ? " Call get_conflicts via the MCP server for the full saved list."
+            : " Rebuild to save the fresh list for MCP."
+        }`
       )
     }
     if (!conflictIsBlocking) {
@@ -236,7 +253,11 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
     }
     if (violations.length > MAX_REPORTED_VIOLATIONS) {
       messages.push(
-        `  ... and ${violations.length - MAX_REPORTED_VIOLATIONS} more. Call get_violations via the MCP server for the full list.`
+        `  ... and ${violations.length - MAX_REPORTED_VIOLATIONS} more.${
+          options.fast
+            ? " Call get_violations via the MCP server for the full saved list."
+            : " Rebuild to save the fresh list for MCP."
+        }`
       )
     }
   }
@@ -254,13 +275,19 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
     messages.push(`  Run \`primitiv build\` to refresh.`)
   }
 
-  if (!drift.isStale && !hasUnresolvedConflicts && !hasViolations && !hasFailedSources) {
+  if (
+    !drift.isStale &&
+    !hasUnresolvedConflicts &&
+    !hasViolations &&
+    !hasFailedSources &&
+    comparisonDiagnostics.total === 0
+  ) {
     messages.push(`✓ Contract is fresh (age ${formatAge(ageHours)}), no pending conflicts, no hardcoded token values.`)
   }
 
   // Same-name coexistence is intentional (path-qualified identity) — warn-but-pass, never
-  // an exit-code change. Only cross-source conflicts fail CI.
-  const coexisting = Object.values(contract.componentNameIndex ?? {}).filter((ids) => ids.length > 1).length
+  // an exit-code change. Conflict governance is evaluated separately above.
+  const coexisting = Object.values(driftAndLint.componentNameIndex ?? {}).filter((ids) => ids.length > 1).length
   if (coexisting > 0) {
     messages.push(
       `! ${coexisting} component name${coexisting === 1 ? "" : "s"} with multiple implementations — intentional coexistence, resolved at lookup by scope/rationale. Does not fail CI.`
@@ -285,7 +312,7 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
       ageHours: Number(ageHours.toFixed(2))
     },
     conflicts: {
-      total: contract.conflicts.length,
+      total: findingsConflicts.length,
       pending: pendingConflicts.length
     },
     comparisonDiagnostics,
@@ -329,16 +356,24 @@ async function detectDriftAndLintByRebuild(
   violations: Violation[]
   failedSources: Array<{ name: string; error?: string }>
   comparisonDiagnostics: NonNullable<PrimitivContract["comparisonDiagnostics"]>
+  conflicts: Conflict[]
+  componentNameIndex: PrimitivContract["componentNameIndex"]
 }> {
   const fresh = await buildContract(configPath, { silent: true, cwd })
   const failedSources = collectFailedSources(fresh.sourceStatuses)
-  const changes = diffContracts(committed, fresh, new Set(failedSources.map((f) => f.name)))
+  const incomparableSources = new Set([
+    ...collectFailedSources(committed.sourceStatuses).map((source) => source.name),
+    ...failedSources.map((source) => source.name)
+  ])
+  const changes = diffContracts(committed, fresh, incomparableSources)
   return {
     isStale: changes.length > 0,
     changes,
     violations: fresh.violations ?? [],
     failedSources,
-    comparisonDiagnostics: canonicalComparisonDiagnostics(fresh.comparisonDiagnostics)
+    comparisonDiagnostics: canonicalComparisonDiagnostics(fresh.comparisonDiagnostics),
+    conflicts: fresh.conflicts,
+    componentNameIndex: fresh.componentNameIndex
   }
 }
 
@@ -354,6 +389,7 @@ function collectFailedSources(
 // Only the substantive parts of the contract are compared:
 //   - token additions / removals / value changes
 //   - component additions / removals
+//   - declared, observed, and demonstrated component API evidence
 //   - component relationship / usage changes
 // generatedAt timestamps and source provenance metadata are intentionally
 // ignored — drift is about the design surface, not when the file was written.
@@ -406,6 +442,14 @@ function diffContracts(committed: PrimitivContract, fresh: PrimitivContract, fai
 
   const identity = compareComponentIdentity({ committed, fresh, failedSources: failed })
   changes.push(...identity.changes)
+  changes.push(
+    ...compareComponentApi({
+      committed,
+      fresh,
+      pairs: identity.pairs,
+      failedSources: failed
+    })
+  )
   changes.push(
     ...compareComponentRelationships({
       committed,
@@ -477,7 +521,7 @@ function formatComparisonDiagnostic(
   const identityParts: string[] = []
   if (diagnostic.name) identityParts.push(safeDisplayText(diagnostic.name, 128))
   if (diagnostic.fieldPath?.length) {
-    identityParts.push(diagnostic.fieldPath.map((segment) => safeDisplayText(segment, 128)).join("."))
+    identityParts.push(formatComponentFieldPath(diagnostic.fieldPath))
   }
   const context: string[] = []
   if (diagnostic.adapters?.length)
@@ -509,15 +553,19 @@ function compareComponentIdentity(params: {
   failedSources: Set<string>
 }): ComponentIdentityResult {
   const { committed, fresh, failedSources } = params
+  const committedIds = new Set(Object.keys(committed.components))
+  const freshIds = new Set(Object.keys(fresh.components))
   const pairs: ComponentPair[] = Object.keys(committed.components)
-    .filter((id) => fresh.components[id])
+    .filter((id) => freshIds.has(id))
     .map((id) => ({ committedId: id, freshId: id }))
   const changes: string[] = []
   const rekeys = new Map<string, string>()
-  const removed = Object.keys(committed.components).filter(
-    (key) => !fresh.components[key] && !failedSources.has(committed.components[key].source.adapter)
-  )
-  const added = Object.keys(fresh.components).filter((key) => !committed.components[key])
+  const removed = Object.keys(committed.components)
+    .filter((key) => !freshIds.has(key) && !failedSources.has(committed.components[key].source.adapter))
+    .sort(compareIds)
+  const added = Object.keys(fresh.components)
+    .filter((key) => !committedIds.has(key))
+    .sort(compareIds)
 
   // A removed/added pair sharing display name, adapter, and file is the same component
   // under the 0.2 → 0.3 qualified-id migration. Keep this matching rule in one place so
@@ -562,6 +610,7 @@ function compareComponentRelationships(params: {
   const { committed, fresh, pairs, rekeys, failedSources } = params
   const changes: string[] = []
   const sortedPairs = [...pairs].sort((a, b) => compareIds(a.freshId, b.freshId))
+  const previousIds = new Map([...rekeys].map(([previous, current]) => [current, previous]))
   for (const pair of sortedPairs) {
     const committedComponent = committed.components[pair.committedId]
     const freshComponent = fresh.components[pair.freshId]
@@ -574,22 +623,37 @@ function compareComponentRelationships(params: {
     const targetIds = [...new Set([...Object.keys(committedUses), ...Object.keys(freshUses)])].sort(compareIds)
     for (const targetId of targetIds) {
       const committedCount = committedUses[targetId]
-      const freshCount = freshUses[targetId]
+      const freshCount = ownEntry(freshUses, targetId)
+      const committedTargetId = previousIds.get(targetId) ?? targetId
+      const targetUnavailable =
+        failedSources.has(ownEntry(committed.components, committedTargetId)?.source.adapter ?? "") ||
+        failedSources.has(ownEntry(fresh.components, targetId)?.source.adapter ?? "")
       if (committedCount === undefined && freshCount !== undefined) {
         changes.push(
-          `component use added: ${pair.freshId} → ${targetId} (${freshCount} site${freshCount === 1 ? "" : "s"})`
+          `component use added: ${formatComponentFieldPath(["components", pair.freshId, "uses", targetId])} (${freshCount} site${freshCount === 1 ? "" : "s"})`
         )
-      } else if (committedCount !== undefined && freshCount === undefined) {
-        changes.push(`component use removed: ${pair.freshId} → ${targetId}`)
-      } else if (committedCount !== undefined && freshCount !== undefined && committedCount !== freshCount) {
-        changes.push(`component use count changed: ${pair.freshId} → ${targetId} (${committedCount} → ${freshCount})`)
+      } else if (committedCount !== undefined && freshCount === undefined && !targetUnavailable) {
+        changes.push(
+          `component use removed: ${formatComponentFieldPath(["components", pair.freshId, "uses", targetId])}`
+        )
+      } else if (
+        committedCount !== undefined &&
+        freshCount !== undefined &&
+        committedCount !== freshCount &&
+        !targetUnavailable
+      ) {
+        changes.push(
+          `component use count changed: ${formatComponentFieldPath(["components", pair.freshId, "uses", targetId])} (${committedCount} → ${freshCount})`
+        )
       }
     }
 
     const committedSites = committedComponent.usage?.sites ?? 0
     const freshSites = freshComponent.usage?.sites ?? 0
     if (committedSites !== freshSites) {
-      changes.push(`component usage changed: ${pair.freshId} (${committedSites} → ${freshSites} sites)`)
+      changes.push(
+        `component usage changed: ${formatComponentFieldPath(["components", pair.freshId, "usage", "sites"])} (${committedSites} → ${freshSites} sites)`
+      )
     }
   }
   return changes
@@ -599,12 +663,16 @@ function canonicalizeUses(
   uses: Record<string, number> | undefined,
   rekeys: Map<string, string>
 ): Record<string, number> {
-  const canonical: Record<string, number> = {}
+  const canonical: Record<string, number> = Object.create(null)
   for (const [targetId, count] of Object.entries(uses ?? {})) {
     const canonicalId = rekeys.get(targetId) ?? targetId
     canonical[canonicalId] = (canonical[canonicalId] ?? 0) + count
   }
   return canonical
+}
+
+function ownEntry<T>(record: Record<string, T>, key: string): T | undefined {
+  return Object.getOwnPropertyDescriptor(record, key)?.value as T | undefined
 }
 
 function compareIds(a: string, b: string): number {

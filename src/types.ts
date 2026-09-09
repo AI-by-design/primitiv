@@ -308,6 +308,9 @@ export interface DemonstratedEvidence {
   extraction: "manifest-only" | "source"
   // Unique eligible manifest stories before the retained-story cap.
   storyCount: number
+  // The aggregate byte budget dropped API-relevant evidence without retaining a
+  // more specific omission marker. Optional for contracts written before this marker.
+  incomplete?: boolean
   defaultArgs?: Record<string, DemonstratedValue>
   unresolvedDefaultArgs?: string[]
   truncatedDefaultArgs?: string[]

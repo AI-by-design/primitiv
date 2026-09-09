@@ -113,9 +113,11 @@ export function Toolbar() {
       const drift = await verify(undefined, { cwd: tempDir })
       expect(drift.status).toBe("stale")
       expect(drift.drift.changes).toContain(
-        "component use count changed: components/Toolbar → components/Button (2 → 3)"
+        'component use count changed: components["components/Toolbar"].uses["components/Button"] (2 → 3)'
       )
-      expect(drift.drift.changes).toContain("component usage changed: components/Button (3 → 4 sites)")
+      expect(drift.drift.changes).toContain(
+        'component usage changed: components["components/Button"].usage.sites (3 → 4 sites)'
+      )
 
       server = new PrimitivMCPServer(contractPath)
       const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
