@@ -669,12 +669,18 @@ export class FigmaAdapter implements Source {
         }
       }
       case "VARIANT": {
-        if (!Array.isArray(definition.variantOptions)) return undefined
-        if (definition.variantOptions.length > FIGMA_MAX_PROPERTY_VALUES) return undefined
-        if (!definition.variantOptions.every((value) => typeof value === "string")) return undefined
+        if (!Array.isArray(definition.variantOptions)) return { kind: "variant", incompleteFields: ["values"] }
+        if (definition.variantOptions.length > FIGMA_MAX_PROPERTY_VALUES) {
+          return { kind: "variant", incompleteFields: ["values"] }
+        }
+        if (!definition.variantOptions.every((value) => typeof value === "string")) {
+          return { kind: "variant", incompleteFields: ["values"] }
+        }
         const values = definition.variantOptions as string[]
-        if (!values.every((value) => withinUtf8Limit(value, FIGMA_MAX_PROPERTY_VALUE_STRING_BYTES))) return undefined
-        if (values.length === 0) return undefined
+        if (!values.every((value) => withinUtf8Limit(value, FIGMA_MAX_PROPERTY_VALUE_STRING_BYTES))) {
+          return { kind: "variant", incompleteFields: ["values"] }
+        }
+        if (values.length === 0) return { kind: "variant", incompleteFields: ["values"] }
         const sorted = sortPrimitiveValues(values)
         const defaultValue =
           typeof definition.defaultValue === "string" && sorted.includes(definition.defaultValue)
@@ -706,7 +712,7 @@ export class FigmaAdapter implements Source {
         }
       }
       default:
-        return undefined
+        return { unsupportedFields: ["type"] }
     }
   }
 

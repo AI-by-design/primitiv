@@ -11,6 +11,7 @@ import { verifyDefaultContractSchema, verifyFastContractSchema, verifySharedCont
 export interface VerifyOptions {
   strict?: boolean
   json?: boolean
+  verbose?: boolean
   cwd?: string
   // Opt into the legacy mtime-based staleness check. Faster but unreliable
   // anywhere file mtimes get reset (CI, fresh clones). Default verify rebuilds
@@ -42,6 +43,7 @@ export interface VerifyResult {
     total: number
     pending: number
   }
+  comparisonDiagnostics: PrimitivContract["comparisonDiagnostics"]
   drift: {
     isStale: boolean
     // Human-readable change descriptions. Default mode lists structural
@@ -67,6 +69,13 @@ const MAX_REPORTED_CONFLICTS = 5
 const MAX_REPORTED_VIOLATIONS = 5
 const MAX_DETECTED_NEWER_FILES = 10
 
+const EMPTY_COMPARISON_DIAGNOSTICS: NonNullable<PrimitivContract["comparisonDiagnostics"]> = {
+  total: 0,
+  truncated: false,
+  byReason: {},
+  items: []
+}
+
 export async function verify(configPath: string | undefined, options: VerifyOptions = {}): Promise<VerifyResult> {
   const cwd = options.cwd ?? process.cwd()
   const resolvedConfigPath = path.resolve(cwd, configPath ?? "primitiv.config.js")
@@ -78,6 +87,7 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
       messages: [`No config found at ${resolvedConfigPath}. Run \`primitiv init\` in this project first.`],
       contract: {},
       conflicts: { total: 0, pending: 0 },
+      comparisonDiagnostics: EMPTY_COMPARISON_DIAGNOSTICS,
       drift: { isStale: false, changes: [] },
       violations: { total: 0, reported: [] },
       failedSources: []
@@ -94,6 +104,7 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
       messages: [`No contract at ${contractPath}. Run \`primitiv build\` to generate one.`],
       contract: {},
       conflicts: { total: 0, pending: 0 },
+      comparisonDiagnostics: EMPTY_COMPARISON_DIAGNOSTICS,
       drift: { isStale: false, changes: [] },
       violations: { total: 0, reported: [] },
       failedSources: []
@@ -135,7 +146,8 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
     ? {
         ...(await detectDriftByMtime(config, resolvedConfigPath, generatedAt)),
         violations: contract.violations ?? [],
-        failedSources: collectFailedSources(contract.sourceStatuses)
+        failedSources: collectFailedSources(contract.sourceStatuses),
+        comparisonDiagnostics: canonicalComparisonDiagnostics(contract.comparisonDiagnostics)
       }
     : await detectDriftAndLintByRebuild(contract, configPath, cwd)
   const drift = { isStale: driftAndLint.isStale, changes: driftAndLint.changes }
@@ -143,8 +155,28 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
   const hasViolations = violations.length > 0
   const failedSources = driftAndLint.failedSources
   const hasFailedSources = failedSources.length > 0
+  const comparisonDiagnostics = driftAndLint.comparisonDiagnostics
 
   const messages: string[] = []
+
+  if (comparisonDiagnostics.total > 0) {
+    const noun = comparisonDiagnostics.total === 1 ? "comparison" : "comparisons"
+    messages.push(
+      `Could not complete ${comparisonDiagnostics.total} component ${noun}.${
+        options.verbose ? "" : " Run with --verbose for details."
+      }`
+    )
+    if (options.verbose) {
+      for (const diagnostic of comparisonDiagnostics.items) {
+        messages.push(...formatComparisonDiagnostic(diagnostic))
+      }
+      if (comparisonDiagnostics.truncated) {
+        messages.push(
+          `Showing ${comparisonDiagnostics.items.length} of ${comparisonDiagnostics.total} comparison diagnostics.`
+        )
+      }
+    }
+  }
 
   if (hasFailedSources) {
     const severity = options.strict ? "✗" : "!"
@@ -223,7 +255,7 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
   }
 
   if (!drift.isStale && !hasUnresolvedConflicts && !hasViolations && !hasFailedSources) {
-    messages.push(`✓ Contract is fresh (age ${formatAge(ageHours)}), conflicts resolved, no hardcoded token values.`)
+    messages.push(`✓ Contract is fresh (age ${formatAge(ageHours)}), no pending conflicts, no hardcoded token values.`)
   }
 
   // Same-name coexistence is intentional (path-qualified identity) — warn-but-pass, never
@@ -256,6 +288,7 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
       total: contract.conflicts.length,
       pending: pendingConflicts.length
     },
+    comparisonDiagnostics,
     drift,
     violations: {
       total: violations.length,
@@ -275,6 +308,7 @@ function invalidContract(contractPath: string, reason: string): VerifyResult {
     messages: [`Contract at ${contractPath} is malformed (${reason}). Run \`primitiv build\` to regenerate it.`],
     contract: {},
     conflicts: { total: 0, pending: 0 },
+    comparisonDiagnostics: EMPTY_COMPARISON_DIAGNOSTICS,
     drift: { isStale: false, changes: [] },
     violations: { total: 0, reported: [] },
     failedSources: []
@@ -294,11 +328,18 @@ async function detectDriftAndLintByRebuild(
   changes: string[]
   violations: Violation[]
   failedSources: Array<{ name: string; error?: string }>
+  comparisonDiagnostics: NonNullable<PrimitivContract["comparisonDiagnostics"]>
 }> {
   const fresh = await buildContract(configPath, { silent: true, cwd })
   const failedSources = collectFailedSources(fresh.sourceStatuses)
   const changes = diffContracts(committed, fresh, new Set(failedSources.map((f) => f.name)))
-  return { isStale: changes.length > 0, changes, violations: fresh.violations ?? [], failedSources }
+  return {
+    isStale: changes.length > 0,
+    changes,
+    violations: fresh.violations ?? [],
+    failedSources,
+    comparisonDiagnostics: canonicalComparisonDiagnostics(fresh.comparisonDiagnostics)
+  }
 }
 
 function collectFailedSources(
@@ -375,7 +416,80 @@ function diffContracts(committed: PrimitivContract, fresh: PrimitivContract, fai
     })
   )
 
+  if (!comparisonDiagnosticsEquivalent(committed.comparisonDiagnostics, fresh.comparisonDiagnostics)) {
+    changes.push("component comparison diagnostics changed")
+  }
+
   return changes
+}
+
+function comparisonDiagnosticsEquivalent(
+  left: PrimitivContract["comparisonDiagnostics"],
+  right: PrimitivContract["comparisonDiagnostics"]
+): boolean {
+  return JSON.stringify(canonicalComparisonDiagnostics(left)) === JSON.stringify(canonicalComparisonDiagnostics(right))
+}
+
+const COMPARISON_DIAGNOSTIC_REASONS = [
+  "ambiguous-identity",
+  "within-adapter-disagreement",
+  "incomplete-formal-evidence",
+  "unsupported-type-vocabulary",
+  "participant-bound-exceeded"
+] as const
+
+function canonicalComparisonDiagnostics(
+  diagnostics: PrimitivContract["comparisonDiagnostics"]
+): NonNullable<PrimitivContract["comparisonDiagnostics"]> {
+  if (!diagnostics || diagnostics.total === 0) return EMPTY_COMPARISON_DIAGNOSTICS
+  const byReason: NonNullable<PrimitivContract["comparisonDiagnostics"]>["byReason"] = {}
+  for (const reason of COMPARISON_DIAGNOSTIC_REASONS) {
+    const count = diagnostics.byReason[reason]
+    if (count !== undefined) byReason[reason] = count
+  }
+  const items = diagnostics.items
+    .map((item) => ({
+      type: item.type,
+      reason: item.reason,
+      ...(item.name === undefined ? {} : { name: item.name }),
+      ...(item.adapters === undefined ? {} : { adapters: [...item.adapters].sort(compareIds) }),
+      ...(item.componentIds === undefined ? {} : { componentIds: [...item.componentIds].sort(compareIds) }),
+      ...(item.fieldPath === undefined ? {} : { fieldPath: [...item.fieldPath] })
+    }))
+    .sort((a, b) => compareIds(JSON.stringify(a), JSON.stringify(b)))
+  return { total: diagnostics.total, truncated: diagnostics.truncated, byReason, items }
+}
+
+const COMPARISON_DIAGNOSTIC_MESSAGES: Record<
+  NonNullable<PrimitivContract["comparisonDiagnostics"]>["items"][number]["reason"],
+  string
+> = {
+  "ambiguous-identity": "Multiple components matched this identity.",
+  "within-adapter-disagreement": "The same source provided conflicting values.",
+  "incomplete-formal-evidence": "The declared prop information is incomplete.",
+  "unsupported-type-vocabulary": "The source’s prop type could not be mapped to a supported comparison type.",
+  "participant-bound-exceeded": "The comparison includes more components than the supported limit."
+}
+
+function formatComparisonDiagnostic(
+  diagnostic: NonNullable<PrimitivContract["comparisonDiagnostics"]>["items"][number]
+): string[] {
+  const identityParts: string[] = []
+  if (diagnostic.name) identityParts.push(safeDisplayText(diagnostic.name, 128))
+  if (diagnostic.fieldPath?.length) {
+    identityParts.push(diagnostic.fieldPath.map((segment) => safeDisplayText(segment, 128)).join("."))
+  }
+  const context: string[] = []
+  if (diagnostic.adapters?.length)
+    context.push(diagnostic.adapters.map((value) => safeDisplayText(value, 128)).join(", "))
+  if (diagnostic.componentIds?.length) {
+    context.push(diagnostic.componentIds.map((value) => safeDisplayText(value, 128)).join(", "))
+  }
+  const label = `${identityParts.join(" · ")}${context.length ? ` (${context.join("; ")})` : ""}`
+  return [
+    ...(label ? [safeDisplayText(`  ${label}`, 1_024)] : []),
+    safeDisplayText(`  Could not compare: ${COMPARISON_DIAGNOSTIC_MESSAGES[diagnostic.reason]}`, 1_024)
+  ]
 }
 
 interface ComponentPair {

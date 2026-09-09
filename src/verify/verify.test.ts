@@ -3,7 +3,7 @@ import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { buildContract } from "../index"
-import type { Conflict, PrimitivContract } from "../types"
+import type { ComparisonDiagnostics, Conflict, PrimitivContract } from "../types"
 import { emptyTokenMap } from "../types"
 import { verify } from "./verify"
 
@@ -76,6 +76,25 @@ function pendingConflict(name = "colors.primary"): Conflict {
     resolution: "pending",
     actionable: true,
     suggestedFix: `Set governance.sourceOfTruth or resolve ${name} manually.`
+  }
+}
+
+function comparisonDiagnostics(overrides: Partial<ComparisonDiagnostics> = {}): ComparisonDiagnostics {
+  return {
+    total: 1,
+    truncated: false,
+    byReason: { "unsupported-type-vocabulary": 1 },
+    items: [
+      {
+        type: "could-not-compare",
+        reason: "unsupported-type-vocabulary",
+        name: "Button",
+        adapters: ["figma"],
+        componentIds: ["figma:Button"],
+        fieldPath: ["props", "size", "values"]
+      }
+    ],
+    ...overrides
   }
 }
 
@@ -243,6 +262,203 @@ describe("verify", () => {
     const result = await verify(explicit, { cwd: "/" })
     expect(result.status).toBe("clean")
     expect(result.exitCode).toBe(0)
+  })
+})
+
+describe("verify — comparison diagnostics", () => {
+  test("default strict verification reports freshly rebuilt diagnostics and ignores canonical ordering", async () => {
+    const originalFetch = globalThis.fetch
+    fs.mkdirSync(path.join(tempDir, "admin"))
+    fs.mkdirSync(path.join(tempDir, "storefront"))
+    fs.writeFileSync(
+      path.join(tempDir, "admin/Button.tsx"),
+      `export function Button(_props: { size?: "sm" | "lg" }) { return <button /> }`
+    )
+    fs.writeFileSync(path.join(tempDir, "storefront/Button.tsx"), `export function Button() { return <button /> }`)
+    fs.writeFileSync(
+      path.join(tempDir, "Button.stories.tsx"),
+      `export default { title: "Button", args: { size: "sm" } }
+export const Primary = {}`
+    )
+    fs.writeFileSync(
+      path.join(tempDir, "primitiv.config.js"),
+      `module.exports = {
+  sources: {
+    codebase: { root: ".", patterns: ["**/*.tsx"], ignore: ["node_modules/**"] },
+    storybook: { url: "https://storybook.example.test", sourceRoot: "." }
+  },
+  governance: { sourceOfTruth: "codebase", onConflict: "warn" },
+  output: { path: "./primitiv.contract.json" }
+}`
+    )
+    globalThis.fetch = (async () =>
+      Response.json({
+        entries: {
+          button: {
+            type: "story",
+            id: "button--primary",
+            title: "Button",
+            name: "Primary",
+            importPath: "./Button.stories.tsx",
+            args: { size: "sm" }
+          }
+        }
+      })) as typeof fetch
+
+    try {
+      const committed = await buildContract(undefined, { cwd: tempDir, silent: true })
+      expect(committed.comparisonDiagnostics).toMatchObject({
+        total: 1,
+        byReason: { "ambiguous-identity": 1 }
+      })
+      const diagnostic = committed.comparisonDiagnostics?.items[0]
+      if (!diagnostic) throw new Error("Expected an ambiguous identity diagnostic")
+      diagnostic.adapters?.reverse()
+      diagnostic.componentIds?.reverse()
+      fs.writeFileSync(path.join(tempDir, "primitiv.contract.json"), JSON.stringify(committed, null, 2))
+
+      const result = await verify(undefined, { cwd: tempDir, strict: true, verbose: true })
+
+      expect(result.status).toBe("clean")
+      expect(result.exitCode).toBe(0)
+      expect(result.drift.changes).toEqual([])
+      expect(result.comparisonDiagnostics.total).toBe(1)
+      expect(result.messages).toContain("Could not complete 1 component comparison.")
+      expect(result.messages).toContain("  Could not compare: Multiple components matched this identity.")
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("--fast returns saved diagnostics without changing clean status or exit policy", async () => {
+    writeConfig(tempDir)
+    const diagnostics = comparisonDiagnostics()
+    writeContract(tempDir, { comparisonDiagnostics: diagnostics })
+
+    const result = await verify(undefined, { cwd: tempDir, fast: true, strict: true, json: true })
+
+    expect(result.status).toBe("clean")
+    expect(result.exitCode).toBe(0)
+    expect(result.comparisonDiagnostics).toEqual(diagnostics)
+    expect(result.conflicts).toEqual({ total: 0, pending: 0 })
+    expect(result.messages).toContain("Could not complete 1 component comparison. Run with --verbose for details.")
+    expect(result.messages.some((message) => message.includes("Figma’s variant values"))).toBe(false)
+  })
+
+  test("--verbose renders field-specific reasons and bounded truncation context", async () => {
+    writeConfig(tempDir)
+    writeContract(tempDir, {
+      comparisonDiagnostics: comparisonDiagnostics({
+        total: 124,
+        truncated: true,
+        byReason: { "unsupported-type-vocabulary": 124 },
+        items: [
+          {
+            type: "could-not-compare",
+            reason: "unsupported-type-vocabulary",
+            name: "Button",
+            adapters: ["figma"],
+            componentIds: ["figma:Button"],
+            fieldPath: ["props", "size", "values"]
+          }
+        ]
+      })
+    })
+
+    const result = await verify(undefined, { cwd: tempDir, fast: true, verbose: true })
+    const rendered = result.messages.join("\n")
+
+    expect(rendered).toContain("Could not complete 124 component comparisons")
+    expect(rendered).toContain("props.size.values")
+    expect(rendered).toContain("The source’s prop type could not be mapped to a supported comparison type.")
+    expect(rendered).toContain("Showing 1 of 124 comparison diagnostics.")
+  })
+
+  test("legacy contracts expose an empty diagnostic result in --fast mode", async () => {
+    writeConfig(tempDir)
+    writeContract(tempDir)
+
+    const result = await verify(undefined, { cwd: tempDir, fast: true })
+
+    expect(result.comparisonDiagnostics).toEqual({ total: 0, truncated: false, byReason: {}, items: [] })
+    expect(result.messages.some((message) => message.includes("Could not complete"))).toBe(false)
+  })
+
+  test("treats an explicit empty collection as equivalent to an omitted fresh collection", async () => {
+    writeConfig(tempDir)
+    writeContract(tempDir, {
+      comparisonDiagnostics: { total: 0, truncated: false, byReason: {}, items: [] }
+    })
+
+    const result = await verify(undefined, { cwd: tempDir })
+
+    expect(result.status).toBe("clean")
+    expect(result.drift.changes).toEqual([])
+    expect(result.comparisonDiagnostics).toEqual({ total: 0, truncated: false, byReason: {}, items: [] })
+  })
+
+  test("--verbose explains every supported reason, including identity diagnostics without a field", async () => {
+    writeConfig(tempDir)
+    writeContract(tempDir, {
+      comparisonDiagnostics: {
+        total: 5,
+        truncated: false,
+        byReason: {
+          "ambiguous-identity": 1,
+          "within-adapter-disagreement": 1,
+          "incomplete-formal-evidence": 1,
+          "unsupported-type-vocabulary": 1,
+          "participant-bound-exceeded": 1
+        },
+        items: [
+          { type: "could-not-compare", reason: "ambiguous-identity", name: "Button" },
+          { type: "could-not-compare", reason: "within-adapter-disagreement", name: "Button" },
+          { type: "could-not-compare", reason: "incomplete-formal-evidence", name: "Button" },
+          { type: "could-not-compare", reason: "unsupported-type-vocabulary", name: "Button" },
+          { type: "could-not-compare", reason: "participant-bound-exceeded", name: "Button" }
+        ]
+      }
+    })
+
+    const rendered = (await verify(undefined, { cwd: tempDir, fast: true, verbose: true })).messages.join("\n")
+
+    expect(rendered).toContain("Multiple components matched this identity.")
+    expect(rendered).toContain("The same source provided conflicting values.")
+    expect(rendered).toContain("The declared prop information is incomplete.")
+    expect(rendered).toContain("The source’s prop type could not be mapped to a supported comparison type.")
+    expect(rendered).toContain("The comparison includes more components than the supported limit.")
+    expect(rendered).not.toContain("Run with --verbose")
+  })
+
+  test("default verification uses fresh diagnostics and treats a changed collection as contract drift", async () => {
+    writeConfig(tempDir)
+    writeContract(tempDir, { comparisonDiagnostics: comparisonDiagnostics() })
+
+    const result = await verify(undefined, { cwd: tempDir })
+
+    expect(result.status).toBe("stale")
+    expect(result.exitCode).toBe(1)
+    expect(result.comparisonDiagnostics).toEqual({ total: 0, truncated: false, byReason: {}, items: [] })
+    expect(result.drift.changes).toContain("component comparison diagnostics changed")
+    expect(result.messages.some((message) => message.includes("Could not complete"))).toBe(false)
+  })
+
+  test.each([false, true])("rejects inconsistent diagnostic counters before %s-mode rendering", async (fast) => {
+    writeConfig(tempDir)
+    const contract = rawContract(tempDir)
+    contract.comparisonDiagnostics = {
+      total: 2,
+      truncated: false,
+      byReason: { "ambiguous-identity": 1 },
+      items: [{ type: "could-not-compare", reason: "ambiguous-identity", name: "Button" }]
+    }
+    writeRawContract(tempDir, contract)
+
+    const result = await verify(undefined, { cwd: tempDir, fast })
+
+    expect(result.status).toBe("invalid-contract")
+    expect(result.exitCode).toBe(3)
+    expect(result.messages.join("\n")).toContain("comparisonDiagnostics")
   })
 })
 

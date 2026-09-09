@@ -31,7 +31,8 @@ async function main() {
       const strict = process.argv.includes("--strict")
       const json = process.argv.includes("--json")
       const fast = process.argv.includes("--fast")
-      const result = await verify(arg, { strict, json, fast })
+      const verbose = process.argv.includes("--verbose")
+      const result = await verify(arg, { strict, json, fast, verbose })
       if (json) {
         console.log(JSON.stringify(result, null, 2))
       } else {
@@ -55,12 +56,13 @@ Options:
   primitiv init   [dir]    Target directory (default: current directory)
   primitiv build  [config] Path to config file (default: primitiv.config.js)
   primitiv serve  [config] Path to config file (default: primitiv.config.js)
-  primitiv verify [config] [--strict] [--json] [--fast]
+  primitiv verify [config] [--strict] [--json] [--fast] [--verbose]
                            --strict: escalate pending conflicts / stale contract / token
                                      misuses / failed source scans to hard failure (exit 2)
                            --json:   emit a machine-readable report instead of text
                            --fast:   skip the rebuild-and-compare step; use file mtimes
                                      instead. Faster but unreliable in CI / fresh clones.
+                           --verbose: show details for incomplete component comparisons
 
 Exit codes for verify:
   0  no blocking findings — includes pending conflicts allowed by governance.onConflict

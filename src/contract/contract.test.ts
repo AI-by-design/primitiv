@@ -3,7 +3,7 @@ import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import type { Component, ComponentMap, PrimitivConfig, PrimitivContract } from "../types"
-import { emptyTokenMap, TOKEN_CATEGORIES } from "../types"
+import { emptyTokenMap, primitivContractSchema, TOKEN_CATEGORIES } from "../types"
 import { ContractBuilder } from "./contract"
 
 function config(
@@ -242,7 +242,7 @@ describe("component merge (path-qualified identity)", () => {
     expect(message).not.toContain(unsafeId)
   })
 
-  test("generated contracts fail visibly when a conflict exceeds the durable participant ceiling", () => {
+  test("generated contracts retain a diagnostic when a conflict exceeds the durable participant ceiling", () => {
     const codebaseComponents = Object.fromEntries(
       Array.from({ length: 10_000 }, (_, index) => {
         const id = `components/${String(index).padStart(5, "0")}/Button`
@@ -256,22 +256,71 @@ describe("component merge (path-qualified identity)", () => {
       })
     ) as ComponentMap
 
-    expect(() =>
-      buildWith([
-        { name: "codebase", components: codebaseComponents },
-        {
-          name: "figma",
-          components: {
-            "figma:button": {
-              name: "Button",
-              displayName: "Button",
-              source: { adapter: "figma" },
-              props: { size: { default: "lg" } }
-            }
+    const contract = buildWith([
+      { name: "codebase", components: codebaseComponents },
+      {
+        name: "figma",
+        components: {
+          "figma:button": {
+            name: "Button",
+            displayName: "Button",
+            source: { adapter: "figma" },
+            props: { size: { default: "lg" } }
           }
         }
-      ])
-    ).toThrow("Generated contract rejected unsafe or oversized machine identifiers")
+      }
+    ])
+
+    expect(contract.conflicts).toEqual([])
+    expect(contract.comparisonDiagnostics).toEqual({
+      total: 1,
+      truncated: false,
+      byReason: { "participant-bound-exceeded": 1 },
+      items: [
+        {
+          type: "could-not-compare",
+          reason: "participant-bound-exceeded",
+          name: "Button",
+          adapters: ["codebase", "figma"],
+          fieldPath: ["props", "size", "default"]
+        }
+      ]
+    })
+  })
+
+  test("validates diagnostic bounds, counts, and strict retained items", () => {
+    const base = buildWith([])
+    expect(
+      primitivContractSchema.safeParse({
+        ...base,
+        comparisonDiagnostics: { total: 0, truncated: false, byReason: {}, items: [] }
+      }).success
+    ).toBe(true)
+
+    const diagnostic = {
+      type: "could-not-compare",
+      reason: "ambiguous-identity",
+      componentIds: ["code/Button"],
+      fieldPath: ["props", "size"]
+    }
+    for (const comparisonDiagnostics of [
+      { total: 2, truncated: false, byReason: { "ambiguous-identity": 1 }, items: [diagnostic] },
+      { total: 1, truncated: true, byReason: { "ambiguous-identity": 1 }, items: [diagnostic] },
+      {
+        total: 1,
+        truncated: false,
+        byReason: { "ambiguous-identity": 1 },
+        items: [{ ...diagnostic, rawValue: "do not retain" }]
+      },
+      {
+        total: 1,
+        truncated: false,
+        byReason: { "ambiguous-identity": 1 },
+        items: [{ ...diagnostic, fieldPath: ["props\nunsafe"] }]
+      }
+    ]) {
+      expect(primitivContractSchema.safeParse({ ...base, comparisonDiagnostics }).success).toBe(false)
+    }
   })
 
   test("the write boundary rejects a newly unsafe nested ID before replacing the output", () => {

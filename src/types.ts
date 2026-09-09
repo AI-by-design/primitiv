@@ -41,6 +41,29 @@ export interface PrimitivConfig {
 
 export type SourceAdapter = "codebase" | "figma" | "storybook"
 
+export type ComparisonDiagnosticReason =
+  | "ambiguous-identity"
+  | "within-adapter-disagreement"
+  | "incomplete-formal-evidence"
+  | "unsupported-type-vocabulary"
+  | "participant-bound-exceeded"
+
+export interface ComparisonDiagnostic {
+  type: "could-not-compare"
+  reason: ComparisonDiagnosticReason
+  name?: string
+  adapters?: SourceAdapter[]
+  componentIds?: string[]
+  fieldPath?: string[]
+}
+
+export interface ComparisonDiagnostics {
+  total: number
+  truncated: boolean
+  byReason: Partial<Record<ComparisonDiagnosticReason, number>>
+  items: ComparisonDiagnostic[]
+}
+
 export interface ComponentMapping {
   codebase?: string
   figma?: string
@@ -149,6 +172,9 @@ export interface PrimitivContract {
   violations?: Violation[]
   // Optional so pre-2.2 contracts load. Keyed "codebase" | "figma" | "storybook".
   sourceStatuses?: Record<string, SourceStatus>
+  // Bounded reasons reconciliation could not make a comparison claim. Optional
+  // so legacy contracts remain valid; omitted when there are no diagnostics.
+  comparisonDiagnostics?: ComparisonDiagnostics
 }
 
 export interface TokenMap {
@@ -337,6 +363,10 @@ export interface PropDefinition {
     type: "component" | "component-set"
     key: string
   }>
+  // Explicit source markers for formal fields that were present upstream but
+  // could not be represented safely in the retained contract.
+  incompleteFields?: Array<"values">
+  unsupportedFields?: Array<"type">
 }
 
 export interface Conflict {
@@ -447,6 +477,7 @@ const machineIdentifierSchema = z
   .refine((value) => isSafeNonEmptyIdentifier(value), {
     message: "must not contain control or bidirectional formatting code points"
   })
+const sourceAdapterBoundarySchema = z.enum(["codebase", "figma", "storybook"])
 
 export const primitivConfigSchema = z.looseObject({
   sources: z.looseObject({
@@ -511,7 +542,99 @@ export const primitivContractSchema = z
     sources: z.array(z.string()),
     tokens: z.record(z.string(), z.unknown()),
     components: z.record(z.string(), z.unknown()),
-    conflicts: z.array(z.unknown())
+    conflicts: z.array(z.unknown()),
+    comparisonDiagnostics: z
+      .strictObject({
+        total: z.number().int().nonnegative(),
+        truncated: z.boolean(),
+        byReason: z.partialRecord(
+          z.enum([
+            "ambiguous-identity",
+            "within-adapter-disagreement",
+            "incomplete-formal-evidence",
+            "unsupported-type-vocabulary",
+            "participant-bound-exceeded"
+          ]),
+          z.number().int().positive()
+        ),
+        items: z
+          .array(
+            z.strictObject({
+              type: z.literal("could-not-compare"),
+              reason: z.enum([
+                "ambiguous-identity",
+                "within-adapter-disagreement",
+                "incomplete-formal-evidence",
+                "unsupported-type-vocabulary",
+                "participant-bound-exceeded"
+              ]),
+              name: machineIdentifierSchema.optional(),
+              adapters: z
+                .array(sourceAdapterBoundarySchema)
+                .min(1)
+                .max(3)
+                .refine((adapters) => new Set(adapters).size === adapters.length, {
+                  message: "must not contain duplicate adapters"
+                })
+                .optional(),
+              componentIds: z
+                .array(machineIdentifierSchema)
+                .min(1)
+                .max(MAX_CONFLICT_COMPONENT_IDS)
+                .refine((ids) => isWithinDurableParticipantBounds(ids), {
+                  message: `must contain at most ${MAX_CONFLICT_COMPONENT_ID_BYTES} UTF-8 bytes of ID text`
+                })
+                .refine((ids) => new Set(ids).size === ids.length, {
+                  message: "must not contain duplicate component IDs"
+                })
+                .optional(),
+              fieldPath: z.array(machineIdentifierSchema).min(1).max(MAX_IDENTIFIER_PATH_SEGMENTS).optional()
+            })
+          )
+          .max(100)
+      })
+      .superRefine((diagnostics, context) => {
+        const reasonTotal = Object.values(diagnostics.byReason).reduce((sum, count) => sum + count, 0)
+        if (reasonTotal !== diagnostics.total) {
+          context.addIssue({ code: "custom", path: ["byReason"], message: "reason counts must sum to total" })
+        }
+        if (diagnostics.items.length > diagnostics.total) {
+          context.addIssue({ code: "custom", path: ["items"], message: "cannot contain more items than total" })
+        }
+        if (diagnostics.truncated !== diagnostics.items.length < diagnostics.total) {
+          context.addIssue({
+            code: "custom",
+            path: ["truncated"],
+            message: "must match whether retained items are fewer than total"
+          })
+        }
+        const retainedCounts: Partial<Record<ComparisonDiagnosticReason, number>> = {}
+        const keys = new Set<string>()
+        for (const [index, item] of diagnostics.items.entries()) {
+          retainedCounts[item.reason] = (retainedCounts[item.reason] ?? 0) + 1
+          const key = JSON.stringify([
+            item.reason,
+            [...(item.adapters ?? [])].sort(),
+            [...(item.componentIds ?? [])].sort(),
+            item.componentIds === undefined ? (item.name ?? "") : "",
+            item.fieldPath ?? []
+          ])
+          if (keys.has(key)) {
+            context.addIssue({ code: "custom", path: ["items", index], message: "must not duplicate a diagnostic" })
+          }
+          keys.add(key)
+        }
+        for (const reason of Object.keys(retainedCounts) as ComparisonDiagnosticReason[]) {
+          if ((retainedCounts[reason] ?? 0) > (diagnostics.byReason[reason] ?? 0)) {
+            context.addIssue({
+              code: "custom",
+              path: ["byReason", reason],
+              message: "cannot be less than retained items"
+            })
+          }
+        }
+      })
+      .optional()
   })
   .superRefine((contract, context) => {
     for (const issue of contractIdentifierBoundaryIssues(contract)) {
