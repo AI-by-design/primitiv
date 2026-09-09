@@ -39,6 +39,8 @@ See the [Primitiv documentation](https://primitiv.design/docs) for installation,
 - Provide read-only access from MCP-compatible agents and editors
 - Verify that the contract stays current in CI
 
+Primitiv also checks local JSX usage against each codebase component's complete finite prop domains. Known out-of-domain values produce a pending `within-source` conflict, even under `auto-resolve`. Align the JSX usage or widen the declared domain to resolve it. `warn` reports these conflicts without blocking; `error` and `verify --strict` exit with code 2. Dynamic values and incomplete domains remain unknown.
+
 When component evidence cannot be compared, `primitiv verify` reports a short diagnostic summary. Use `primitiv verify --verbose` for the reasons, or `--json` for a structured report. Diagnostics explain uncertainty and do not count as conflicts or directly fail verification; changes to them can still make the saved contract stale. `--fast` reports saved diagnostics instead of rebuilding them.
 
 Agents can read diagnostic counts in the MCP summary and paginated details through `get_design_context` with `category: "diagnostics"`.
