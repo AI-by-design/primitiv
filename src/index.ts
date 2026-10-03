@@ -3,7 +3,7 @@ import * as path from "node:path"
 import { ContractBuilder } from "./contract"
 import { lintTokenMisuse } from "./lint"
 import { PrimitivMCPServer } from "./mcp"
-import { applyRationale, loadRationale } from "./rationale"
+import { applyRationale, loadRationaleLayers } from "./rationale"
 import { safeDisplayText } from "./safe-display"
 import { CodebaseScanner } from "./scanner"
 import { FigmaAdapter } from "./sources/figma"
@@ -195,11 +195,13 @@ export async function buildContract(
     )
   }
 
-  const rationale = loadRationale(config, projectRoot)
-  const rationaleWarnings = applyRationale(contract.tokens, contract.components, rationale)
+  const rationaleLayers = loadRationaleLayers(config, projectRoot)
+  const rationaleWarnings = new Set(
+    rationaleLayers.flatMap((layer) => applyRationale(contract.tokens, contract.components, layer))
+  )
   for (const warning of rationaleWarnings) log(`   ⚠ ${warning}`)
-  const rationaleTokenCount = Object.keys(rationale.tokens ?? {}).length
-  const rationaleComponentCount = Object.keys(rationale.components ?? {}).length
+  const rationaleTokenCount = new Set(rationaleLayers.flatMap((layer) => Object.keys(layer.tokens ?? {}))).size
+  const rationaleComponentCount = new Set(rationaleLayers.flatMap((layer) => Object.keys(layer.components ?? {}))).size
   if (rationaleTokenCount > 0 || rationaleComponentCount > 0) {
     log(`\n📝 Rationale: ${rationaleTokenCount} tokens, ${rationaleComponentCount} components`)
   }
