@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.19.1](https://github.com/AI-by-design/primitiv/compare/v2.19.0...v2.19.1) (2026-10-03)
+
+
+### Bug Fixes
+
+* preserve rationale precedence after component binding ([#147](https://github.com/AI-by-design/primitiv/issues/147)) ([f96079c](https://github.com/AI-by-design/primitiv/commit/f96079ca27271cf112870e48ff687a57547a2db0))
+
 ## [2.19.0](https://github.com/AI-by-design/primitiv/compare/v2.18.0...v2.19.0) (2026-09-09)
 
 
