@@ -1,1 +1,1 @@
-export { applyRationale, loadRationale } from "./rationale"
+export { applyRationale, loadRationale, loadRationaleLayers } from "./rationale"

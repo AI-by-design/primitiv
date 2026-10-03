@@ -711,3 +711,64 @@ describe("package root export surface — token category vocabulary", () => {
     expect(Object.keys(map)).toEqual([...TOKEN_CATEGORIES])
   })
 })
+
+describe("buildContract — rationale binding", () => {
+  for (const inlineKey of ["ui/Card", "Card"]) {
+    for (const reverse of [false, true]) {
+      test(`inline ${inlineKey} wins across aliases with sidecar order reversed=${reverse}`, async () => {
+        fs.mkdirSync(path.join(tempDir, "ui"))
+        fs.writeFileSync(path.join(tempDir, "ui/Card.tsx"), "export function Card() { return <div /> }")
+        const keys = reverse ? ["Card", "ui/Card"] : ["ui/Card", "Card"]
+        const sidecar = Object.fromEntries(keys.map((key) => [key, { why: `sidecar ${key}`, when: "sidecar only" }]))
+        fs.writeFileSync(path.join(tempDir, "primitiv.rationale.yml"), JSON.stringify({ components: sidecar }))
+        writeConfig(`module.exports = {
+          sources: { codebase: { root: ".", patterns: ["**/*.tsx"], ignore: [] } },
+          governance: { sourceOfTruth: "codebase", onConflict: "warn" },
+          output: { path: "./primitiv.contract.json" },
+          rationale: { inline: { components: { ${JSON.stringify(inlineKey)}: { why: "inline" } } } }
+        }`)
+
+        const contract = await buildContract(undefined, { cwd: tempDir, silent: true })
+
+        expect(contract.components["ui/Card"].rationale).toEqual({ why: "inline" })
+        expect(contract.components["ui/Card"].source).toMatchObject({ adapter: "codebase", file: "ui/Card.tsx" })
+        expect(primitivContractSchema.safeParse(contract).success).toBe(true)
+        const rebuilt = await buildContract(undefined, { cwd: tempDir, silent: true })
+        expect(rebuilt.components).toEqual(contract.components)
+      })
+    }
+  }
+
+  test("special display names survive source scanning and rationale application", async () => {
+    const originalFetch = globalThis.fetch
+    const entries = Object.fromEntries(
+      ["constructor", "__proto__", "toString"].map((title, index) => [
+        `special-${index}--default`,
+        { id: `special-${index}--default`, title, name: "Default", type: "story" }
+      ])
+    )
+    globalThis.fetch = (async () => new Response(JSON.stringify({ v: 5, entries }))) as typeof fetch
+    try {
+      fs.writeFileSync(
+        path.join(tempDir, "primitiv.rationale.yml"),
+        JSON.stringify({ components: { constructor: { why: "constructor guidance" } } })
+      )
+      writeConfig(`module.exports = {
+        sources: { storybook: { url: "http://storybook.test" } },
+        governance: { sourceOfTruth: "storybook", onConflict: "warn" },
+        output: { path: "./primitiv.contract.json" }
+      }`)
+
+      const contract = await buildContract(undefined, { cwd: tempDir, silent: true })
+
+      expect(
+        Object.values(contract.components)
+          .map((component) => component.name)
+          .sort()
+      ).toEqual(["__proto__", "constructor", "toString"])
+      expect(contract.components["storybook:constructor"].rationale).toEqual({ why: "constructor guidance" })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+})
