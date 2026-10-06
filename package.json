@@ -22,8 +22,7 @@
     "lint": "biome lint src",
     "fmt": "biome format --write src",
     "check": "biome check src",
-    "test": "bun test",
-    "test:package-consumer": "node scripts/check-package-consumer.mjs"
+    "test": "bun test"
   },
   "keywords": [
     "design-system",

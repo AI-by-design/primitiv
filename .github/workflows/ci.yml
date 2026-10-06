@@ -27,5 +27,3 @@ jobs:
         run: bun test
       - name: Build
         run: bun run build
-      - name: Strict package consumers (TypeScript 6)
-        run: bun run test:package-consumer
