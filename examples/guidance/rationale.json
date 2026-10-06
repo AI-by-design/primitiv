@@ -1,0 +1,14 @@
+{
+  "tokens": { "colors.focus": { "why": "Keeps keyboard focus visible." } },
+  "components": {
+    "components/ui/SearchField": {
+      "classification": { "atomicLevel": "molecule", "intents": ["input", "navigation"] },
+      "description": "A search input with a clear action.",
+      "when": "Use for a searchable list already on the page.",
+      "avoidWhen": [{ "condition": "The query needs several independent filters.", "alternative": { "componentId": "components/search/FilterPanel" } }],
+      "pairsWith": [{ "description": "Announce the result count after a search.", "component": { "componentId": "components/ui/ResultCount" } }],
+      "examples": ["<SearchField value={query} onChange={setQuery} />"]
+    },
+    "components/providers/SearchProvider": {}
+  }
+}

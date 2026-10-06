@@ -9,6 +9,7 @@
   "files": [
     "dist/",
     "skills/",
+    "examples/guidance/",
     "README.md",
     "LICENSE",
     "NOTICE"
@@ -21,7 +22,8 @@
     "lint": "biome lint src",
     "fmt": "biome format --write src",
     "check": "biome check src",
-    "test": "bun test"
+    "test": "bun test",
+    "test:package-consumer": "node scripts/check-package-consumer.mjs"
   },
   "keywords": [
     "design-system",

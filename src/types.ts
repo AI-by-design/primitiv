@@ -1,5 +1,22 @@
-import type * as t from "@babel/types"
+// Babel 8 is ESM; preserve import resolution in our CommonJS declarations.
+// biome-ignore syntax/correctness/noTypeOnlyImportAttributes: TypeScript permits resolution-mode on type imports.
+import type * as t from "@babel/types" with { "resolution-mode": "import" }
 import { z } from "zod"
+import type {
+  atomicLevelSchema,
+  avoidanceGuidanceSchema,
+  componentAnnotationSchema,
+  componentClassificationSchema,
+  componentIntentSchema,
+  componentRationaleSchema,
+  componentReferenceSchema,
+  guidanceDiagnosticCodeSchema,
+  guidanceDiagnosticSchema,
+  guidanceHealthSchema,
+  guidanceOriginSchema,
+  guidanceSourceStateSchema,
+  pairingGuidanceSchema
+} from "./rationale/schema"
 import {
   DEFAULT_MAX_IDENTIFIER_CHARS,
   isSafeIdentifierPath,
@@ -9,6 +26,28 @@ import {
   MAX_CONFLICT_COMPONENT_IDS,
   MAX_IDENTIFIER_PATH_SEGMENTS
 } from "./safe-identifier"
+
+export type AtomicLevel = z.infer<typeof atomicLevelSchema>
+export type ComponentIntent = z.infer<typeof componentIntentSchema>
+export interface ComponentClassification extends z.infer<typeof componentClassificationSchema> {}
+export interface ComponentReference extends z.infer<typeof componentReferenceSchema> {}
+export interface AvoidanceGuidance extends z.infer<typeof avoidanceGuidanceSchema> {}
+export interface PairingGuidance extends z.infer<typeof pairingGuidanceSchema> {}
+export interface ComponentRationale extends Rationale, z.infer<typeof componentRationaleSchema> {}
+export interface ComponentAnnotation extends ComponentRationale, z.infer<typeof componentAnnotationSchema> {}
+export type GuidanceDiagnosticCode = z.infer<typeof guidanceDiagnosticCodeSchema>
+export interface GuidanceOrigin extends z.infer<typeof guidanceOriginSchema> {}
+export interface GuidanceSourceState extends z.infer<typeof guidanceSourceStateSchema> {}
+export interface GuidanceDiagnostic extends z.infer<typeof guidanceDiagnosticSchema> {}
+export interface GuidanceHealth extends z.infer<typeof guidanceHealthSchema> {}
+export interface GuidanceValidationNotice {
+  code: "unknown-field" | "duplicate-intent" | "invalid-field" | "size-limit"
+  fieldPath: (string | number)[]
+  message: string
+}
+export type GuidanceValidationResult<T> =
+  | { success: true; data: T; warnings: GuidanceValidationNotice[] }
+  | { success: false; issues: GuidanceValidationNotice[]; warnings: GuidanceValidationNotice[] }
 
 // Core types for Primitiv
 
@@ -82,8 +121,8 @@ export interface Rationale {
 export interface RationaleMap {
   // Keys are dotted token paths: "colors.primary", "spacing.sm".
   tokens?: Record<string, Rationale>
-  // Keys are component names as they appear in the contract.
-  components?: Record<string, Rationale>
+  // Keys are exact component IDs or uniquely binding display names.
+  components?: Record<string, ComponentAnnotation>
 }
 
 export interface CodebaseSource {
@@ -172,6 +211,8 @@ export interface PrimitivContract {
   violations?: Violation[]
   // Optional so pre-2.2 contracts load. Keyed "codebase" | "figma" | "storybook".
   sourceStatuses?: Record<string, SourceStatus>
+  // Optional generated guidance evidence. Absence means unknown health, not healthy absence.
+  guidanceHealth?: GuidanceHealth
   // Bounded reasons reconciliation could not make a comparison claim. Optional
   // so legacy contracts remain valid; omitted when there are no diagnostics.
   comparisonDiagnostics?: ComparisonDiagnostics
@@ -349,7 +390,9 @@ export interface Component {
     // Sorted prop names whose distinct observed values exceeded the retained bound.
     truncatedProps?: string[]
   }
-  rationale?: Rationale
+  classification?: ComponentClassification
+  rationale?: ComponentRationale
+  guidanceOrigin?: GuidanceOrigin
   [key: string]: unknown
 }
 
