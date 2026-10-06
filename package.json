@@ -9,6 +9,7 @@
   "files": [
     "dist/",
     "skills/",
+    "examples/guidance/",
     "README.md",
     "LICENSE",
     "NOTICE"
