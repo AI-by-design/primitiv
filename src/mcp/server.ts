@@ -5,7 +5,28 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
+import {
+  type ApiFacts,
+  apiFactsSchema,
+  propDefinitionSchema,
+  type RelationshipFacts,
+  relationshipFactsSchema,
+  type UsageFacts,
+  usageFactsSchema
+} from "../component-evidence"
 import { compareConflictsCanonical } from "../conflict-order"
+import {
+  componentContextRequestSchema,
+  componentQuerySchema,
+  createDiscoveryIndex,
+  type DiscoveryEnvelope,
+  type DiscoveryIndex,
+  type DiscoveryReloadState,
+  findComponents,
+  getComponentCatalog,
+  getComponentContext,
+  importDiscoveryContract
+} from "../discovery"
 import { normalizeRuleCategory, RULE_CATEGORIES } from "../inferrer"
 import { safeDisplayText } from "../safe-display"
 import {
@@ -16,12 +37,17 @@ import {
   MAX_IDENTIFIER_PATH_SEGMENTS
 } from "../safe-identifier"
 import type { Component, LintCategory, PrimitivContract, Rationale, TokenCategory } from "../types"
-import { LINT_CATEGORIES, primitivContractSchema, summarizeValidationIssues, TOKEN_CATEGORIES } from "../types"
+import { LINT_CATEGORIES, summarizeValidationIssues, TOKEN_CATEGORIES } from "../types"
 
 export class PrimitivMCPServer {
   private server: McpServer
   private contract: PrimitivContract | null = null
+  private discoveryIndex: DiscoveryIndex | null = null
+  private reload: DiscoveryReloadState = { state: "reload-failed", stale: false }
   private watcher: fs.FSWatcher | null = null
+  private reloadTimer: ReturnType<typeof setTimeout> | null = null
+  private pollingTimer: ReturnType<typeof setInterval> | null = null
+  private pollSignature: string | undefined
   private derivedNameIndex: Record<string, string[]> | null = null
   private derivedUsedByIndex: Record<string, Record<string, number>> | null = null
   private validatedRelationshipFacts: Record<string, RelationshipFacts> = Object.create(null)
@@ -43,33 +69,29 @@ export class PrimitivMCPServer {
   }
 
   async stop(): Promise<void> {
+    if (this.reloadTimer) clearTimeout(this.reloadTimer)
+    if (this.pollingTimer) clearInterval(this.pollingTimer)
     this.watcher?.close()
     await this.server.close()
   }
 
   private loadContract(): void {
-    if (!fs.existsSync(this.contractPath)) return
     try {
       const raw = fs.readFileSync(this.contractPath, "utf-8")
       const parsed: unknown = JSON.parse(raw)
-      const result = primitivContractSchema.safeParse(parsed)
-      if (!result.success) {
-        // Structurally invalid (e.g. truncated mid-rebuild). Keep any previously
-        // loaded good contract rather than dropping it — a transient bad write
-        // shouldn't take a running server's data offline.
-        process.stderr.write(
-          `primitiv: ignoring malformed contract at ${this.contractPath} (${summarizeValidationIssues(result.error)}). Run \`primitiv build\` to regenerate.\n`
-        )
-        return
-      }
-      this.contract = parsed as PrimitivContract
+      // All eager validation, derivation and immutable copying completes before any loaded state changes.
+      const replacement = createDiscoveryIndex(importDiscoveryContract(parsed))
+      this.contract = replacement.contract as PrimitivContract
+      this.discoveryIndex = replacement
+      this.reload = { state: "ready", stale: false }
       this.derivedNameIndex = null
       this.derivedUsedByIndex = null
       this.validatedRelationshipFacts = Object.create(null)
       this.warnIfMismatched()
     } catch {
+      this.reload = { state: "reload-failed", stale: this.discoveryIndex !== null }
       process.stderr.write(
-        `primitiv: failed to parse contract at ${this.contractPath} (invalid JSON). Run \`primitiv build\` to regenerate.\n`
+        `primitiv: could not load a valid contract at ${this.contractPath}. Run \`primitiv build\` to regenerate.\n`
       )
     }
   }
@@ -128,6 +150,7 @@ export class PrimitivMCPServer {
   private getContractWarnings(): string[] {
     const warnings: string[] = []
     if (!this.contract) return warnings
+    if (this.reload.stale) warnings.push("RELOAD FAILED: serving the last valid contract. Rebuild to recover.")
 
     // Use npx in warning messages — it's the universal fallback every node user has.
     // The user's actual MCP command (chosen at init time) may be bunx/pnpm dlx/yarn dlx,
@@ -170,19 +193,29 @@ export class PrimitivMCPServer {
   private watchContract(): void {
     const contractDir = path.dirname(this.contractPath)
     const contractFile = path.basename(this.contractPath)
-    let debounce: ReturnType<typeof setTimeout> | null = null
 
     try {
       this.watcher = fs.watch(contractDir, { persistent: false }, (_, filename) => {
-        if (filename !== contractFile) return
-        if (debounce) clearTimeout(debounce)
-        debounce = setTimeout(() => this.loadContract(), 50)
+        if (filename !== null && filename !== contractFile) return
+        if (this.reloadTimer) clearTimeout(this.reloadTimer)
+        this.reloadTimer = setTimeout(() => {
+          this.reloadTimer = null
+          this.loadContract()
+        }, 50)
+      })
+      this.watcher.on("error", () => {
+        process.stderr.write(`primitiv: contract watcher failed; checking for changes by polling\n`)
+        this.startPolling()
       })
     } catch {
       process.stderr.write(`primitiv: could not watch ${contractDir} for contract changes\n`)
+      this.startPolling()
     }
 
-    const cleanup = () => this.watcher?.close()
+    const cleanup = () => {
+      this.watcher?.close()
+      if (this.pollingTimer) clearInterval(this.pollingTimer)
+    }
     process.on("exit", cleanup)
     process.on("SIGINT", () => {
       cleanup()
@@ -192,6 +225,26 @@ export class PrimitivMCPServer {
       cleanup()
       process.exit()
     })
+  }
+
+  private startPolling(): void {
+    this.watcher?.close()
+    this.watcher = null
+    this.reload = { state: "reload-failed", stale: this.discoveryIndex !== null }
+    if (this.pollingTimer) return
+    this.pollingTimer = setInterval(() => {
+      let signature = "missing"
+      try {
+        const stat = fs.statSync(this.contractPath)
+        signature = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`
+      } catch {
+        // A missing/unreadable replacement must reach the same reload-failure path as a watcher event.
+      }
+      if (signature === this.pollSignature) return
+      this.pollSignature = signature
+      this.loadContract()
+    }, 250)
+    this.pollingTimer.unref()
   }
 
   private text(t: string) {
@@ -269,6 +322,46 @@ export class PrimitivMCPServer {
   }
 
   private registerTools(): void {
+    this.server.registerTool(
+      "get_component_catalog",
+      {
+        description:
+          "Inspect component counts, classification coverage, supported discovery filters, source/guidance health, and the loaded snapshot. Read-only. No full name inventory.",
+        annotations: { readOnlyHint: true },
+        inputSchema: z.looseObject({})
+      },
+      async (args) => {
+        if (!this.discoveryIndex) return this.discoveryError("contract-unavailable")
+        if (Object.keys(args).length > 0) return this.discoveryError("invalid-query")
+        return this.discoveryResult(getComponentCatalog(this.discoveryIndex, this.reload))
+      }
+    )
+    this.server.registerTool(
+      "find_components",
+      {
+        description:
+          "Find a bounded component shortlist sorted by exact ID. Filters combine with AND; intents match any by default. Inspect coverage and broaden filters or search unclassified records before concluding no reusable component exists. Continue using nextCursor with the same filters. Read-only.",
+        annotations: { readOnlyHint: true },
+        inputSchema: deferredValidation(componentQuerySchema)
+      },
+      async (args) => {
+        if (!this.discoveryIndex) return this.discoveryError("contract-unavailable")
+        return this.discoveryResult(findComponents(this.discoveryIndex, args, this.reload))
+      }
+    )
+    this.server.registerTool(
+      "get_component_context",
+      {
+        description:
+          "Inspect an exact component ID in the selected snapshot, with API, guidance, relationships and source sections. Follow nextCursor until complete. JSON-fragment continuations must be concatenated in order then JSON-parsed. Observed usage is static evidence; pairings are advisory. Restart discovery after snapshot-changed. Read-only.",
+        annotations: { readOnlyHint: true },
+        inputSchema: deferredValidation(componentContextRequestSchema)
+      },
+      async (args) => {
+        if (!this.discoveryIndex) return this.discoveryError("contract-unavailable")
+        return this.discoveryResult(getComponentContext(this.discoveryIndex, args, this.reload))
+      }
+    )
     this.server.registerTool(
       "get_design_context",
       {
@@ -695,6 +788,28 @@ export class PrimitivMCPServer {
     )
   }
 
+  private discoveryResult(result: DiscoveryEnvelope<unknown>): CallToolResult {
+    return { ...result, structuredContent: { ...(result.structuredContent as object) } }
+  }
+
+  private discoveryError(code: "contract-unavailable" | "invalid-query" | "invalid-record") {
+    const messages = {
+      "contract-unavailable": "No valid contract is loaded. Run `primitiv build` and retry.",
+      "invalid-query": "Unknown or invalid query fields. Use the catalog's supported filters and limits.",
+      "invalid-record": "The requested component evidence is malformed. Run `primitiv build` to regenerate."
+    }
+    const payload = {
+      snapshotId: this.discoveryIndex?.snapshotId ?? null,
+      reload: { ...this.reload },
+      error: { code, message: messages[code] }
+    }
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(payload) }],
+      structuredContent: payload,
+      isError: true as const
+    }
+  }
+
   private componentResponse(opts: {
     id: string
     detail?: ComponentDetail
@@ -807,6 +922,19 @@ export class PrimitivMCPServer {
     if (!parsed.success) return { success: false, error: invalidUsageFacts(id, parsed.error) }
     return { success: true, facts: parsed.data.usage ?? { sites: 0 } }
   }
+}
+
+// Preserve the advertised field schemas, but let the bounded discovery validators handle
+// invalid input and unknown fields. SDK-generated validation errors lack snapshot metadata
+// and can echo arbitrarily large caller input.
+function deferredValidation<T extends z.ZodRawShape>(schema: z.ZodObject<T>) {
+  const shape = Object.fromEntries(
+    Object.entries(schema.shape).map(([key, field]) => [
+      key,
+      (field as z.ZodType).catch(null).meta({ default: undefined })
+    ])
+  ) as unknown as T
+  return z.looseObject(shape)
 }
 
 const componentDetailSchema = z.enum(["api", "usage", "relationships", "conflicts", "all"])
@@ -1142,42 +1270,6 @@ function structuredConflictValueError(root: unknown): string | undefined {
   }
   return undefined
 }
-
-const relationshipCountSchema = z.number().int().positive()
-const propValueSchema = z.union([z.string(), z.number().finite(), z.boolean()])
-const observedPropValueSchema = z.union([z.string(), z.number().finite(), z.boolean(), z.null()])
-const propDefinitionSchema = z.object({
-  type: z.string().optional(),
-  required: z.boolean().optional(),
-  default: z.string().optional(),
-  values: z.array(propValueSchema).optional(),
-  kind: z.enum(["boolean", "text", "variant", "instance-swap"]).optional(),
-  preferredValues: z
-    .array(
-      z.object({
-        type: z.enum(["component", "component-set"]),
-        key: z.string().min(1)
-      })
-    )
-    .optional()
-})
-const apiFactsSchema = z.looseObject({
-  // Parse each own key manually in validateApiFacts: z.record drops an own `__proto__`
-  // property, but Figma property names are opaque data and must survive byte-for-byte.
-  props: z.unknown().optional()
-})
-const usageProjectionSchema = z.looseObject({
-  sites: relationshipCountSchema,
-  props: z.record(z.string(), z.array(observedPropValueSchema)).optional(),
-  truncatedProps: z.array(z.string()).optional()
-})
-const usageFactsSchema = z.looseObject({ usage: usageProjectionSchema.optional() })
-const relationshipFactsSchema = z.looseObject({
-  uses: z.record(z.string(), relationshipCountSchema).optional()
-})
-type RelationshipFacts = z.infer<typeof relationshipFactsSchema>
-type ApiFacts = Record<string, z.infer<typeof propDefinitionSchema>>
-type UsageFacts = z.infer<typeof usageProjectionSchema>
 
 function invalidApiFacts(id: string, error: z.ZodError): string {
   return (

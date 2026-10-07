@@ -20,7 +20,11 @@ export function createDiscoveryIndex(contract: PrimitivContract, options: Snapsh
     append(byKind, component.kind ?? "unknown", id)
     if (component.classification?.atomicLevel) append(byLevel, component.classification.atomicLevel, id)
     for (const intent of new Set(component.classification?.intents ?? [])) append(byIntent, intent, id)
-    for (const [target, count] of Object.entries(component.uses ?? {})) {
+    const uses = component.uses
+    if (uses === null || typeof uses !== "object" || Array.isArray(uses)) continue
+    for (const [target, count] of Object.entries(uses ?? {})) {
+      // Optional legacy facts are validated again before their projection; never index invalid counts.
+      if (!Number.isSafeInteger(count) || count <= 0) continue
       if (!Object.getOwnPropertyDescriptor(canonical.components, target)) continue
       usedBy[target] ??= Object.create(null)
       usedBy[target][id] = count

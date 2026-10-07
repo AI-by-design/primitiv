@@ -11,6 +11,32 @@ import { StorybookAdapter } from "./sources/storybook"
 import type { PrimitivConfig, PrimitivContract, SourceStatus, TokenMap } from "./types"
 import { primitivConfigSchema, summarizeValidationIssues } from "./types"
 
+export type {
+  ClassificationCoverage,
+  ComponentCatalog,
+  ComponentContext,
+  ComponentContextRequest,
+  ComponentContextSection,
+  ComponentPreview,
+  ComponentQuery,
+  ComponentShortlist,
+  DiscoveryEnvelope,
+  DiscoveryError,
+  DiscoveryIndex,
+  DiscoveryReloadState,
+  SnapshotOptions
+} from "./discovery"
+export {
+  createDiscoveryIndex,
+  createSnapshotId,
+  DISCOVERY_LIMITS,
+  discoveryEnvelopeBytes,
+  findComponents,
+  getComponentCatalog,
+  getComponentContext,
+  importDiscoveryContract,
+  SNAPSHOT_VERSION
+} from "./discovery"
 export { valuesEquivalent } from "./normalize/value"
 export {
   atomicLevelSchema,

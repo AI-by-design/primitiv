@@ -1,43 +1,39 @@
 ---
 name: build-component
-description: Build a UI component using the project's design contract. Use when the user asks to build, create, or scaffold a component.
+description: Build or modify a UI component using the project's Primitiv design contract. Use for component reuse, composition, or scaffolding in an existing project.
 ---
 
 # Build Component
 
-Mode: BUILD. One component at a time. Contract before code.
+Use the contract before writing UI code. Preserve the user's requested scope and the project's framework, file placement, server/client conventions, and prop patterns.
 
-Contract validation, token rules, and rationale handling are defined in the Primitiv block in CLAUDE.md / AGENTS.md — this skill is the build procedure that applies them; it does not restate them.
+## Load and validate
 
-## 1. Load + validate
-- Check for Primitiv (`.mcp.json` or `primitiv.contract.json`) — if missing, fall back to CLAUDE.md only.
-- Call `get_design_context { category: "all" }`, then validate per the Primitiv block (sourceRoot matches this project; warnings empty) before using any of it.
-- Call `get_conflicts` — if `actionableCount > 0`, surface each `suggestedFix` and ask the user to resolve first; if `pendingDecisionCount > 0`, warn that manual governance config is needed.
+- Check available MCP tools and the project's Primitiv config/contract. If setup is absent, use project instructions and existing code; perform normal setup when authorized. Missing classifications or guidance never require a documentation exercise before coding.
+- When all three discovery tools are available, start with `get_component_catalog {}`; validate `project.sourceRoot` against this project and use `project.configPath`, `generatedAt`, and health to resolve freshness. On older servers, call `get_design_context` with no args for `sourceRoot` and warnings. Follow the Primitiv block in AGENTS.md / CLAUDE.md: do not use a different project's contract; when identity is unknown or the contract is stale, rebuild/fix the configured source within the authorized workflow. Surface a blocker only when available evidence cannot resolve it.
+- Call `get_conflicts`; inspect actionable fixes and pending governance decisions relevant to the work. Use `get_inferred_rules` and existing code to resolve conventions. Ask a focused question only for a material ambiguity that evidence cannot settle.
 
-## 2. Confirm the spec
-With the user: name, props, states, variants, composition, and project conventions (framework, server vs client, file location). Don't invent conventions — call `get_inferred_rules` and match the codebase's own naming and prop-shape patterns.
+## Discover reusable components
 
-## 3. Reuse before you build (resolution ladder)
-Never recreate a component the contract already has. Components carry a `kind` (`component` | `screen` | `provider` | `icon` | `other`) — only `component` and `icon` are reusable UI; treat the rest as tagged noise, not reuse targets. Stop at the first rung that resolves:
-1. Look it up — `get_component { name, context: <your working file or directory>, detail: "api" }`.
-2. One match → use its declared API evidence (prop names, types, defaults, and finite values) and conform to it; don't redesign it. Request `detail: "usage"` for bounded literal values observed at static JSX sites, `"relationships"` for sorted `uses` and derived `usedBy` counts, or `"all"` when all three evidence sections matter.
-3. Ambiguous → the response carries an `instruction`; follow it — resolve by **scope** (working path) → **rationale.when** vs the user's intent → if neither decides, **ask the user**. Never pick arbitrarily.
-4. No match but composable → assemble from existing contract primitives, not from scratch.
-5. Genuinely new → tell the user it's net-new, then build to the conventions from step 2.
+When `get_component_catalog`, `find_components`, and `get_component_context` are available, use this path:
 
-Relationship counts and observed usage are statically resolved JSX evidence, not runtime frequency.
-Observed values are bounded and may carry `truncatedProps`; dynamic values and spreads are omitted.
-Missing edges may be unresolved evidence: dynamic components, external packages, namespace/member
-JSX, barrels, path aliases, shadowed bindings, and ambiguous syntax are conservatively omitted.
+1. Use the validated catalog from the initial call. Check source and guidance health, classification coverage, supported filter values, `snapshotId`, and `reload`. Unknown guidance health means unknown, not healthy absence. A stale/reload-failed snapshot is last-good data; resolve freshness before relying on it for a final choice. `contract-unavailable` has no snapshot: repair/build the configured contract when authorized before retrying.
+2. Use a known canonical ID directly in detail. Resolve a known name through `get_component { name, context: <working file or directory>, detail: "api" }` to obtain its exact ID, then request detail against the catalog's snapshot. Otherwise turn the task's purpose and likely atomic level into search hints, using only supported catalog values.
+3. Call `find_components { level?, intents?, intentMatch?, kind?, scope?, limit?, cursor? }`. Default pages contain 20 entries, maximum 50. All supplied dimensions combine with AND; intents default to `any`, with `all` only when every requested intent is required. `scope` is the working file/directory under existing scope rules, not an invented folder taxonomy. Inspect reusable `component` and `icon` kinds; a template/atomic level never overrides kind or scope eligibility.
+4. Shortlist descriptions and usage are previews, with explicit completeness flags. Request `get_component_context { id, snapshotId, sections: ["api", "guidance"] }` before selecting a candidate. Add `"relationships"` or `"source"` when needed to understand composition or implementation evidence. Preserve authored-vs-source descriptions and declared-vs-observed evidence.
+5. Follow `nextCursor` with the same normalized filters for search, or the same ID/snapshot/sections for detail. Retain returned sections across pages. For `continuation.format: "json-fragment"`, concatenate `continuation.text` in cursor order for that section and JSON.parse only when `sectionComplete` is true. Continue until the requested detail is complete. On `snapshot-changed`, discard the old shortlist/detail, obtain the new catalog, and restart discovery; never combine revisions. On `record-too-large`, request fewer detail sections or inspect the authored/source file identified by the contract rather than treating an incomplete response as complete guidance.
+6. A zero filtered result does not establish absence. Before creating a duplicate, relax speculative level/intent/scope filters and explicitly search `find_components { unclassified: "either", kind?, scope? }` without the classification filters that exclude those records. Coverage reports `missing-level` and `missing-intents` separately; use those narrower searches when relevant. Page through relevant candidates until the reuse decision is supported. Missing labels remain searchable and must never falsely justify net-new work.
 
-## 4. Build (token ladder)
-Resolve every visual value through the contract, in order:
-1. An existing component (tokens already baked in — step 3).
-2. A token reference in the project's form (`var(--token)`, utility class, theme path).
-3. Never a raw literal. About to write `bg-[#hex]` or `p-[8px]`? Call `get_violations` — if a matching `suggestion.token` exists, use it.
+On servers without all three discovery tools, fall back to `get_design_context { category: "components" }` and `get_component { name, context: <working file or directory>, detail: "api" }`. Older contracts may have no classifications. Request `"usage"` for bounded observed values, `"relationships"` for sorted `uses` and derived `usedBy` counts, or `"all"` when those sections matter. Follow an ambiguous response's instruction: working scope, then `rationale.when` versus the user's intent, then a focused question if still unresolved. Do not pick arbitrarily.
 
-All interactive states required. Prefer rationale-matched tokens and components; never use one marked `deprecated: true` — use its `alternatives`.
+## Choose and build
 
-## 5. Self-check + record
-- Verify against the contract: token usage, naming vs `get_inferred_rules`, prop shapes vs the component you reused.
-- Run `primitiv build` — update the contract with the new component.
+- Reuse the existing API when suitable; otherwise compose existing primitives. Build net-new only after the broader and unclassified searches support that choice, and explain the reason briefly.
+- Read `rationale.avoidWhen[].condition`; when a condition matches the task, inspect its `alternative.componentId`. Follow legacy `rationale.alternatives` when applicable, including deprecation replacements. Track visited canonical IDs, follow at most four alternative hops, and stop on a cycle or unresolved reference. At the limit, return to the task and available evidence; ask only if a material choice remains unresolved. `rationale.pairsWith` entries are advisory, not required dependencies.
+- Relationship counts and observed usage are static JSX evidence, never runtime popularity. Observed values may be truncated; dynamic values, spreads, unresolved imports, and missing edges do not prove absent composition or unrestricted APIs.
+- Resolve visual values through the token ladder: existing component, then token reference in the project's syntax. Before writing a raw visual literal, inspect `get_violations` and available tokens with `get_design_context { category: "tokens" }`; use an applicable `suggestion.token`. Respect authored token rationale and deprecation alternatives. Implement the interactive states required by the task.
+- When modifying a component, review its relevant authored guidance entry. Update established guidance within the task's authorization; uncertain levels/intents remain proposals, not invented project facts.
+
+## Verify
+
+Verify the code against the selected declared API, guidance, tokens, and project conventions, and run the relevant checks. Reading guidance alone does not prove adherence. Run `primitiv build` within the authorized workflow to refresh code/guidance evidence, then verify relevant health and the resulting component details.

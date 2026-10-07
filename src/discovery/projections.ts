@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer"
 import { createHash } from "node:crypto"
 import { z } from "zod"
+import { validComponentEvidence } from "../component-evidence"
 import { atomicLevelSchema, componentIntentSchema } from "../rationale/schema"
 import type { Component, ComponentKind } from "../types"
 import { classificationCoverage, matchesScope, pathSegments } from "./navigation"
@@ -30,7 +31,7 @@ export const DISCOVERY_LIMITS = {
 const KINDS: ComponentKind[] = ["component", "screen", "provider", "icon", "other"]
 const SECTIONS: ComponentContextSection[] = ["api", "guidance", "relationships", "source"]
 const cursorSchema = z.string().max(DISCOVERY_LIMITS.cursorBytes)
-const querySchema = z.strictObject({
+export const componentQuerySchema = z.strictObject({
   level: atomicLevelSchema.optional(),
   intents: z.array(componentIntentSchema).max(32).optional(),
   intentMatch: z.enum(["any", "all"]).optional(),
@@ -40,7 +41,7 @@ const querySchema = z.strictObject({
   limit: z.number().int().min(1).max(DISCOVERY_LIMITS.maxLimit).optional(),
   cursor: cursorSchema.optional()
 })
-const contextSchema = z.strictObject({
+export const componentContextRequestSchema = z.strictObject({
   id: z.string().min(1).max(65536),
   snapshotId: z.string().min(1).max(128),
   sections: z.array(z.enum(SECTIONS)).min(1).max(4).optional(),
@@ -68,6 +69,8 @@ export function getComponentCatalog(
   const health = index.contract.guidanceHealth
   const payload: ComponentCatalog = {
     ...meta(index, reload),
+    project: { sourceRoot: index.contract.sourceRoot ?? null, configPath: index.contract.configPath ?? null },
+    generatedAt: index.contract.generatedAt,
     total: index.ids.length,
     counts: {
       kind: counts(index.byKind, [...KINDS, "unknown"]),
@@ -111,7 +114,7 @@ export function findComponents(
   query: ComponentQuery = {},
   reload: DiscoveryReloadState = READY
 ): DiscoveryEnvelope<ComponentShortlist> {
-  const parsed = querySchema.safeParse(query)
+  const parsed = componentQuerySchema.safeParse(query)
   if (!parsed.success) return error(index, reload, "invalid-query")
   const { cursor, ...input } = parsed.data
   const normalized = {
@@ -187,7 +190,7 @@ export function getComponentContext(
   request: ComponentContextRequest,
   reload: DiscoveryReloadState = READY
 ): DiscoveryEnvelope<ComponentContext> {
-  const parsed = contextSchema.safeParse(request)
+  const parsed = componentContextRequestSchema.safeParse(request)
   if (!parsed.success) return error(index, reload, "invalid-query")
   const { id, snapshotId, cursor } = parsed.data
   if (snapshotId !== index.snapshotId) return error(index, reload, "snapshot-changed")
@@ -197,6 +200,7 @@ export function getComponentContext(
   const position = readCursor<ComponentContext>(index, reload, cursor, queryId)
   if ("content" in position) return position
   if (position.position >= sections.length) return error(index, reload, "invalid-cursor")
+  if (!validComponentEvidence(index, id, sections)) return error(index, reload, "invalid-record")
   const component = index.contract.components[id]
   const base: Omit<ComponentContext, "complete"> = {
     ...meta(index, reload),
@@ -379,7 +383,9 @@ function error<T>(
     "invalid-cursor": "Invalid cursor or changed query. Restart discovery with the same normalized filters.",
     "snapshot-changed": "The loaded snapshot changed. Restart discovery and use its snapshot ID for detail.",
     "not-found": "No component has this exact ID in the selected snapshot.",
-    "record-too-large": "A record cannot fit the response budget. Request exact-ID detail with fewer sections."
+    "record-too-large": "A record cannot fit the response budget. Request exact-ID detail with fewer sections.",
+    "invalid-record": "The requested component evidence is malformed. Run `primitiv build` to regenerate.",
+    "contract-unavailable": "No valid contract is loaded. Run `primitiv build` and retry."
   }
   return envelope({ ...meta(index, reload), error: { code, message: messages[code] } }, true) as DiscoveryEnvelope<T>
 }

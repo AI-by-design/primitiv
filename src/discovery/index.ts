@@ -1,5 +1,8 @@
+export { importDiscoveryContract } from "./import"
 export { createDiscoveryIndex } from "./navigation"
 export {
+  componentContextRequestSchema,
+  componentQuerySchema,
   DISCOVERY_LIMITS,
   discoveryEnvelopeBytes,
   findComponents,

@@ -1,4 +1,5 @@
 import { execSync } from "node:child_process"
+import { createHash } from "node:crypto"
 import * as fs from "node:fs"
 import * as path from "node:path"
 
@@ -58,7 +59,14 @@ function formatRunnerCommand(runner: Runner, ...args: string[]): string {
   return formatRunnerArgv(runner, ...args).join(" ")
 }
 
-export async function init(targetDir?: string): Promise<void> {
+export interface InitOptions {
+  /** Explicitly replace a customized build-component skill after saving a backup. */
+  refreshSkill?: boolean
+}
+
+export async function init(targetDir?: string, options: InitOptions = {}): Promise<void> {
+  // Fail before changing project wiring if the packaged template is absent.
+  const skillTemplate = readSkillTemplate("build-component.md")
   const root = targetDir || process.cwd()
   const configPath = path.join(root, "primitiv.config.js")
   const runner = detectRunner(root)
@@ -84,7 +92,7 @@ export async function init(targetDir?: string): Promise<void> {
 
   writeAgentInstructions(root, runner)
   writeMcpConfig(root, runner)
-  writeSkillFile(root)
+  writeSkillFile(root, options, skillTemplate)
   writeSetupSkill(root)
   writeGitHubWorkflow(root)
   console.log("\nNext steps:")
@@ -278,36 +286,32 @@ ${AGENT_BLOCK_MARKER}
 
 When the user asks about design tokens, components, patterns, or anything about the look and feel of this product (e.g. "is there a X component?", "what token should I use for Y?", "how should Z look?"), treat it as a query for the Primitiv MCP. Use the tools below to answer — always in the context of this design system.
 
-Before building or modifying any UI, call \`get_design_context\` and validate the response before proceeding.
+Before building or modifying any UI, check tool availability and validate this project's contract before using it.
 
-### Step 1 — Load the contract
-Call \`get_design_context\` (no args) to get the summary.
+### Step 1 — Load compact context
+When \`get_component_catalog\`, \`find_components\`, and \`get_component_context\` are available, start with \`get_component_catalog {}\`. It returns compact counts, project identity, generatedAt, classification coverage, supported filters, and source/guidance/reload health. On older servers, call \`get_design_context\` with no args for the legacy summary and warnings.
 
 ### Step 2 — Validate before using
-Check the response for two things:
+Check \`project.sourceRoot\` from the catalog (or \`sourceRoot\` from the legacy summary) against the current project's directory. Do not use another project's contract. If identity is unknown, rebuild the configured contract within the authorized workflow; if it cannot be resolved, surface the blocker. A mismatch requires fixing the project MCP/config path before relying on the data.
 
-**a) sourceRoot must match this project.**
-The response includes a \`sourceRoot\` field — the absolute path of the project this contract was built from.
-If \`sourceRoot\` does not match the current project's directory, stop immediately.
-Do not use the contract data. Tell the user: "Primitiv is pointed at a different project (\`sourceRoot\`). Run \`primitiv init\` and \`primitiv build\` in this project first, or update your MCP config to point at this project's \`primitiv.config.js\`."
+Check source/guidance health and reload state. Unknown guidance health means unknown, not healthy absence. A stale/reload-failed snapshot is last-good data; resolve freshness before a final choice. Check \`generatedAt\`; a contract at least 24 hours old needs freshness checked/rebuilt. With no snapshot (\`contract-unavailable\`), build/fix the configured contract when authorized. For a legacy summary, inspect warnings and resolve the reported issues; its warnings include rebuild commands (e.g. \`${rebuildExample}\`). Surface a blocker only when available evidence cannot resolve it.
 
-**b) warnings must be empty.**
-If the response includes a \`warnings\` array, stop and surface each warning to the user before continuing.
-Each warning includes the exact command needed to fix it (e.g. \`${rebuildExample}\`).
+### Step 3 — Discover and inspect before choosing
+On new servers, use the validated catalog and its snapshotId to narrow candidates before requesting detail.
 
-### Step 3 — Use the contract
-Once validated, use the contract for all UI work:
+- Use known IDs directly; resolve known names with \`get_component { name: "...", context: "<your working file or dir>", detail: "api" }\`.
+- Otherwise use \`find_components { level?, intents?, intentMatch?, kind?, scope?, limit?, cursor? }\` (default 20, max 50). Use supported values; supplied dimensions combine with AND, intents default to any. Labels are search hints. Only component/icon kinds are reuse candidates; scope uses the working path.
+- Inspect \`get_component_context { id, snapshotId, sections: ["api", "guidance"] }\` before selecting; request relationships/source when useful. Shortlist excerpts are previews. Continue detail with the same ID/snapshot/sections until complete; concatenate JSON-fragment continuation text in cursor order and parse when sectionComplete is true.
+- Keep search filters fixed across cursor pages. On snapshot-changed, discard prior discovery and restart from a new catalog. Never mix revisions. On record-too-large, request fewer sections or inspect the identified authored/source file.
+- Before net-new work, broaden narrow filters and explicitly search \`find_components { unclassified: "either", kind?, scope? }\` without excluding missing labels. Filtered zero results never prove absence. Reuse, then compose, then explain justified net-new work.
+- Read rationale.avoidWhen conditions and inspect alternative.componentId only when applicable; track visited IDs and stop after four hops or a cycle. rationale.pairsWith entries are advisory. Ask only when available evidence cannot resolve a material ambiguity.
 
-- \`get_design_context { category: "tokens" }\` — full token list
-- \`get_design_context { category: "components" }\` — full component list
-- \`get_token { name: "...", category: "..." }\` — look up a specific token
-- \`get_component { name: "...", context: "<your working file or dir>", detail: "api" }\` — look up a specific component; pass your working path so same-name components resolve by scope. Use \`"api"\` for declared prop evidence, \`"usage"\` for bounded literal values observed at static JSX sites, \`"relationships"\` for composition counts, or \`"all"\` for all three. Observed usage is static evidence, never runtime popularity. An \`ambiguous\` response carries an \`instruction\` — follow it (scope → \`rationale.when\` vs the user's intent → ask the user); never pick one arbitrarily
-- \`get_conflicts\` — see unresolved design conflicts
-- \`get_inferred_rules\` — see design rules inferred from the codebase
-- \`get_violations\` — see hardcoded literals in the codebase that bypass the contract
+On older servers, use \`get_design_context { category: "components" }\` and \`get_component\`. Use \`detail: "api"\` for declared props, \`"usage"\` for bounded literal values observed at static JSX sites, \`"relationships"\` for composition counts, or \`"all"\` for those sections. Observed usage is static evidence, never runtime popularity; missing edges do not prove absent composition. An ambiguous response carries an instruction: scope → rationale.when versus intent → focused question if unresolved.
+
+Use \`get_token\`, \`get_conflicts\`, \`get_inferred_rules\`, and \`get_violations\` for tokens, conflicts, conventions, and misuse. Review relevant authored guidance when changing a component; update established guidance within task authorization, leaving uncertain classifications as proposals. Rebuild and verify code/guidance. Reading guidance is not proof the code follows it.
 
 ### Step 4 — Avoid token misuse
-Before generating any \`className\` or style with a literal value (e.g. \`bg-[#hex]\`, \`p-[8px]\`), call \`get_violations\` to see active misuses and \`get_design_context\` for available tokens. Prefer existing tokens — \`bg-[var(--color-primary)]\`, \`p-[var(--spacing-2)]\` — over hardcoded literals. If a violation already has a \`suggestion.token\`, use that name.
+Before generating any \`className\` or style with a literal value (e.g. \`bg-[#hex]\`, \`p-[8px]\`), call \`get_violations\` to see active misuses and \`get_design_context { category: "tokens" }\` for available tokens. Prefer existing tokens — \`bg-[var(--color-primary)]\`, \`p-[var(--spacing-2)]\` — over hardcoded literals. If a violation already has a \`suggestion.token\`, use that name.
 
 ### Rationale (when present)
 Tokens and components may include a \`rationale\` object with \`why\`, \`when\`, \`deprecated\`, \`alternatives\`, \`examples\`, or \`tags\`. When rationale is present:
@@ -367,8 +371,8 @@ function replaceMarkedBlock(existing: string, block: string, startMarker: string
   if (!existing.includes(startMarker)) {
     return existing + block
   }
-  const blockRegex = new RegExp(`\\n?${escapeRegex(startMarker)}[\\s\\S]*?${escapeRegex(endMarker)}\\n?`)
-  return existing.replace(blockRegex, block)
+  const blockRegex = new RegExp(`${escapeRegex(startMarker)}[\\s\\S]*?${escapeRegex(endMarker)}`)
+  return existing.replace(blockRegex, () => block.trim())
 }
 
 function escapeRegex(s: string): string {
@@ -528,12 +532,82 @@ function readSkillTemplate(name: string): string {
   }
 }
 
-function writeSkillFile(root: string): void {
-  const target = path.join(root, ".claude/commands/build-component.md")
-  if (fs.existsSync(target)) return
+// Exact bytes of previously shipped templates. Metadata alone never authorizes
+// replacing a file: a matching hash must also belong to a known shipped version.
+const PREVIOUS_SKILL_HASHES = new Set([
+  "f240c41eb967864fbf5f8d9872ff5931bfd91cc438d38136cffad20ad6415bdb",
+  "44827f41ec2347a2129c70a04ca532d4429a0fd1b044560eaa8e1ead25f8b098",
+  "4956480e50144bfa3619377f68c83fb600e4fbb6aef0b1e8ff8cfabe632973d0",
+  "19035c4203901d1276d0ac785b4f2977abb04e3327b824e1646098a30f621ea8",
+  "6f9d58b542362a70d446272faaba4a9f1536f52afe3ecd60a6cfeb67ee6d4223",
+  // Older releases emitted an inline template rather than the repo skills file.
+  "43a72a4d281b6353365e23958043c85f82c9cedebc4640093e00e73260c433fa"
+])
+const SKILL_TEMPLATE_VERSION = "3"
+
+function skillHash(content: string | Buffer): string {
+  return createHash("sha256").update(content, "utf8").digest("hex")
+}
+
+function writeIfChanged(file: string, content: string): void {
+  if (fs.existsSync(file) && fs.readFileSync(file, "utf8") === content) return
+  fs.writeFileSync(file, content, "utf8")
+}
+
+export function writeSkillFile(
+  root: string,
+  options: InitOptions = {},
+  template = readSkillTemplate("build-component.md")
+): void {
+  const relative = ".claude/commands/build-component.md"
+  const target = path.join(root, relative)
+  const templateHash = skillHash(template)
+  const existingBytes = fs.existsSync(target) ? fs.readFileSync(target) : undefined
+  const existing = existingBytes?.toString("utf8")
+  const existingHash = existingBytes === undefined ? undefined : skillHash(existingBytes)
   fs.mkdirSync(path.dirname(target), { recursive: true })
-  fs.writeFileSync(target, readSkillTemplate("build-component.md"), "utf-8")
-  console.log("✅ Installed build-component skill → .claude/commands/build-component.md")
+  const knownPrevious = existingHash !== undefined && PREVIOUS_SKILL_HASHES.has(existingHash)
+
+  if (existing !== undefined && existingHash !== templateHash && !knownPrevious && !options.refreshSkill) {
+    const candidate = `${target}.primitiv-${templateHash.slice(0, 12)}.md`
+    const diff = `${candidate}.diff`
+    writeIfChanged(candidate, template)
+    // A full-file unified replacement is portable and makes every proposed
+    // deletion/addition reviewable, including customized instruction sections.
+    const lines = (value: string) =>
+      value.split("\n").filter((_, index, all) => index < all.length - 1 || all[index] !== "")
+    const before = lines(existing)
+    const after = lines(template)
+    const body = [
+      ...before.map((line) => `-${line}`),
+      ...(!existing.endsWith("\n") ? ["\\ No newline at end of file"] : []),
+      ...after.map((line) => `+${line}`),
+      ...(!template.endsWith("\n") ? ["\\ No newline at end of file"] : [])
+    ]
+    writeIfChanged(
+      diff,
+      `--- ${relative}\n+++ ${path.relative(root, candidate)}\n@@ -1,${before.length} +1,${after.length} @@\n${body.join("\n")}\n`
+    )
+    console.log(
+      `ℹ️  Preserved customized/unknown ${relative}. Review ${path.relative(root, diff)} and ${path.relative(root, candidate)}; run \`primitiv init --refresh-skill\` to replace it with a backup.`
+    )
+    return
+  }
+
+  if (existingBytes !== undefined && existingHash !== templateHash && options.refreshSkill && !knownPrevious) {
+    const backup = `${target}.backup-${existingHash}`
+    if (!fs.existsSync(backup)) fs.writeFileSync(backup, existingBytes)
+    else if (!fs.readFileSync(backup).equals(existingBytes))
+      throw new Error(`primitiv: skill backup already exists with different contents: ${backup}`)
+    console.log(`✅ Saved skill backup → ${path.relative(root, backup)}`)
+  }
+  writeIfChanged(target, template)
+  writeIfChanged(
+    `${target}.primitiv.json`,
+    `${JSON.stringify({ template: "build-component", templateVersion: SKILL_TEMPLATE_VERSION, sha256: templateHash }, null, 2)}\n`
+  )
+  if (existingHash !== templateHash)
+    console.log(`✅ ${existing === undefined ? "Installed" : "Refreshed"} build-component skill → ${relative}`)
 }
 
 const SETUP_SKILL_CONTENT = `---
