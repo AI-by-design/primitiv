@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.20.0](https://github.com/AI-by-design/primitiv/compare/v2.19.1...v2.20.0) (2026-10-07)
+
+
+### Features
+
+* add component discovery query foundation ([#152](https://github.com/AI-by-design/primitiv/issues/152)) ([2df1ac2](https://github.com/AI-by-design/primitiv/commit/2df1ac28597b25383f3b74bf25371c2f7eb3ea5d))
+* add optional component guidance schemas ([#149](https://github.com/AI-by-design/primitiv/issues/149)) ([168dc5f](https://github.com/AI-by-design/primitiv/commit/168dc5f6418d7f81233e565c1645a73d90875f48))
+* ingest component guidance and verify freshness ([#151](https://github.com/AI-by-design/primitiv/issues/151)) ([1fad67c](https://github.com/AI-by-design/primitiv/commit/1fad67c188f96f36bf8fbfbf97ef23511fe673f2))
+
 ## [2.19.1](https://github.com/AI-by-design/primitiv/compare/v2.19.0...v2.19.1) (2026-10-03)
 
 
