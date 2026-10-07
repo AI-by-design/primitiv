@@ -34,6 +34,6 @@ On servers without all three discovery tools, fall back to `get_design_context {
 - Resolve visual values through the token ladder: existing component, then token reference in the project's syntax. Before writing a raw visual literal, inspect `get_violations` and available tokens with `get_design_context { category: "tokens" }`; use an applicable `suggestion.token`. Respect authored token rationale and deprecation alternatives. Implement the interactive states required by the task.
 - When modifying a component, review its relevant authored guidance entry. Update established guidance within the task's authorization; uncertain levels/intents remain proposals, not invented project facts.
 
-## Verify and record
+## Verify
 
-Verify the code against the selected declared API, guidance, tokens, and project conventions, and run the relevant checks. Reading guidance alone does not prove adherence. Run `primitiv build` within the authorized workflow to refresh code/guidance evidence, then verify relevant health and the resulting component details. In test-run evidence record the chosen IDs and actual served `snapshotId` for each selection (or explicitly note that a legacy server supplied no revision).
+Verify the code against the selected declared API, guidance, tokens, and project conventions, and run the relevant checks. Reading guidance alone does not prove adherence. Run `primitiv build` within the authorized workflow to refresh code/guidance evidence, then verify relevant health and the resulting component details.
