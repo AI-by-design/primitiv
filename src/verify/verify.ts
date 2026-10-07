@@ -3,6 +3,7 @@ import * as path from "node:path"
 import { glob } from "glob"
 import { buildContract, loadConfig } from "../index"
 import { valuesEquivalent } from "../normalize/value"
+import { DEFAULT_GUIDANCE_PATH } from "../rationale/ingestion"
 import { safeDisplayText } from "../safe-display"
 import type { Conflict, PrimitivConfig, PrimitivContract, Violation } from "../types"
 import { primitivContractSchema, summarizeValidationIssues } from "../types"
@@ -27,6 +28,7 @@ export type VerifyStatus =
   | "unresolved-conflicts"
   | "token-misuse-detected"
   | "source-scan-failed"
+  | "guidance-unverified"
   | "missing-config"
   | "missing-contract"
   | "invalid-contract"
@@ -63,6 +65,8 @@ export interface VerifyResult {
   // escalates to a hard failure (exit 2). Drift for a failed source's entries is not
   // evaluated, so an unreachable Figma never reads as "every figma token removed".
   failedSources: Array<{ name: string; error?: string }>
+  guidanceHealth?: PrimitivContract["guidanceHealth"]
+  guidanceVerified?: boolean
 }
 
 const MAX_REPORTED_CHANGES = 10
@@ -142,12 +146,13 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
   // accepting that violations may be stale (same tradeoff as drift detection).
   const driftAndLint = options.fast
     ? {
-        ...(await detectDriftByMtime(config, resolvedConfigPath, generatedAt)),
+        ...(await detectDriftByMtime(config, resolvedConfigPath, generatedAt, contract.guidanceHealth)),
         violations: contract.violations ?? [],
         failedSources: collectFailedSources(contract.sourceStatuses),
         comparisonDiagnostics: canonicalComparisonDiagnostics(contract.comparisonDiagnostics),
         conflicts: contract.conflicts,
-        componentNameIndex: contract.componentNameIndex
+        componentNameIndex: contract.componentNameIndex,
+        guidanceHealth: contract.guidanceHealth
       }
     : await detectDriftAndLintByRebuild(contract, configPath, cwd)
   const drift = { isStale: driftAndLint.isStale, changes: driftAndLint.changes }
@@ -160,7 +165,22 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
   const pendingConflicts = findingsConflicts.filter((conflict) => conflict.resolution === "pending")
   const hasUnresolvedConflicts = pendingConflicts.length > 0
 
+  const guidanceHealth = driftAndLint.guidanceHealth
+  const guidanceVerified = driftAndLint.guidanceVerified && guidanceEvidenceComplete(guidanceHealth)
   const messages: string[] = []
+  if (!guidanceVerified) {
+    messages.push(
+      `! Guidance freshness could not be established. Run full \`primitiv verify\` after correcting guidance diagnostics.`
+    )
+    if (guidanceHealth && guidanceHealth.total > 0) {
+      messages.push(
+        `  ${guidanceHealth.total} guidance diagnostics recorded${guidanceHealth.truncated ? " (retained list is incomplete)" : ""}.`
+      )
+      if (options.verbose)
+        for (const item of guidanceHealth.items)
+          messages.push(safeDisplayText(`  - ${item.code}: ${item.message}`, 1024))
+    }
+  }
 
   if (comparisonDiagnostics.total > 0) {
     const noun = comparisonDiagnostics.total === 1 ? "comparison" : "comparisons"
@@ -280,7 +300,8 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
     !hasUnresolvedConflicts &&
     !hasViolations &&
     !hasFailedSources &&
-    comparisonDiagnostics.total === 0
+    comparisonDiagnostics.total === 0 &&
+    guidanceVerified
   ) {
     messages.push(`✓ Contract is fresh (age ${formatAge(ageHours)}), no pending conflicts, no hardcoded token values.`)
   }
@@ -300,6 +321,7 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
     conflictPolicy: config.governance.onConflict,
     hasViolations,
     hasFailedSources,
+    guidanceVerified,
     strict: options.strict === true
   })
 
@@ -321,7 +343,9 @@ export async function verify(configPath: string | undefined, options: VerifyOpti
       total: violations.length,
       reported: violations.slice(0, MAX_REPORTED_VIOLATIONS)
     },
-    failedSources
+    failedSources,
+    guidanceHealth,
+    guidanceVerified
   }
 }
 
@@ -358,6 +382,8 @@ async function detectDriftAndLintByRebuild(
   comparisonDiagnostics: NonNullable<PrimitivContract["comparisonDiagnostics"]>
   conflicts: Conflict[]
   componentNameIndex: PrimitivContract["componentNameIndex"]
+  guidanceHealth: PrimitivContract["guidanceHealth"]
+  guidanceVerified: boolean
 }> {
   const fresh = await buildContract(configPath, { silent: true, cwd })
   const failedSources = collectFailedSources(fresh.sourceStatuses)
@@ -373,7 +399,9 @@ async function detectDriftAndLintByRebuild(
     failedSources,
     comparisonDiagnostics: canonicalComparisonDiagnostics(fresh.comparisonDiagnostics),
     conflicts: fresh.conflicts,
-    componentNameIndex: fresh.componentNameIndex
+    componentNameIndex: fresh.componentNameIndex,
+    guidanceHealth: fresh.guidanceHealth,
+    guidanceVerified: true
   }
 }
 
@@ -407,6 +435,7 @@ function diffContracts(committed: PrimitivContract, fresh: PrimitivContract, fai
       source?: { adapter?: string }
       modes?: Record<string, string>
       modeSources?: Record<string, { adapter?: string }>
+      rationale?: unknown
     }
     const committedTokens = (committed.tokens as Record<string, Record<string, DiffToken>>)[category] || {}
     const freshTokens = (fresh.tokens as Record<string, Record<string, DiffToken>>)[category] || {}
@@ -422,6 +451,7 @@ function diffContracts(committed: PrimitivContract, fresh: PrimitivContract, fai
         if (!valuesEquivalent(c.value, f.value, category)) {
           changes.push(`token value changed: ${category}.${name} (${c.value} → ${f.value})`)
         }
+        if (!guidanceEquivalent(c.rationale, f.rationale)) changes.push(`token rationale changed: ${category}.${name}`)
         // Theme-mode drift is real drift even when the default value is unchanged.
         const cModes = c.modes ?? {}
         const fModes = f.modes ?? {}
@@ -459,6 +489,19 @@ function diffContracts(committed: PrimitivContract, fresh: PrimitivContract, fai
       failedSources: failed
     })
   )
+
+  for (const [id, component] of Object.entries(committed.components)) {
+    const next = Object.getOwnPropertyDescriptor(fresh.components, id)?.value
+    if (!next || failed.has(component.source.adapter) || failed.has(next.source.adapter)) continue
+    for (const field of ["classification", "rationale", "guidanceOrigin"] as const) {
+      if (!guidanceEquivalent(component[field], next[field], field === "classification"))
+        changes.push(`component ${field} changed: ${id}`)
+    }
+  }
+  if (
+    !guidanceEquivalent(semanticGuidanceHealth(committed.guidanceHealth), semanticGuidanceHealth(fresh.guidanceHealth))
+  )
+    changes.push("guidance health changed")
 
   if (!comparisonDiagnosticsEquivalent(committed.comparisonDiagnostics, fresh.comparisonDiagnostics)) {
     changes.push("component comparison diagnostics changed")
@@ -683,16 +726,124 @@ function compareIds(a: string, b: string): number {
 // Faster than rebuild but unreliable anywhere mtimes get reset — git checkouts,
 // Docker mounts, fresh clones. Use only on machines where the user just edited
 // a file and wants a near-instant pre-commit check.
+function guidanceEvidenceComplete(health: PrimitivContract["guidanceHealth"]): boolean {
+  return (
+    health !== undefined &&
+    !health.truncated &&
+    health.sources.length > 0 &&
+    health.sources.every(
+      (source) => source.complete && ["ok", "absent"].includes(source.readState) && source.invalidEntries === 0
+    ) &&
+    Object.keys(health.byCode).every(
+      (code) => code === "unknown-field" || code === "duplicate-intent" || code === "alias-conflict"
+    )
+  )
+}
+
+function semanticGuidanceHealth(health: PrimitivContract["guidanceHealth"]): unknown {
+  // Rebuilding a legacy artifact with no authored guidance can establish ordinary absence.
+  if (
+    health?.total === 0 &&
+    health.sources.length === 1 &&
+    health.sources[0].selection === "default" &&
+    health.sources[0].readState === "absent"
+  )
+    return undefined
+  if (!health) return undefined
+  return {
+    ...health,
+    sources: [...health.sources].sort((a, b) => compareIds(a.sourceId, b.sourceId)),
+    items: health.items
+      .map(({ message: _message, ...item }) => item)
+      .sort((a, b) => compareIds(canonicalGuidanceText(a) ?? "", canonicalGuidanceText(b) ?? ""))
+  }
+}
+// Iterative canonical JSON also accepts opaque legacy token extensions without recursive traversal.
+function canonicalGuidanceText(value: unknown, normalizeIntents = false): string | undefined {
+  if (value === undefined) return undefined
+  const output: string[] = []
+  const pending: Array<{ value?: unknown; literal?: string; field?: string }> = [{ value }]
+  while (pending.length > 0) {
+    const current = pending.pop()
+    if (!current) break
+    if (current.literal !== undefined) {
+      output.push(current.literal)
+      continue
+    }
+    const entry = current.value
+    if (Array.isArray(entry)) {
+      const entries = normalizeIntents && current.field === "intents" ? [...new Set(entry)].sort() : entry
+      output.push("[")
+      pending.push({ literal: "]" })
+      for (let index = entries.length - 1; index >= 0; index--) {
+        pending.push({ value: entries[index] ?? null })
+        if (index > 0) pending.push({ literal: "," })
+      }
+    } else if (entry !== null && typeof entry === "object") {
+      const entries = Object.entries(entry)
+        .filter(([, item]) => item !== undefined)
+        .sort(([a], [b]) => compareIds(a, b))
+      output.push("{")
+      pending.push({ literal: "}" })
+      for (let index = entries.length - 1; index >= 0; index--) {
+        const [key, item] = entries[index]
+        pending.push({ value: item, field: key })
+        pending.push({ literal: `${JSON.stringify(key)}:` })
+        if (index > 0) pending.push({ literal: "," })
+      }
+    } else output.push(JSON.stringify(entry) ?? "null")
+  }
+  return output.join("")
+}
+function guidanceEquivalent(left: unknown, right: unknown, normalizeIntents = false): boolean {
+  return canonicalGuidanceText(left, normalizeIntents) === canonicalGuidanceText(right, normalizeIntents)
+}
+
 async function detectDriftByMtime(
   config: PrimitivConfig,
   configPath: string,
-  threshold: Date
-): Promise<{ isStale: boolean; changes: string[] }> {
+  threshold: Date,
+  health: PrimitivContract["guidanceHealth"]
+): Promise<{ isStale: boolean; changes: string[]; guidanceVerified: boolean }> {
   const newerFiles = await findSourceFilesNewerThan(config, configPath, threshold)
-  return {
-    isStale: newerFiles.length > 0,
-    changes: newerFiles.map((f) => `source modified: ${f}`)
+  const changes = newerFiles.map((f) => `source modified: ${f}`)
+  const configStat = statOrUndefined(configPath)
+  if (!configStat || configStat.mtime > threshold) changes.push("guidance config modified")
+  const configDir = path.dirname(configPath)
+  if (config.rationale?.path !== undefined && typeof config.rationale.path !== "string") {
+    return { isStale: changes.length > 0, changes, guidanceVerified: false }
   }
+  const selectedPath = path.resolve(configDir, config.rationale?.path || DEFAULT_GUIDANCE_PATH)
+  const relative = path.relative(configDir, selectedPath).split(path.sep).join("/")
+  let guidanceVerified =
+    health !== undefined && !relative.split("/").includes("..") && config.rationale?.inline === undefined
+  const selected = health?.sources.find((source) => source.sourceId === `sidecar:${relative}`)
+  let selectedStat: fs.Stats | undefined
+  let observedLeaf = false
+  try {
+    const leaf = fs.lstatSync(selectedPath)
+    observedLeaf = true
+    if (leaf.isSymbolicLink()) guidanceVerified = false
+    selectedStat = fs.statSync(selectedPath)
+    const realRelative = path.relative(fs.realpathSync(configDir), fs.realpathSync(selectedPath))
+    if (path.isAbsolute(realRelative) || realRelative === ".." || realRelative.startsWith(`..${path.sep}`))
+      guidanceVerified = false
+  } catch (error) {
+    const missing = typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT"
+    if (!missing || observedLeaf) guidanceVerified = false
+  }
+  if (health?.sources.some((source) => source.selection === "inline") !== (config.rationale?.inline !== undefined))
+    guidanceVerified = false
+  if (!selected) guidanceVerified = false
+  else if (selected.selection !== (config.rationale?.path ? "configured" : "default")) guidanceVerified = false
+  else if (!selectedStat) {
+    if (selected.readState !== "absent" || selected.selection === "configured" || config.rationale?.path)
+      changes.push("selected guidance file missing or deleted")
+  } else if (!selectedStat.isFile()) guidanceVerified = false
+  else if (selected.readState === "absent" || selectedStat.mtime > threshold)
+    changes.push("selected guidance file modified or added")
+  if (!configStat || changes.some((change) => change.includes("guidance"))) guidanceVerified = false
+  return { isStale: changes.length > 0, changes, guidanceVerified }
 }
 
 async function findSourceFilesNewerThan(
@@ -736,6 +887,7 @@ function decideStatus(params: {
   conflictPolicy: PrimitivConfig["governance"]["onConflict"]
   hasViolations: boolean
   hasFailedSources: boolean
+  guidanceVerified: boolean
   strict: boolean
 }): {
   status: VerifyStatus
@@ -761,6 +913,11 @@ function decideStatus(params: {
   if (params.isStale) {
     return { status: params.hasUnresolvedConflicts ? "unresolved-conflicts" : "stale", exitCode: params.strict ? 2 : 1 }
   }
+  if (!params.guidanceVerified)
+    return {
+      status: params.hasUnresolvedConflicts ? "unresolved-conflicts" : "guidance-unverified",
+      exitCode: params.strict ? 2 : 0
+    }
   if (params.hasUnresolvedConflicts) return { status: "unresolved-conflicts", exitCode: 0 }
   return { status: "clean", exitCode: 0 }
 }

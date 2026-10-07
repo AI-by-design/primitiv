@@ -2,6 +2,7 @@ import * as fs from "node:fs"
 import * as path from "node:path"
 import * as YAML from "yaml"
 import type { ComponentMap, PrimitivConfig, RationaleMap, TokenMap } from "../types"
+import { validateComponentAnnotation } from "./schema"
 
 const DEFAULT_SIDECAR = "primitiv.rationale.yml"
 
@@ -83,14 +84,27 @@ export function applyRationale(tokens: TokenMap, components: ComponentMap, ratio
       if (!byName[name]) byName[name] = []
       byName[name].push(id)
     }
-    for (const [key, value] of Object.entries(rationale.components)) {
+    // Apply aliases first so an exact ID always wins, independent of authored order.
+    const entries = Object.entries(rationale.components).sort(
+      ([a], [b]) => Number(hasOwnKey(components, a)) - Number(hasOwnKey(components, b)) || a.localeCompare(b)
+    )
+    for (const [key, value] of entries) {
+      const validated = validateComponentAnnotation(value)
+      const apply = (id: string) => {
+        delete components[id].classification
+        delete components[id].rationale
+        if (!validated.success) return
+        const { classification, ...rationale } = validated.data
+        components[id].rationale = rationale
+        if (classification !== undefined) components[id].classification = classification
+      }
       if (hasOwnKey(components, key)) {
-        components[key].rationale = value
+        apply(key)
         continue
       }
       const ids = byName[key] ?? []
       if (ids.length === 1) {
-        components[ids[0]].rationale = value
+        apply(ids[0])
       } else if (ids.length > 1) {
         warnings.push(
           `rationale key '${key}' matches ${ids.length} components (${ids.join(", ")}) — ` +
