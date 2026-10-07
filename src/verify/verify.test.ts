@@ -43,6 +43,25 @@ function writeContract(root: string, overrides: Partial<PrimitivContract> = {}) 
     tokens: emptyTokenMap(),
     components: {},
     conflicts: [],
+    guidanceHealth: {
+      schemaVersion: 1,
+      sources: [
+        {
+          sourceId: "sidecar:primitiv.rationale.yml",
+          selection: "default",
+          readState: "absent",
+          validEntries: 0,
+          invalidEntries: 0,
+          boundEntries: 0,
+          unboundEntries: 0,
+          complete: true
+        }
+      ],
+      total: 0,
+      byCode: {},
+      items: [],
+      truncated: false
+    },
     ...overrides
   }
   fs.writeFileSync(path.join(root, "primitiv.contract.json"), JSON.stringify(contract, null, 2))
@@ -57,7 +76,26 @@ function rawContract(root: string): Record<string, unknown> {
     configPath: path.join(root, "primitiv.config.js"),
     tokens: emptyTokenMap(),
     components: {},
-    conflicts: []
+    conflicts: [],
+    guidanceHealth: {
+      schemaVersion: 1,
+      sources: [
+        {
+          sourceId: "sidecar:primitiv.rationale.yml",
+          selection: "default",
+          readState: "absent",
+          validEntries: 0,
+          invalidEntries: 0,
+          boundEntries: 0,
+          unboundEntries: 0,
+          complete: true
+        }
+      ],
+      total: 0,
+      byCode: {},
+      items: [],
+      truncated: false
+    }
   }
 }
 

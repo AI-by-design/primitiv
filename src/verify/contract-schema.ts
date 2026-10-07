@@ -1,4 +1,10 @@
 import { z } from "zod"
+import {
+  componentClassificationSchema,
+  componentRationaleSchema,
+  guidanceHealthSchema,
+  guidanceOriginSchema
+} from "../rationale/schema"
 import { primitivContractSchema } from "../types"
 
 // Internal schema dependencies precede the exported schemas they initialize eagerly at module load.
@@ -85,6 +91,7 @@ const conflictSchema = z
 // Fields reached by both verification modes after the public envelope check.
 export const verifySharedContractSchema = z.looseObject({
   generatedAt: validTimestampSchema,
+  guidanceHealth: guidanceHealthSchema.optional(),
   conflicts: z.array(conflictSchema),
   componentNameIndex: ownRecordSchema(z.array(z.string())).optional(),
   comparisonDiagnostics: primitivContractSchema.shape.comparisonDiagnostics
@@ -99,6 +106,7 @@ const optionalTokenProvenanceSchema = z.looseObject({
 
 const verifyTokenSchema = z.looseObject({
   value: z.string(),
+  rationale: z.unknown().optional(),
   source: optionalTokenProvenanceSchema.optional(),
   modes: z.record(z.string(), z.string()).optional(),
   modeSources: z.record(z.string(), optionalTokenProvenanceSchema).optional()
@@ -196,6 +204,9 @@ const demonstratedSchema = z.looseObject({
 
 const verifyComponentSchema = z.looseObject({
   name: z.string(),
+  classification: componentClassificationSchema.optional(),
+  rationale: componentRationaleSchema.optional(),
+  guidanceOrigin: guidanceOriginSchema.optional(),
   displayName: z.string().optional(),
   source: z.looseObject({
     adapter: sourceAdapterSchema,

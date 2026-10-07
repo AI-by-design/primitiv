@@ -3,7 +3,7 @@ import * as path from "node:path"
 import { ContractBuilder } from "./contract"
 import { lintTokenMisuse } from "./lint"
 import { PrimitivMCPServer } from "./mcp"
-import { applyRationale, loadRationaleLayers } from "./rationale"
+import { attachGuidance, loadGuidance } from "./rationale/ingestion"
 import { safeDisplayText } from "./safe-display"
 import { CodebaseScanner } from "./scanner"
 import { FigmaAdapter } from "./sources/figma"
@@ -230,13 +230,14 @@ export async function buildContract(
     )
   }
 
-  const rationaleLayers = loadRationaleLayers(config, projectRoot)
-  const rationaleWarnings = new Set(
-    rationaleLayers.flatMap((layer) => applyRationale(contract.tokens, contract.components, layer))
-  )
-  for (const warning of rationaleWarnings) log(`   ⚠ ${warning}`)
-  const rationaleTokenCount = new Set(rationaleLayers.flatMap((layer) => Object.keys(layer.tokens ?? {}))).size
-  const rationaleComponentCount = new Set(rationaleLayers.flatMap((layer) => Object.keys(layer.components ?? {}))).size
+  const guidance = loadGuidance(config, projectRoot)
+  const health = attachGuidance(contract, guidance)
+  for (const diagnostic of health.items) log(`   ⚠ ${diagnostic.code}: ${diagnostic.message}`)
+  if (health.truncated) log(`   ⚠ Showing ${health.items.length} of ${health.total} guidance diagnostics.`)
+  const rationaleTokenCount = new Set(guidance.layers.flatMap((layer) => Object.keys(layer.data.tokens ?? {}))).size
+  const rationaleComponentCount = Object.values(contract.components).filter(
+    (component) => component.guidanceOrigin
+  ).length
   if (rationaleTokenCount > 0 || rationaleComponentCount > 0) {
     log(`\n📝 Rationale: ${rationaleTokenCount} tokens, ${rationaleComponentCount} components`)
   }
