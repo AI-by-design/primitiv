@@ -26,6 +26,8 @@ npx @ai-by-design/primitiv serve
 
 `init` sets up Primitiv for the current project, `build` creates its design contract, and `serve` makes that contract available to MCP-compatible agents.
 
+After upgrading Primitiv, rerun `primitiv init` to refresh the generated agent instruction blocks and `/build-component` skill. Untouched known shipped skill templates refresh automatically; installed copies include a template version and SHA-256 sidecar. Customized or unknown copies are preserved, with a proposed template and reviewable `.diff` alongside them. Review those files, then use `primitiv init --refresh-skill` to replace the skill while saving an exact backup. Instructions outside the Primitiv markers are preserved.
+
 See the [Primitiv documentation](https://primitiv.design/docs) for installation, configuration, commands, and integration guides.
 
 > [!IMPORTANT]
@@ -44,6 +46,10 @@ Primitiv also checks local JSX usage against each codebase component's complete 
 When component evidence cannot be compared, `primitiv verify` reports a short diagnostic summary. Use `primitiv verify --verbose` for the reasons, or `--json` for a structured report. Diagnostics explain uncertainty and do not count as conflicts or directly fail verification; changes to them can still make the saved contract stale. `--fast` reports saved diagnostics instead of rebuilding them.
 
 Agents can read diagnostic counts in the MCP summary and paginated details through `get_design_context` with `category: "diagnostics"`.
+
+For component discovery, start with `get_component_catalog` for inventory counts, classification coverage, project identity, build time, health, and supported filters. Use `find_components` for a bounded shortlist, then `get_component_context` with an exact `id` and the shortlist's `snapshotId` for detailed guidance and evidence. Optional search filters include `level`, `intents`, `intentMatch` (`any` or `all`), `kind`, `scope`, and `unclassified` (`missing-level`, `missing-intents`, or `either`). Filters combine with AND; use `unclassified` and broader filters before ruling out an existing component. Searches default to 20 items and accept at most 50.
+
+Continue searches with `nextCursor` and the same filters. Detail accepts optional `sections` (`api`, `guidance`, `relationships`, `source`); follow its `nextCursor` until `complete` is true. When a section returns `continuation`, concatenate its text fragments in order and JSON-parse the result. Responses identify the loaded snapshot and reload health. After `snapshot-changed`, restart discovery; a failed replacement retains the last valid data with `reload.stale: true`. Existing `get_design_context` and `get_component` calls remain available.
 
 ## Component drift in CI
 

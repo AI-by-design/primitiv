@@ -92,7 +92,7 @@ describe("tool annotations", () => {
     const c = await connect(writeContract())
     const { tools } = await c.listTools()
 
-    expect(tools).toHaveLength(6)
+    expect(tools).toHaveLength(9)
     for (const tool of tools) expect(tool.annotations?.readOnlyHint).toBe(true)
   })
 })

@@ -56,6 +56,8 @@ export interface DiscoveryMeta {
 }
 
 export interface ComponentCatalog extends DiscoveryMeta {
+  project: { sourceRoot: string | null; configPath: string | null }
+  generatedAt: string
   total: number
   counts: { kind: Record<string, number>; level: Record<string, number>; intent: Record<string, number> }
   coverage: ClassificationCoverage
@@ -119,9 +121,18 @@ export interface ComponentContext extends DiscoveryMeta {
   nextCursor?: string
 }
 
-export interface DiscoveryError extends DiscoveryMeta {
+export interface DiscoveryError extends Omit<DiscoveryMeta, "snapshotId"> {
+  /** Null means no valid initial snapshot has ever loaded. */
+  snapshotId: string | null
   error: {
-    code: "invalid-query" | "invalid-cursor" | "snapshot-changed" | "not-found" | "record-too-large"
+    code:
+      | "invalid-query"
+      | "invalid-cursor"
+      | "snapshot-changed"
+      | "not-found"
+      | "record-too-large"
+      | "invalid-record"
+      | "contract-unavailable"
     message: string
   }
 }

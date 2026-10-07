@@ -18,7 +18,7 @@ async function main() {
       console.log(readVersion())
       break
     case "init":
-      await init(arg)
+      await init(arg, { refreshSkill: process.argv.includes("--refresh-skill") })
       break
     case "build":
       // exitCode (not process.exit) so queued stdout flushes before the process ends.
@@ -53,7 +53,7 @@ Usage:
   primitiv --version      Print the installed version
 
 Options:
-  primitiv init   [dir]    Target directory (default: current directory)
+  primitiv init   [dir] [--refresh-skill]\n                           Target directory (default: current directory); --refresh-skill\n                           replaces customized build-component instructions with a backup
   primitiv build  [config] Path to config file (default: primitiv.config.js)
   primitiv serve  [config] Path to config file (default: primitiv.config.js)
   primitiv verify [config] [--strict] [--json] [--fast] [--verbose]
