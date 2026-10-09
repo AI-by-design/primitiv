@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.21.0](https://github.com/AI-by-design/primitiv/compare/v2.20.0...v2.21.0) (2026-10-09)
+
+
+### Features
+
+* add opt-in JSON configuration loading ([#154](https://github.com/AI-by-design/primitiv/issues/154)) ([c607dde](https://github.com/AI-by-design/primitiv/commit/c607dde4f7ead6a0b9be7643d9f4175eed0a5b00))
+
 ## [2.20.0](https://github.com/AI-by-design/primitiv/compare/v2.19.1...v2.20.0) (2026-10-07)
 
 
