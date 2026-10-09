@@ -8,7 +8,14 @@ import { safeDisplayText } from "./safe-display"
 import { CodebaseScanner } from "./scanner"
 import { FigmaAdapter } from "./sources/figma"
 import { StorybookAdapter } from "./sources/storybook"
-import type { PrimitivConfig, PrimitivContract, SourceStatus, TokenMap } from "./types"
+import type {
+  BuildContractOptions,
+  ConfigMode,
+  PrimitivConfig,
+  PrimitivContract,
+  SourceStatus,
+  TokenMap
+} from "./types"
 import { primitivConfigSchema, summarizeValidationIssues } from "./types"
 
 export type {
@@ -64,6 +71,7 @@ export {
 export type {
   AtomicLevel,
   AvoidanceGuidance,
+  BuildContractOptions,
   ComparisonDiagnostic,
   ComparisonDiagnosticReason,
   ComparisonDiagnostics,
@@ -76,6 +84,7 @@ export type {
   ComponentMapping,
   ComponentRationale,
   ComponentReference,
+  ConfigMode,
   Conflict,
   ConflictEvidence,
   ConflictScope,
@@ -110,44 +119,9 @@ export type {
 } from "./types"
 export { emptyTokenMap, primitivContractSchema, TOKEN_CATEGORIES } from "./types"
 
-// Load config — returns config with output.path resolved to an absolute path
+// Load executable local config; data-only callers use buildContract's explicit mode.
 export function loadConfig(configPath?: string, cwd: string = process.cwd()): PrimitivConfig {
-  const resolved = path.resolve(cwd, configPath || "primitiv.config.js")
-
-  if (!fs.existsSync(resolved)) {
-    throw new Error(`Config not found at ${resolved}. Run \`primitiv init\` to create one.`)
-  }
-
-  // Cache-bust so callers (like verify's rebuild path) pick up config changes without restarting the process.
-  delete require.cache[require.resolve(resolved)]
-  const raw: unknown = require(resolved)
-  const parsed = primitivConfigSchema.safeParse(raw)
-  if (!parsed.success) {
-    throw new Error(
-      `Invalid config at ${resolved}: ${summarizeValidationIssues(parsed.error)}. ` +
-        `Fix the file or run \`primitiv init\` to regenerate it.`
-    )
-  }
-  // Validated at the boundary (rule 12) — trust the shape from here on. Take the parsed
-  // value rather than re-casting `raw`: it carries whatever the schema resolved, and the
-  // path rewrites below then mutate a copy instead of the required module's own object.
-  const config = parsed.data as PrimitivConfig
-  const configDir = path.dirname(resolved)
-  config.output.path = path.resolve(configDir, config.output.path)
-  if (config.sources.codebase) {
-    config.sources.codebase.root = path.resolve(configDir, config.sources.codebase.root)
-  }
-  if (config.sources.storybook?.sourceRoot) {
-    config.sources.storybook.sourceRoot = path.resolve(configDir, config.sources.storybook.sourceRoot)
-  }
-  return config
-}
-
-export interface BuildContractOptions {
-  // Suppress console output; used by verify's rebuild path.
-  silent?: boolean
-  // Working directory for resolving the config path; defaults to process.cwd().
-  cwd?: string
+  return loadConfiguration({ configPath, cwd, configMode: "legacy" })
 }
 
 // Builds the contract object in memory: scans every configured source,
@@ -159,8 +133,10 @@ export async function buildContract(
   options: BuildContractOptions = {}
 ): Promise<PrimitivContract> {
   const cwd = options.cwd ?? process.cwd()
-  const config = loadConfig(configPath, cwd)
-  const projectRoot = path.dirname(path.resolve(cwd, configPath || "primitiv.config.js"))
+  const configMode = options.configMode === undefined ? "legacy" : options.configMode
+  const resolvedConfigPath = resolveConfigPath({ configPath, cwd, configMode })
+  const config = loadConfiguration({ configPath, cwd, configMode })
+  const projectRoot = path.dirname(resolvedConfigPath)
   const sources = []
   // Every known source gets a status so the contract distinguishes "not configured"
   // (skipped) from "configured but failed" (failed) — a failed remote scan must never
@@ -240,7 +216,7 @@ export async function buildContract(
   const builder = new ContractBuilder(config)
   const contract = builder.build(sources, { sourceStatuses })
   contract.sourceRoot = projectRoot
-  contract.configPath = path.resolve(cwd, configPath || "primitiv.config.js")
+  contract.configPath = resolvedConfigPath
 
   // Non-blocking notice: same-name components now coexist under qualified ids instead of
   // first-wins. Surfaced so nobody mistakes a multi-id name for a duplicate-scan bug.
@@ -404,4 +380,92 @@ function summarizeKinds(components: Record<string, { kind?: string }>): string {
     .sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]) || b[1] - a[1])
     .map(([kind, n]) => `${kind} ${n}`)
   return parts.length > 1 ? `kind: ${parts.join(" · ")}` : ""
+}
+
+// Data-only is a parsing policy, not a filesystem or network sandbox: configured
+// paths and remote sources retain their existing behavior.
+function resolveConfigPath(options: { configPath?: string; cwd: string; configMode: ConfigMode }): string {
+  if (options.configMode !== "legacy" && options.configMode !== "data-only") {
+    throw new Error('Invalid configMode: use "legacy" or "data-only".')
+  }
+  return path.resolve(
+    options.cwd,
+    options.configPath || (options.configMode === "data-only" ? "primitiv.config.json" : "primitiv.config.js")
+  )
+}
+
+function loadConfiguration(options: { configPath?: string; cwd: string; configMode: ConfigMode }): PrimitivConfig {
+  const resolved = resolveConfigPath(options)
+  const dataOnly = options.configMode === "data-only"
+  const migration =
+    "Convert the config to strict JSON in primitiv.config.json and pass that path; JavaScript configs are never executed in data-only mode."
+  if (dataOnly && path.extname(resolved).toLowerCase() !== ".json") {
+    throw new Error(`Data-only config requires a .json file at ${resolved}. ${migration}`)
+  }
+  if (!fs.existsSync(resolved)) {
+    if (dataOnly) throw new Error(`Data-only config not found at ${resolved}. ${migration}`)
+    throw new Error(`Config not found at ${resolved}. Run \`primitiv init\` to create one.`)
+  }
+  let raw: unknown
+  if (dataOnly) {
+    // Bun's realpathSync can open special files, so reject them before resolving.
+    if (!fs.statSync(resolved).isFile()) {
+      throw new Error(`Data-only config must be a regular JSON file at ${resolved}.`)
+    }
+    if (path.extname(fs.realpathSync(resolved)).toLowerCase() !== ".json") {
+      throw new Error(`Data-only config at ${resolved} resolves to a non-JSON file. ${migration}`)
+    }
+    const contents = readBoundedJsonConfig(resolved)
+    try {
+      raw = JSON.parse(contents)
+    } catch {
+      throw new Error(`Invalid JSON config at ${resolved}. ${migration}`)
+    }
+  } else {
+    // Preserve existing executable configuration behavior for local callers.
+    delete require.cache[require.resolve(resolved)]
+    raw = require(resolved)
+  }
+  const parsed = primitivConfigSchema.safeParse(raw)
+  if (!parsed.success) {
+    throw new Error(
+      `Invalid config at ${resolved}: ${summarizeValidationIssues(parsed.error)}. ` +
+        (dataOnly ? "Fix the JSON config file." : "Fix the file or run `primitiv init` to regenerate it.")
+    )
+  }
+  const config = parsed.data as PrimitivConfig
+  const configDir = path.dirname(resolved)
+  config.output.path = path.resolve(configDir, config.output.path)
+  if (config.sources.codebase) config.sources.codebase.root = path.resolve(configDir, config.sources.codebase.root)
+  if (config.sources.storybook?.sourceRoot) {
+    config.sources.storybook.sourceRoot = path.resolve(configDir, config.sources.storybook.sourceRoot)
+  }
+  return config
+}
+
+function readBoundedJsonConfig(configPath: string): string {
+  const limit = 1024 * 1024
+  // Reject special files before opening too: some runtimes emulate synchronous
+  // opens and may block on a FIFO even with O_NONBLOCK set.
+  if (!fs.statSync(configPath).isFile()) {
+    throw new Error(`Data-only config must be a regular JSON file at ${configPath}.`)
+  }
+  const descriptor = fs.openSync(configPath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK)
+  try {
+    const stat = fs.fstatSync(descriptor)
+    if (!stat.isFile()) throw new Error(`Data-only config must be a regular JSON file at ${configPath}.`)
+    if (stat.size > limit) throw new Error(`Data-only config exceeds the ${limit}-byte limit at ${configPath}.`)
+    // One extra byte detects files that grow after stat without an unbounded read.
+    const buffer = Buffer.alloc(limit + 1)
+    let size = 0
+    while (size < buffer.length) {
+      const read = fs.readSync(descriptor, buffer, size, buffer.length - size, null)
+      if (read === 0) break
+      size += read
+    }
+    if (size > limit) throw new Error(`Data-only config exceeds the ${limit}-byte limit at ${configPath}.`)
+    return buffer.subarray(0, size).toString("utf8")
+  } finally {
+    fs.closeSync(descriptor)
+  }
 }

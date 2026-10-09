@@ -51,6 +51,16 @@ export type GuidanceValidationResult<T> =
 
 // Core types for Primitiv
 
+// Legacy mode preserves executable local config behavior. Data-only parses strict
+// JSON and never imports the config or scanned component modules.
+export type ConfigMode = "legacy" | "data-only"
+
+export interface BuildContractOptions {
+  silent?: boolean
+  cwd?: string
+  configMode?: ConfigMode
+}
+
 export interface PrimitivConfig {
   sources: {
     codebase?: CodebaseSource
