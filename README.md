@@ -57,24 +57,6 @@ Failed sources and incomplete or truncated evidence cannot prove that an unavail
 
 Stale evidence exits with code 1, or 2 under `--strict`. Pending conflicts exit with code 2 under `error` governance or `--strict`; warn-only conflicts do not independently fail verification. `--fast` uses saved findings and file modification times instead of scanning current API evidence, so use normal verification in CI. Use `--json` for the verification result and `--verbose` for comparison diagnostic details.
 
-## Programmatic data-only configuration
-
-Callers that must avoid executing repository configuration can select strict JSON parsing:
-
-```ts
-import { buildContract } from "@ai-by-design/primitiv"
-
-const contract = await buildContract(undefined, {
-  configMode: "data-only",
-  cwd: "/path/to/project",
-  silent: true
-})
-```
-
-This mode defaults to `primitiv.config.json`. An explicit config path must end in `.json`, including its resolved symlink target. JavaScript paths, malformed JSON, and configs larger than 1 MiB are rejected before scanning. There is no fallback to an existing `primitiv.config.js`: migrate its exported configuration object to strict JSON, replacing expressions with concrete values. JSON is schema-validated and read afresh on every build. Relative source and output paths resolve from the config directory, as in the existing local mode.
-
-Component extraction remains static. This option is a configuration parsing policy; it does not sandbox filesystem paths or configured remote sources. Omitting `configMode` preserves the existing executable local config behavior, and `loadConfig`, CLI build, and CLI serve retain their existing defaults.
-
 ## Project links
 
 - [Documentation](https://primitiv.design/docs)
