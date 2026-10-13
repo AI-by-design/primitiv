@@ -4,6 +4,7 @@ import { parse } from "@babel/parser"
 import type * as t from "@babel/types"
 import { glob } from "glob"
 import { valuesEquivalent } from "../normalize/value"
+import { sourceIgnorePatterns } from "../source-files"
 import type { CodebaseSource, ComponentMap, TokenCategory, TokenMap, TokenRedefinition } from "../types"
 import { emptyTokenMap } from "../types"
 import { ComponentAnalyzer } from "./component-analysis"
@@ -26,10 +27,11 @@ export class CodebaseScanner {
 
   private async getFiles(): Promise<string[]> {
     const files: string[] = []
+    const ignore = sourceIgnorePatterns(this.config)
     for (const pattern of this.config.patterns) {
       const matches = await glob(pattern, {
         cwd: this.config.root,
-        ignore: this.config.ignore,
+        ignore,
         // A directory can match a source pattern on name alone — `node_modules/ipaddr.js`
         // matches `**/*.js`. Reading it throws EISDIR and fails the entire scan.
         nodir: true,
