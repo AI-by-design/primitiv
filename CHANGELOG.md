@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.21.1](https://github.com/AI-by-design/primitiv/compare/v2.21.0...v2.21.1) (2026-10-14)
+
+
+### Bug Fixes
+
+* honor literal directory ignores across source scans ([#160](https://github.com/AI-by-design/primitiv/issues/160)) ([d151d22](https://github.com/AI-by-design/primitiv/commit/d151d22aeef31f788c36800bae84701ee2de0bae))
+
 ## [2.21.0](https://github.com/AI-by-design/primitiv/compare/v2.20.0...v2.21.0) (2026-10-09)
 
 
