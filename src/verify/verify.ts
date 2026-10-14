@@ -5,6 +5,7 @@ import { buildContract, loadConfig } from "../index"
 import { valuesEquivalent } from "../normalize/value"
 import { DEFAULT_GUIDANCE_PATH } from "../rationale/ingestion"
 import { safeDisplayText } from "../safe-display"
+import { sourceIgnorePatterns } from "../source-files"
 import type { Conflict, PrimitivConfig, PrimitivContract, Violation } from "../types"
 import { primitivContractSchema, summarizeValidationIssues } from "../types"
 import { compareComponentApi, formatComponentFieldPath } from "./component-api-drift"
@@ -857,11 +858,12 @@ async function findSourceFilesNewerThan(
   const configDir = path.dirname(configPath)
   const codebaseRoot = path.resolve(configDir, config.sources.codebase.root)
   const newer: string[] = []
+  const ignore = sourceIgnorePatterns({ ...config.sources.codebase, root: codebaseRoot })
 
   for (const pattern of config.sources.codebase.patterns) {
     const matches = await glob(pattern, {
       cwd: codebaseRoot,
-      ignore: config.sources.codebase.ignore,
+      ignore,
       // Directories match source patterns on name alone (`node_modules/ipaddr.js` vs
       // `**/*.js`); stat'ing one and treating it as a source file is meaningless.
       nodir: true,

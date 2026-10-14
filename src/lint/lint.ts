@@ -1,6 +1,7 @@
 import * as fs from "node:fs"
 import * as path from "node:path"
 import { glob } from "glob"
+import { sourceIgnorePatterns } from "../source-files"
 import type { CodebaseSource, LintCategory, PrimitivConfig, PrimitivContract, Violation } from "../types"
 
 // Tailwind utility prefixes that take a color arbitrary value, e.g. `bg-[#ff0000]`.
@@ -54,10 +55,11 @@ export async function lintTokenMisuse(config: PrimitivConfig, contract: Primitiv
 
 async function collectFiles(source: CodebaseSource): Promise<string[]> {
   const files = new Set<string>()
+  const ignore = sourceIgnorePatterns(source)
   for (const pattern of source.patterns) {
     const matches = await glob(pattern, {
       cwd: source.root,
-      ignore: source.ignore,
+      ignore,
       // Directories match source patterns on name alone (`node_modules/ipaddr.js` vs
       // `**/*.js`). Reading one throws EISDIR — exclude them at the glob instead.
       nodir: true,
