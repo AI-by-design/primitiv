@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.21.2](https://github.com/AI-by-design/primitiv/compare/v2.21.1...v2.21.2) (2026-10-20)
+
+
+### Bug Fixes
+
+* avoid quadratic regex in discovery snapshot roots ([#162](https://github.com/AI-by-design/primitiv/issues/162)) ([1af25d6](https://github.com/AI-by-design/primitiv/commit/1af25d60bab64cccb971409f5ca023d3b75d97f2))
+
 ## [2.21.1](https://github.com/AI-by-design/primitiv/compare/v2.21.0...v2.21.1) (2026-10-14)
 
 
