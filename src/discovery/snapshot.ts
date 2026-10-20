@@ -15,7 +15,7 @@ function canonicalize(value: unknown, roots: readonly string[], path: string[], 
   if (typeof value === "string") {
     if (!isPathField(path)) return value
     const normalized = value.split("\\").join("/")
-    for (const root of [...roots].map((item) => item.split("\\").join("/").replace(/\/+$/, "")).sort(longestFirst)) {
+    for (const root of [...roots].map(normalizeRoot).sort(longestFirst)) {
       if (root && (normalized === root || normalized.startsWith(`${root}/`))) {
         return `<temporary-root>${normalized.slice(root.length)}`
       }
@@ -59,6 +59,13 @@ function isPathField(path: string[]): boolean {
     (parent === "guidanceOrigin" && field === "locator") ||
     (field === "importPath" && path.includes("demonstrated") && path.includes("stories"))
   )
+}
+
+function normalizeRoot(root: string): string {
+  const normalized = root.split("\\").join("/")
+  let end = normalized.length
+  while (end > 0 && normalized[end - 1] === "/") end--
+  return normalized.slice(0, end)
 }
 
 function longestFirst(a: string, b: string): number {

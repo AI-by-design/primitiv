@@ -356,6 +356,39 @@ describe("bounded projections", () => {
 })
 
 describe("versioned snapshot identity", () => {
+  test("normalizes temporary roots with trailing separators and long internal slash sequences", () => {
+    const longRoot = `/checkout/${"/".repeat(100000)}nested`
+    for (const [root, path] of [
+      ["/checkout///", "/checkout/src"],
+      ["C:\\checkout\\\\", "C:\\checkout\\src"],
+      [longRoot, `${longRoot}/src`],
+      [`${longRoot}///`, `${longRoot}/src`]
+    ]) {
+      const actual = { ...contract(), sourceRoot: path }
+      const expected = { ...contract(), sourceRoot: "<temporary-root>/src" }
+      expect(createSnapshotId(actual, { temporaryRoots: [root] })).toBe(createSnapshotId(expected))
+    }
+  })
+
+  test("ignores empty and all-separator temporary roots", () => {
+    const actual = { ...contract(), sourceRoot: "/src" }
+    expect(createSnapshotId(actual, { temporaryRoots: ["", "/", "///", "\\\\"] })).toBe(createSnapshotId(actual))
+  })
+
+  test("uses the longest matching root and requires a path boundary", () => {
+    const roots = { temporaryRoots: ["/checkout", "/checkout/nested///"] }
+    const actual = { ...contract(), sourceRoot: "/checkout/nested/src" }
+    const expected = {
+      ...contract(),
+      sourceRoot: "<temporary-root>/src",
+      configPath: "<temporary-root>/primitiv.config.js"
+    }
+    actual.configPath = "/checkout/primitiv.config.js"
+    expect(createSnapshotId(actual, roots)).toBe(createSnapshotId(expected))
+    const sibling = { ...contract(), sourceRoot: "/checkout-other/src" }
+    expect(createSnapshotId(sibling, roots)).toBe(createSnapshotId(sibling))
+  })
+
   test("ignores generated timestamps, object insertion order, derived indexes, and explicit temporary root relocation", () => {
     const first = sample()
     const second = JSON.parse(JSON.stringify(first)) as PrimitivContract
